@@ -15,6 +15,10 @@ _DEFAULTS: dict[str, Any] = {
             "model": "gpt-5.2",
             "instructions": "",
         },
+        "builder": {
+            "model": "gpt-5.2-codex",
+            "instructions": "",
+        },
     },
 }
 

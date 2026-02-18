@@ -5,11 +5,6 @@ Scope: entire repository.
 
 ## 1) Project Snapshot (Read First)
 
-Yodoca is a autonomous agent runtime optimized for:
+Yodoca is a autonomous agent runtime со следующими особенностями:
 
-- high performance
-- high efficiency
-- high stability
-- high extensibility
-- high sustainability
-- high security
+* **all-is-extension** - вся функциональность приложения реализуется через расширения

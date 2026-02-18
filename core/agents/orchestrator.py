@@ -3,15 +3,13 @@
 import asyncio
 from pathlib import Path
 
-from agents import Agent, Runner
+from agents import Agent, Runner, WebSearchTool
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.settings import get_setting, load_settings
+from core.tools import shell_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
-# Hardcoded request for the minimal demo.
-HARDCODED_REQUEST = "Say hello in one short sentence."
 
 
 def _resolve_instructions(spec: str) -> str:
@@ -38,24 +36,38 @@ def create_orchestrator_agent() -> Agent:
     model = get_setting(settings, "agents.orchestrator.model", "gpt-5.2")
     instructions_spec = get_setting(settings, "agents.orchestrator.instructions", "")
     instructions = _resolve_instructions(instructions_spec)
+    vector_store_ids = get_setting(settings, "vector_store_ids", []) or []
     return Agent(
         name="Orchestrator",
         instructions=instructions,
         model=model,
+        tools=[
+            WebSearchTool(),
+            shell_tool,
+        ],
     )
 
 
-async def run_once() -> str:
-    """Run the orchestrator once with a hardcoded request; return final output."""
+async def run_once(user_request: str) -> str:
+    """Run the orchestrator once with the given user request; return final output."""
     agent = create_orchestrator_agent()
-    result = await Runner.run(agent, HARDCODED_REQUEST)
+    result = await Runner.run(agent, user_request.strip())
     return result.final_output or ""
 
 
 async def main_async() -> None:
-    """Entry point for the AI agent process: run once and print to CLI."""
-    output = await run_once()
-    print(output)
+    """REPL: read request from CLI, run orchestrator, print response, repeat."""
+    while True:
+        try:
+            line = await asyncio.to_thread(input, "> ")
+        except (EOFError, KeyboardInterrupt):
+            break
+        line = line.strip()
+        if not line:
+            continue
+        output = await run_once(line)
+        print(output)
+        print()
 
 
 def main() -> None:
