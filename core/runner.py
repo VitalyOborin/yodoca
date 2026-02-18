@@ -6,8 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from core.agents.orchestrator import create_orchestrator_agent
-from core.loader import Loader
-from core.router import MessageRouter
+from core.extensions import Loader, MessageRouter
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")

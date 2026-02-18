@@ -11,16 +11,16 @@ from typing import Any
 
 from croniter import croniter
 
-from core.contract import (
+from core.extensions.contract import (
     ChannelProvider,
     Extension,
     ServiceProvider,
     SchedulerProvider,
     ToolProvider,
 )
-from core.context import ExtensionContext
-from core.manifest import ExtensionManifest, load_manifest
-from core.router import MessageRouter
+from core.extensions.context import ExtensionContext
+from core.extensions.manifest import ExtensionManifest, load_manifest
+from core.extensions.router import MessageRouter
 
 logger = logging.getLogger(__name__)
 

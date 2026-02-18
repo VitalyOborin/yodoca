@@ -335,12 +335,15 @@ supervisor/              ← process watcher (~100 lines, as-is)
 core/                    ← nano-kernel (~400 lines total)
   __main__.py            ← python -m core
   settings.py
-  agent.py               ← create_agent(loader) → Agent
-  loader.py              ← discover + import + initialize + start
-  router.py              ← handle_user_message + notify_user
-  context.py             ← ExtensionContext
-  contract.py            ← Extension + 4 protocols + SetupProvider
-  manifest.py            ← ExtensionManifest (Pydantic)
+  agents/                ← orchestrator, builder
+  tools/                 ← file, shell, restart
+  extensions/            ← extension system
+    __init__.py
+    contract.py          ← Extension + 4 protocols + SetupProvider
+    manifest.py          ← ExtensionManifest (Pydantic)
+    context.py           ← ExtensionContext
+    router.py            ← handle_user_message + notify_user
+    loader.py            ← discover + import + initialize + start
 
 sandbox/
   extensions/            ← everything Builder Agent writes
@@ -373,7 +376,7 @@ config/
 
 Builder Agent sees three things when generating a new extension:
 
-1. **`core/contract.py`** — full text with protocols (few-shot reference)
+1. **`core/extensions/contract.py`** — full text with protocols (few-shot reference)
 2. **Two working examples** — full code of `telegram_channel/main.py` and `kv/main.py` directly in the prompt
 3. **Task** — description of what to create from Orchestrator
 

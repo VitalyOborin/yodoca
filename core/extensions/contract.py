@@ -77,5 +77,3 @@ class SetupProvider(Protocol):
 
     async def on_setup_complete(self) -> tuple[bool, str]:
         """Verify everything is set up. Return (success, message)."""
-
-

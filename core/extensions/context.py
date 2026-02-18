@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from core.router import MessageRouter
+from core.extensions.router import MessageRouter
 
 
 class ExtensionContext:

@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 from typing import Any, Callable
 
-from core.contract import ChannelProvider
+from core.extensions.contract import ChannelProvider
 
 logger = logging.getLogger(__name__)
 
