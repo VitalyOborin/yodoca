@@ -48,34 +48,34 @@ Supervisor is not infrastructure. It holds no Bus, no state. It simply watches t
 | **Context is the only entry point** | Extensions do not import anything from `core/`. Everything goes through the injected `ExtensionContext` |
 | **Manifest is the contract for Builder Agent** | `manifest.yaml` is read not only by the runtime but also by the LLM when generating a new extension. The simpler it is, the better the generation |
 
-### 3. Extension Types
+### 3. Extension Capabilities
 
-Four types. Not six, not seven — four. Each type answers the question: **"what does the extension do in relation to the agent?"**
+Four capabilities. Each answers the question: **"what does the extension do in relation to the agent?"** An extension does not declare its type in the manifest — the Loader detects capabilities by checking which `@runtime_checkable` protocols the class implements.
 
 ```
-┌─────────────┬────────────────────────────────────────────────────────────┐
-│    Type      │  What it does                                             │
-├─────────────┼────────────────────────────────────────────────────────────┤
-│ tool        │  Adds tools to the agent. The agent calls them explicitly. │
-│             │  Examples: calculator, search, kv-store, memory search     │
-├─────────────┼────────────────────────────────────────────────────────────┤
-│ channel     │  User communication channel. Receives messages and sends  │
-│             │  responses. Manages its own I/O loop.                      │
-│             │  Examples: CLI, Telegram, Web UI, Slack                    │
-├─────────────┼────────────────────────────────────────────────────────────┤
-│ service     │  Background service. Lives independently, provides         │
-│             │  capabilities to other extensions via depends_on.          │
-│             │  Examples: memory store, sqlite wrapper, http cache        │
-├─────────────┼────────────────────────────────────────────────────────────┤
-│ scheduler   │  Periodic task by cron. Can return an alert — then the    │
-│             │  kernel sends a notification to the user.                  │
-│             │  Examples: reminders, price monitoring, daily report       │
-└─────────────┴────────────────────────────────────────────────────────────┘
+┌─────────────────────┬────────────────────────────────────────────────────┐
+│  Protocol            │  What Loader does when detected                   │
+├─────────────────────┼────────────────────────────────────────────────────┤
+│ ToolProvider        │  Calls get_tools(), registers tools with Agent.   │
+│                     │  Examples: calculator, search, kv-store, memory   │
+├─────────────────────┼────────────────────────────────────────────────────┤
+│ ChannelProvider     │  Wires on_user_message callback, registers        │
+│                     │  channel with MessageRouter.                       │
+│                     │  Examples: CLI, Telegram, Web UI, Slack           │
+├─────────────────────┼────────────────────────────────────────────────────┤
+│ ServiceProvider     │  After start(), wraps run_background() in         │
+│                     │  asyncio.Task.                                     │
+│                     │  Examples: memory store, sqlite wrapper, cache    │
+├─────────────────────┼────────────────────────────────────────────────────┤
+│ SchedulerProvider   │  Reads get_schedule(), manages cron loop,         │
+│                     │  calls execute() on tick.                          │
+│                     │  Examples: reminders, price monitoring, reports   │
+└─────────────────────┴────────────────────────────────────────────────────┘
 ```
 
-An extension can implement **multiple types simultaneously**. A memory extension is a `service` (runs in the background) + `tool` (provides tools to the agent). This is normal and expected.
+An extension can implement **multiple protocols**. A memory extension implements `ServiceProvider` (runs in the background) + `ToolProvider` (provides tools to the agent). The Loader detects both and wires accordingly — no declaration needed.
 
-Middleware and Monitor are not separate types. Middleware is just `context.subscribe()` in `initialize()`. Monitor is a Scheduler whose `execute()` returns `dict | None`.
+Middleware and Monitor are not separate protocols. Middleware is `context.subscribe()` in `initialize()`. Monitor is a `SchedulerProvider` whose `execute()` returns `dict | None`.
 
 ### 4. Extension Contract
 
@@ -154,13 +154,22 @@ class ExtensionContext:
     on_user_message: Callable  # channel calls this when a message arrives
                                # async (text, user_id, channel: ChannelProvider) -> None
 
-    async def notify_user(self, user_id: str, text: str,
+    async def notify_user(self, text: str,
                           channel_id: str | None = None) -> None:
-        """Send notification to user (from scheduler, monitor, service)."""
+        """Send notification to user (from scheduler, monitor, service).
+        Single-user app — the kernel resolves the recipient and active channel."""
 
     # ── Agent ─────────────────────────────────────────────────────────────
     async def invoke_agent(self, prompt: str) -> str:
         """Ask the agent to process a prompt and return a response."""
+
+    # ── Internal pub/sub (middleware pattern) ─────────────────────────────
+    def subscribe(self, event: str, handler: Callable) -> None:
+        """Subscribe to an internal event (e.g. 'user_message', 'agent_response').
+        This is how middleware-style extensions react to system events."""
+
+    def unsubscribe(self, event: str, handler: Callable) -> None:
+        """Remove a previously registered subscription."""
 
     # ── Secrets and config ────────────────────────────────────────────────
     async def get_secret(self, name: str) -> str | None:
@@ -181,13 +190,15 @@ class ExtensionContext:
 
     # ── Process control ───────────────────────────────────────────────────
     def request_restart(self) -> None:
-        """Ask supervisor to restart the kernel (after installing a new extension)."""
+        """Ask supervisor to restart the kernel.
+        Writes sandbox/.restart_requested flag file; supervisor detects it,
+        removes the file, terminates the kernel process, and respawns it."""
 
     def request_shutdown(self) -> None:
         """Shut down the application."""
 ```
 
-**What is NOT in Context:** Event Bus, priorities, checkpoint/resume, SandboxFS with ACL, emit/subscribe as a general mechanism. Only what an extension actually needs to work.
+**What is NOT in Context:** Event Bus as a first-class component, priorities, checkpoint/resume, SandboxFS with ACL. `subscribe()`/`unsubscribe()` exist but are a thin internal pub/sub — `router.py` dispatches named events like `user_message` and `agent_response`, extensions never see the underlying implementation.
 
 ### 6. Manifest
 
@@ -197,7 +208,6 @@ class ExtensionContext:
 id: telegram_channel
 name: Telegram Bot Channel
 version: "1.0.0"
-type: channel              # tool | channel | service | scheduler
 
 description: >
   User communication channel via Telegram bot.
@@ -230,7 +240,7 @@ config:
 enabled: true
 ```
 
-What is **NOT** in the manifest: `permissions`, `capabilities`, `hooks`, `config_schema`, `packages`. The manifest is the extension's passport, not a security specification.
+What is **NOT** in the manifest: `type`, `permissions`, `capabilities`, `hooks`, `config_schema`, `packages`. Capabilities are determined by which protocols the class implements, not by a manifest field. The manifest is the extension's passport, not a security specification.
 
 ### 7. Extension ↔ Kernel Interaction
 
@@ -261,15 +271,15 @@ Telegram Bot API (send)
 #### Scheduler: reminder in 2 hours
 
 ```
-scheduler extension._tick_loop()
-    ↓  time is up
+Loader cron loop (manages all SchedulerProvider extensions)
+    ↓  get_schedule() matched current time
     ↓
-result = await execute()  →  {"text": "Reminder: call mom"}
+result = await ext.execute()  →  {"text": "Reminder: call mom"}
     ↓
-await context.notify_user(user_id, result["text"])
+await context.notify_user(result["text"])
     ↓
 MessageRouter.notify_user()
-    ↓  finds active channel
+    ↓  resolves user + finds active channel
 channel.send_to_user(user_id, "Reminder: call mom")
 ```
 
@@ -303,7 +313,17 @@ INACTIVE ──► ACTIVE ──► ERROR
 | `ACTIVE` | `start()` called, running normally |
 | `ERROR` | `start()` failed or `health_check()` returned False |
 
-Loader on startup runs: `discover → load → initialize → start`. On new extension install (Builder Agent): `generate code → write files → request_restart()` → supervisor restarts kernel → standard startup.
+Loader calls `health_check()` on every active extension every 30 seconds. On `False`, Loader sets the extension state to `ERROR` and calls `stop()`.
+
+Loader on startup runs: `discover → load → initialize → detect protocols → wire → start`.
+
+Protocol detection — after `initialize()`, the Loader checks each extension against the four known protocols via `isinstance()` and wires accordingly (see table in section 3). A single extension can match multiple protocols; all matches are wired independently.
+
+On new extension install (Builder Agent): `generate code → write files → request_restart()` → supervisor restarts kernel → standard startup.
+
+#### Restart mechanism
+
+`request_restart()` creates a flag file `sandbox/.restart_requested`. Supervisor polls for this file every 2 seconds. On detection: removes the file, terminates the kernel process, and respawns it. This is deterministic and safe to call from any extension — including Builder Agent after writing new extension files.
 
 ### 9. Project Structure
 
@@ -357,7 +377,11 @@ Builder Agent sees three things when generating a new extension:
 2. **Two working examples** — full code of `telegram_channel/main.py` and `kv/main.py` directly in the prompt
 3. **Task** — description of what to create from Orchestrator
 
-It generates exactly two files: `manifest.yaml` and `main.py`. After writing the files, it calls `context.request_restart()`. Supervisor notices a flag file and restarts the kernel. On the next startup, Loader discovers the new extension and loads it.
+Builder Agent does not need a `type` field in the manifest. The task description from Orchestrator carries the semantic intent ("create a Telegram channel that receives messages and forwards them to the agent"). Builder reads the protocols in `contract.py`, picks the ones that match, and implements them. The working examples show concrete protocol combinations: `ChannelProvider` + `SetupProvider`, `ServiceProvider` + `ToolProvider`. The `natural_language_description` field in the manifest serves as the semantic label for agents and humans browsing the extension list.
+
+It generates exactly two files: `manifest.yaml` and `main.py`. After writing the files, it calls `context.request_restart()`. Supervisor notices the flag file and restarts the kernel. On the next startup, Loader discovers the new extension and loads it.
+
+**Key constraint:** Builder Agent cannot call `start()`, `initialize()`, or any lifecycle method directly. It can only write files and request a restart. Activation always goes through the standard Loader pipeline — this prevents a whole class of errors where generated code runs in a half-initialized kernel.
 
 ## Consequences
 
@@ -366,7 +390,7 @@ It generates exactly two files: `manifest.yaml` and `main.py`. After writing the
 | v1 (assistant3) | v2 (assistant4) |
 |---|---|
 | Event Bus — central nervous system | Direct callbacks — no routing |
-| 6 extension types + Middleware | 4 types; middleware is just `initialize()` |
+| 6 declared types + Middleware | 4 protocols detected via `isinstance`; no type declaration in manifest |
 | Redis Streams | In-memory asyncio → no external dependencies |
 | Permission system (network.http, filesystem.write, ...) | No ACL; sandbox is a convention |
 | 7 lifecycle states | 3 states |
