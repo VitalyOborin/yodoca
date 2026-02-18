@@ -16,7 +16,9 @@ async def main_async() -> None:
     """Bootstrap: discover -> load -> init -> wire -> create agent -> start -> wait for shutdown."""
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
+    shutdown_event = asyncio.Event()
     loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+    loader.set_shutdown_event(shutdown_event)
     router = MessageRouter()
 
     await loader.discover()
@@ -32,8 +34,6 @@ async def main_async() -> None:
 
     await loader.start_all()
 
-    shutdown_event = asyncio.Event()
-    loader.set_shutdown_event(shutdown_event)
     await shutdown_event.wait()
     await loader.shutdown()
 
