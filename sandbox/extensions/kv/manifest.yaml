@@ -1,0 +1,21 @@
+id: kv
+name: Key-Value Store
+version: "1.0.0"
+
+description: >
+  Persistent key-value store for the AI agent.
+  Provides kv_set and kv_get tools to read and write named values across sessions.
+
+entrypoint: main:KvExtension
+
+natural_language_description: |
+  Persistent key-value store. Use to save and retrieve named values that must
+  survive across conversations and sessions. Tools: kv_set (write or delete a key),
+  kv_get (read a key).
+
+depends_on: []
+secrets: []
+config:
+  namespace: ""
+
+enabled: true

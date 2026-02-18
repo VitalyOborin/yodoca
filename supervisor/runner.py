@@ -42,7 +42,7 @@ def _spawn_agent() -> subprocess.Popen[bytes]:
         _AGENT_CMD,
         cwd=str(_PROJECT_ROOT),
         env=env,
-        stdin=subprocess.DEVNULL,
+        stdin=sys.stdin,
         stdout=sys.stdout,
         stderr=sys.stderr,
     )

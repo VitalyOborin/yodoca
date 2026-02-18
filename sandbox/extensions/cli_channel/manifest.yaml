@@ -1,0 +1,16 @@
+id: cli_channel
+name: CLI Channel
+version: "1.0.0"
+
+description: Interactive command-line interface for the AI agent.
+
+entrypoint: main:CliChannelExtension
+
+natural_language_description: |
+  CLI channel. User types messages in the terminal,
+  agent responds in the same terminal.
+
+depends_on: []
+secrets: []
+config: {}
+enabled: true
