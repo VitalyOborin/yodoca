@@ -1,0 +1,9 @@
+.idea
+!.env
+!.env.example
+.pytest_cache
+.vscode
+.qoder
+.trae
+__pycache__
+.venv
