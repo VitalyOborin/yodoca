@@ -68,10 +68,6 @@ class _FileStore:
 class KvExtension:
     """Extension + ToolProvider: persistent key-value store for the agent."""
 
-    id = "kv"
-    name = "Key-Value Store"
-    version = "1.0.0"
-
     def __init__(self) -> None:
         self._store: _FileStore | None = None
         self._context: Any = None

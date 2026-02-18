@@ -8,11 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 @runtime_checkable
 class Extension(Protocol):
-    """Base contract: identity and lifecycle. Required for all extensions."""
-
-    id: str  # matches folder name, e.g. "telegram_channel"
-    name: str
-    version: str
+    """Base contract: lifecycle. Identity (id, name, version) comes from manifest."""
 
     async def initialize(self, context: "ExtensionContext") -> None:
         """Called once on load. Subscriptions, dependency init."""

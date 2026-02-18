@@ -174,7 +174,7 @@ class Loader:
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
             if isinstance(ext, ChannelProvider):
-                router.register_channel(ext.id, ext)
+                router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider):
                 self._schedulers[ext_id] = ext
 

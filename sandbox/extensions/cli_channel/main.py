@@ -3,17 +3,9 @@
 import asyncio
 from typing import Any
 
-id = "cli_channel"
-name = "CLI Channel"
-version = "1.0.0"
-
 
 class CliChannelExtension:
     """Extension + ChannelProvider: REPL loop via on_user_message callback."""
-
-    id = "cli_channel"
-    name = "CLI Channel"
-    version = "1.0.0"
 
     def __init__(self) -> None:
         self.context: Any = None
