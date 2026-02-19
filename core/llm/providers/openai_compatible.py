@@ -21,6 +21,7 @@ class OpenAICompatibleProvider:
             base_url=config.base_url,
             api_key=api_key or "not-required",
             default_headers=config.default_headers or None,
+            timeout=60.0,
         )
         return OpenAIResponsesModel(model=model_name, openai_client=client)
 
@@ -32,6 +33,7 @@ class OpenAICompatibleProvider:
                 base_url=config.base_url,
                 api_key=api_key or "x",
                 default_headers=config.default_headers or None,
+                timeout=60.0,
             )
             await client.models.list()
             return True
