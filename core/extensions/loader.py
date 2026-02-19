@@ -265,15 +265,14 @@ class Loader:
     ) -> Any:
         from agents import function_tool
 
-        @function_tool(name_override=f"agent_{ext_id}")
         async def invoke_agent(task: str) -> str:
             response = await ext.invoke(task)
             if response.status == "success":
                 return response.content
             return f"Agent error: {response.error or response.content}"
 
-        invoke_agent.__doc__ = descriptor.description
-        return invoke_agent
+        invoke_agent.__doc__ = descriptor.description or ""
+        return function_tool(name_override=ext_id)(invoke_agent)
 
     def get_capabilities_summary(self) -> str:
         """Natural-language summary: tools and agents separate for orchestrator prompt."""

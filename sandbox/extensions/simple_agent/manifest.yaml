@@ -1,0 +1,20 @@
+id: simple_agent
+name: Simple Agent
+version: "1.0.0"
+
+description: |
+  A simple agent for testing agent functionality in the system
+
+agent:
+  integration_mode: tool
+  model: gpt-5-mini
+  instructions: |
+    Always reply in the format of a haiku, as if you are stoned
+  uses_tools:
+    - kv
+  limits:
+    max_turns: 3
+
+depends_on:
+  - kv
+enabled: true
