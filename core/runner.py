@@ -34,13 +34,20 @@ async def main_async() -> None:
 
     await loader.start_all()
 
-    await shutdown_event.wait()
-    await loader.shutdown()
+    try:
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        pass  # Ctrl+C or supervisor: shutdown gracefully
+    finally:
+        await loader.shutdown()
 
 
 def main() -> None:
     """Synchronous entry for the AI agent process."""
-    asyncio.run(main_async())
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        pass  # already handled in main_async via CancelledError; exit cleanly
 
 
 __all__ = ["main"]
