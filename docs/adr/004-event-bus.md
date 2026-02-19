@@ -114,9 +114,6 @@ class EventBus:
     ) -> None:
         """Register handler in memory. Called at startup (from manifest wiring or context)."""
 
-    def unsubscribe(self, topic: str, subscriber_id: str) -> None:
-        """Remove subscription (e.g. for cleanup or dynamic unregister)."""
-
     async def start(self) -> None:
         """Start the dispatch loop as an asyncio Task."""
 
@@ -131,28 +128,19 @@ Design choices:
 
 - **publish** only writes to the DB; it does not call handlers. This decouples publishers from handler latency and ensures the event is persisted even if a handler fails later. After the INSERT, `publish` signals the dispatch loop via an internal `asyncio.Event` so it wakes up immediately instead of waiting for the next poll interval.
 - **subscribe** is in-memory only; subscriptions are not stored in the DB. They are re-registered on every process start from manifests and extension code (subscriptions as code, not data).
-- **subscriber_id** identifies who is handling (for unsubscribe and for logging/observability).
+- **subscriber_id** identifies who is handling (for logging and observability). There is no `unsubscribe` in the API — extensions live until shutdown; dynamic unsubscription can be added later if a use case (e.g. hot-reload) appears (YAGNI).
 
 ### 5. Dispatch loop
 
-A single asyncio Task runs a loop:
+A single asyncio Task runs a loop. There is only one dispatch Task and one process — no competing readers, so no need for transactional "claim" or locking.
 
-1. **Wait for work**: `await asyncio.wait_for(self._wake.wait(), timeout=self._poll_interval)`. The `_wake` event is set by `publish()`, so events are picked up immediately in the common case. The timeout (e.g. 5 seconds) is a safety net for any edge cases and recovery scenarios.
-2. **Claim a batch**: Fetch up to N (e.g. 10) `pending` events and atomically mark them `processing` in one transaction. This prevents double-delivery even if multiple workers were added later:
-
-```sql
-BEGIN IMMEDIATE;
-UPDATE event_journal SET status = 'processing'
-    WHERE id IN (SELECT id FROM event_journal WHERE status = 'pending' ORDER BY created_at LIMIT 10);
--- then SELECT the updated rows
-COMMIT;
-```
-
-3. **Deliver**: For each claimed event, call all handlers registered for its topic. Handlers for a single event run **sequentially** (no race conditions between handlers of the same event). Multiple events in the batch run **concurrently** via `asyncio.gather`.
+1. **Wait for work**: `await asyncio.wait_for(self._wake.wait(), timeout=self._poll_interval)`. The `_wake` event is set by `publish()`, so events are picked up immediately in the common case. The timeout (e.g. 5 seconds) is a safety net for edge cases and recovery.
+2. **Fetch one event**: `SELECT` one (or a small number, e.g. up to 3) `pending` row(s) by `created_at`, then `UPDATE status = 'processing'` for it/them. Plain `async with db.execute(...)` is enough — no explicit transaction. With a single Task, there is no race.
+3. **Deliver**: For each event, call all handlers registered for its topic **sequentially**. Process one event at a time (or a tiny batch of 1–3) per iteration — for single-user load the queue size is small; batching and `asyncio.gather` add complexity without benefit.
 4. **Mark outcome**: `done` if all handlers succeeded; `failed` with error text if any handler raised. If a handler raises, remaining handlers for the same event still execute.
 5. **Loop**.
 
-**Ordering**: Events within a batch are dispatched concurrently. If strict FIFO ordering per topic is required (e.g. ordered processing of `email.received`), the handler itself must enforce it, or a future enhancement could add per-topic serial dispatch. For MVP, concurrent batch processing is sufficient — most topics are independent.
+**Ordering**: Events are processed in FIFO by `created_at`. If strict per-topic ordering is needed across iterations, the current design already gives it by processing sequentially.
 
 ### 6. Failure handling
 
@@ -166,10 +154,10 @@ Future options (not in MVP): configurable retry policy per topic, dead-letter st
 
 ### 7. Manifest: `events` section
 
-Manifests gain an optional `events` section for declaration and documentation of pub/sub:
+Manifests gain an optional `events` section. **`subscribes`** is used by the Loader to wire handlers. **`publishes`** is **documentation only** — the Loader does not validate or enforce it; no runtime effect. It helps discoverability but can become misleading if extensions publish topics not listed here. Treat it as structured documentation, not a contract.
 
 ```yaml
-# Publisher example (e.g. email_checker)
+# Publisher example (e.g. email_checker) — publishes is documentation only
 events:
   publishes:
     - topic: email.received
@@ -304,8 +292,7 @@ The Event Bus is an **additive** piece of infrastructure; existing behaviour sta
 |------|----------|------------|
 | Journal growth over months of operation | Medium | Periodic cleanup of `done`/`failed` events older than N days (configurable). Can be a background task or a maintenance command. Not in MVP scope but schema supports it (`created_at` index). |
 | No retry for transient failures | Low | Acceptable for MVP: schedulers produce events on their own cadence; LLM retries are better handled at the caller level. Schema is forward-compatible with `attempts`/`next_attempt_at` columns. |
-| Same-topic ordering in concurrent batches | Low | MVP processes batch events concurrently. If strict per-topic ordering is needed, add per-topic serial dispatch as an enhancement. Most topics are independent. |
-| Topic proliferation without discoverability | Low | Manifest `events.publishes` section documents available topics. Wildcard/pattern subscriptions (`email.*`) can be added later if topic count grows. |
+| Topic proliferation without discoverability | Low | Manifest `events.publishes` section documents available topics (documentation only). Wildcard/pattern subscriptions (`email.*`) can be added later if topic count grows. |
 
 ### Implementation location
 
@@ -323,6 +310,9 @@ Implementation lives under **`core/events/`** (e.g. `models.py`, `bus.py`, stora
 - **Synchronous publish that calls handlers immediately** — Would tie publisher to handler performance and failure; rejected in favour of journal-then-dispatch.
 - **`invoke_agent` as a built-in manifest handler** — Rejected because the kernel cannot generically convert `payload: dict` into a meaningful prompt. Domain-specific prompt formatting belongs in the extension via `custom` handler.
 - **Topic wildcard/pattern matching** — Useful but adds complexity to the dispatch lookup. Deferred; can be added to the subscribe API later without breaking existing exact-match subscriptions.
+- **`unsubscribe` in API** — Omitted for YAGNI. Extensions run until shutdown; no dynamic unsubscription. Can be added if hot-reload or similar appears.
+- **Atomic claim / `BEGIN IMMEDIATE`** — Unnecessary with a single dispatch Task and single process; would only matter with multiple workers. Kept as simple SELECT → UPDATE.
+- **Batch size and `asyncio.gather`** — Processing one (or a small fixed number of) event(s) per iteration is enough for single-user load; batching adds complexity without benefit.
 
 ## References
 
