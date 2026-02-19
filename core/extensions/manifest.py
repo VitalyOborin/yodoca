@@ -26,10 +26,10 @@ class EventPublishDeclaration(BaseModel):
 
 
 class EventSubscribeDeclaration(BaseModel):
-    """Event subscription from manifest. Used by Loader for notify_user; custom = extension wires in code."""
+    """Event subscription from manifest. Used by Loader for notify_user/invoke_agent; custom = extension wires in code."""
 
     topic: str
-    handler: Literal["notify_user", "custom"] = "custom"
+    handler: Literal["notify_user", "invoke_agent", "custom"] = "custom"
 
 
 class EventsConfig(BaseModel):

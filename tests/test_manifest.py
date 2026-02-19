@@ -49,6 +49,23 @@ class TestExtensionManifest:
         with pytest.raises(ValidationError):
             ExtensionManifest.model_validate({"id": "x", "name": "X"})
 
+    def test_events_subscribes_invoke_agent_handler(self) -> None:
+        """invoke_agent handler is valid for proactive loop."""
+        data = {
+            "id": "email_agent",
+            "name": "Email Agent",
+            "entrypoint": "main:EmailAgent",
+            "agent": {"integration_mode": "tool", "model": "gpt-4"},
+            "events": {
+                "subscribes": [{"topic": "email.received", "handler": "invoke_agent"}],
+            },
+        }
+        m = ExtensionManifest.model_validate(data)
+        assert m.events is not None
+        assert len(m.events.subscribes) == 1
+        assert m.events.subscribes[0].topic == "email.received"
+        assert m.events.subscribes[0].handler == "invoke_agent"
+
 
 class TestLoadManifest:
     """load_manifest from filesystem."""

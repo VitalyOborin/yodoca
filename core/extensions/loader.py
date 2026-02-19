@@ -15,6 +15,7 @@ from core.events import EventBus
 from core.events.models import Event
 from core.extensions.contract import (
     AgentDescriptor,
+    AgentInvocationContext,
     AgentProvider,
     ChannelProvider,
     Extension,
@@ -234,8 +235,26 @@ class Loader:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
 
+    def _collect_proactive_subscriptions(self) -> dict[str, str]:
+        """Return {topic: ext_id} for invoke_agent subscriptions. First in manifest order wins."""
+        result: dict[str, str] = {}
+        for manifest in self._manifests:
+            if not manifest.events or not manifest.events.subscribes:
+                continue
+            ext_id = manifest.id
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if ext_id not in self._agent_providers:
+                continue
+            for sub in manifest.events.subscribes:
+                if sub.handler != "invoke_agent":
+                    continue
+                if sub.topic not in result:
+                    result[sub.topic] = ext_id
+        return result
+
     def wire_event_subscriptions(self, event_bus: EventBus) -> None:
-        """Wire manifest-driven notify_user handlers. Call after initialize_all."""
+        """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
         if not self._router:
             return
         router = self._router
@@ -269,6 +288,35 @@ class Loader:
             await router.handle_user_message(text, user_id, channel)
 
         event_bus.subscribe("user.message", kernel_user_message_handler, "kernel")
+
+        # Proactive loop: invoke_agent subscriptions -> AgentProvider.invoke -> notify_user
+        proactive_map = self._collect_proactive_subscriptions()
+        for topic, ext_id in proactive_map.items():
+            agent = self._agent_providers.get(ext_id)
+            if not agent:
+                logger.debug("Proactive topic %s: ext %s is not AgentProvider, skip", topic, ext_id)
+                continue
+
+            async def proactive_handler(
+                event: Event, _topic: str = topic, _agent: AgentProvider = agent
+            ) -> None:
+                task = f"Background event '{_topic}': {event.payload}"
+                context = AgentInvocationContext(correlation_id=event.correlation_id)
+                try:
+                    response = await _agent.invoke(task, context)
+                    if response.status == "success" and response.content:
+                        channel_id = event.payload.get("channel_id")
+                        await router.notify_user(response.content, channel_id)
+                    elif response.status != "success":
+                        logger.debug(
+                            "Proactive handler for %s: agent returned %s",
+                            _topic,
+                            response.status,
+                        )
+                except Exception as e:
+                    logger.exception("Proactive handler for %s failed: %s", _topic, e)
+
+            event_bus.subscribe(topic, proactive_handler, "kernel.proactive")
 
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""

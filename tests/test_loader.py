@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from core.events import EventBus
 from core.extensions.contract import (
+    AgentDescriptor,
+    AgentProvider,
+    AgentResponse,
     ChannelProvider,
     Extension,
     ServiceProvider,
@@ -150,6 +154,82 @@ class TestLoadAllAndProtocolDetection:
         )
         has_tools = len(tools) > 0  # kv provides kv_set, kv_get
         assert has_channel or has_tools or len(loader._extensions) == 0
+
+
+class TestProactiveLoop:
+    """invoke_agent subscriptions: _collect_proactive_subscriptions and wire_event_subscriptions."""
+
+    def _manifest_with_invoke_agent(self, ext_id: str, topic: str) -> ExtensionManifest:
+        return ExtensionManifest.model_validate({
+            "id": ext_id,
+            "name": ext_id.title(),
+            "entrypoint": "main:Cls",
+            "agent": {"integration_mode": "tool", "model": "gpt-4"},
+            "depends_on": [],
+            "events": {"subscribes": [{"topic": topic, "handler": "invoke_agent"}]},
+        })
+
+    def test_collect_proactive_subscriptions_returns_topic_to_ext_id(self) -> None:
+        """_collect_proactive_subscriptions maps topic -> ext_id for invoke_agent subs."""
+        mock_agent = MagicMock(spec=AgentProvider)
+        mock_agent.get_agent_descriptor.return_value = AgentDescriptor(
+            name="Email Agent", description="Triage emails", integration_mode="tool"
+        )
+
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader._manifests = [
+            self._manifest_with_invoke_agent("email_agent", "email.received"),
+        ]
+        loader._extensions = {"email_agent": mock_agent}
+        loader._state = {"email_agent": ExtensionState.INACTIVE}
+        loader._agent_providers = {"email_agent": mock_agent}
+
+        result = loader._collect_proactive_subscriptions()
+        assert result == {"email.received": "email_agent"}
+
+    def test_collect_proactive_subscriptions_skips_non_agent_extensions(self) -> None:
+        """Extensions without AgentProvider are skipped for invoke_agent."""
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader._manifests = [
+            self._manifest_with_invoke_agent("not_an_agent", "email.received"),
+        ]
+        loader._extensions = {"not_an_agent": MagicMock()}
+        loader._state = {"not_an_agent": ExtensionState.INACTIVE}
+        loader._agent_providers = {}  # not an AgentProvider
+
+        result = loader._collect_proactive_subscriptions()
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_wire_event_subscriptions_registers_proactive_handlers(
+        self, tmp_path: Path
+    ) -> None:
+        """wire_event_subscriptions subscribes to topics for invoke_agent."""
+        mock_agent = MagicMock(spec=AgentProvider)
+        mock_agent.get_agent_descriptor.return_value = AgentDescriptor(
+            name="Email Agent", description="Triage", integration_mode="tool"
+        )
+        mock_agent.invoke = AsyncMock(
+            return_value=AgentResponse(status="success", content="Processed email")
+        )
+
+        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path)
+        loader._router = MessageRouter()
+        loader._manifests = [
+            self._manifest_with_invoke_agent("email_agent", "email.received"),
+        ]
+        loader._extensions = {"email_agent": mock_agent}
+        loader._state = {"email_agent": ExtensionState.INACTIVE}
+        loader._agent_providers = {"email_agent": mock_agent}
+
+        event_bus = EventBus(db_path=tmp_path / "events.db")
+        await event_bus.recover()
+        loader.wire_event_subscriptions(event_bus)
+
+        assert "email.received" in event_bus._subscribers
+        handlers = event_bus._subscribers["email.received"]
+        proactive = [h for h in handlers if h[1] == "kernel.proactive"]
+        assert len(proactive) == 1
 
 
 class TestInitializeAndLifecycle:
