@@ -1,27 +1,39 @@
 """Entry point for the AI agent process: bootstrap Loader, Router, Agent; extensions run the UI."""
 
 import asyncio
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from core.agents.orchestrator import create_orchestrator_agent
 from core.extensions import Loader, MessageRouter
-from core.openai_config import configure_openai_agents_sdk
+from core.llm import ModelRouter
+from core.settings import load_settings
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+# Disable SDK tracing when using non-OpenAI or local endpoints (avoids 401s)
+from agents import set_tracing_disabled
+
+set_tracing_disabled(True)
+
 
 async def main_async() -> None:
     """Bootstrap: discover -> load -> init -> wire -> create agent -> start -> wait for shutdown."""
-    configure_openai_agents_sdk()
+    settings = load_settings()
+    model_router = ModelRouter(
+        settings=settings,
+        secrets_getter=os.environ.get,
+    )
 
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
     shutdown_event = asyncio.Event()
     loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
     loader.set_shutdown_event(shutdown_event)
+    loader.set_model_router(model_router)
     router = MessageRouter()
 
     await loader.discover()
@@ -30,6 +42,7 @@ async def main_async() -> None:
     loader.detect_and_wire_all(router)
 
     agent = create_orchestrator_agent(
+        model_router=model_router,
         extension_tools=loader.get_all_tools(),
         agent_tools=loader.get_agent_tools(),
         capabilities_summary=loader.get_capabilities_summary(),

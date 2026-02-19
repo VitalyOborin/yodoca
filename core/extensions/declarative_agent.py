@@ -20,10 +20,14 @@ class DeclarativeAgentAdapter:
         self._agent: Agent | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
+        if context.model_router and context.agent_id:
+            model = context.model_router.get_model(context.agent_id)
+        else:
+            model = context.agent_model
         self._agent = Agent(
             name=self._manifest.name,
             instructions=context.resolved_instructions,
-            model=context.agent_model,
+            model=model,
             tools=context.resolved_tools,
         )
 

@@ -48,6 +48,7 @@ class Loader:
         self._extensions_dir = extensions_dir
         self._data_dir = data_dir
         self._router: MessageRouter | None = None
+        self._model_router: Any = None
         self._manifests: list[ExtensionManifest] = []
         self._extensions: dict[str, Extension] = {}
         self._state: dict[str, ExtensionState] = {}
@@ -62,6 +63,10 @@ class Loader:
 
     def set_shutdown_event(self, event: asyncio.Event) -> None:
         self._shutdown_event = event
+
+    def set_model_router(self, model_router: Any) -> None:
+        """Inject ModelRouter for agent model resolution (core/llm)."""
+        self._model_router = model_router
 
     async def discover(self) -> None:
         """Scan extensions_dir for manifest.yaml; load and filter enabled."""
@@ -157,7 +162,11 @@ class Loader:
         for ext_id in manifest.agent.uses_tools:
             if ext_id == "core_tools":
                 from core.tools.provider import CoreToolsProvider
-                tools.extend(CoreToolsProvider().get_tools())
+                agent_id = getattr(manifest, "agent_id", None) or manifest.id
+                tools.extend(CoreToolsProvider(
+                    model_router=self._model_router,
+                    agent_id=agent_id,
+                ).get_tools())
                 continue
             ext = self._extensions.get(ext_id)
             if ext and isinstance(ext, ToolProvider):
@@ -180,6 +189,12 @@ class Loader:
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Skip on exception."""
         self._router = router
+        if self._model_router:
+            for manifest in self._manifests:
+                if manifest.agent_config:
+                    for aid, acfg in manifest.agent_config.items():
+                        if isinstance(acfg, dict):
+                            self._model_router.register_agent_config(aid, acfg)
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
                 continue
@@ -190,6 +205,7 @@ class Loader:
                 self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
             )
             agent_model = manifest.agent.model if manifest.agent else ""
+            agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
             ctx = ExtensionContext(
                 extension_id=ext_id,
                 config=manifest.config,
@@ -201,6 +217,8 @@ class Loader:
                 resolved_tools=resolved_tools,
                 resolved_instructions=resolved_instructions,
                 agent_model=agent_model,
+                model_router=self._model_router,
+                agent_id=agent_id,
             )
             try:
                 await ext.initialize(ctx)

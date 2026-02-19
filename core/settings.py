@@ -12,11 +12,12 @@ _DEFAULTS: dict[str, Any] = {
     },
     "agents": {
         "orchestrator": {
-            "model": "gpt-5.2",
-            "base_url": "https://api.openai.com/v1",
+            "provider": "openai",
+            "model": "gpt-5",
             "instructions": "",
         },
     },
+    "providers": {},
 }
 
 _cached: dict[str, Any] | None = None

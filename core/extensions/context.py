@@ -24,6 +24,8 @@ class ExtensionContext:
         resolved_tools: list[Any] | None = None,
         resolved_instructions: str = "",
         agent_model: str = "",
+        model_router: Any = None,
+        agent_id: str | None = None,
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -35,7 +37,14 @@ class ExtensionContext:
         self.resolved_tools: list[Any] = resolved_tools or []
         self.resolved_instructions: str = resolved_instructions
         self.agent_model: str = agent_model
+        self._model_router = model_router
+        self.agent_id: str | None = agent_id or extension_id
         self.on_user_message = self._router.handle_user_message
+
+    @property
+    def model_router(self) -> Any:
+        """ModelRouter for get_model(agent_id). None if not set (e.g. legacy runner)."""
+        return self._model_router
 
     async def notify_user(
         self, text: str, channel_id: str | None = None

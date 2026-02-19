@@ -44,6 +44,10 @@ class ExtensionManifest(BaseModel):
     config: dict = Field(default_factory=dict)
     enabled: bool = True
     agent: AgentManifestConfig | None = None
+    # Optional: agent_id for ModelRouter.get_model(agent_id); defaults to extension id
+    agent_id: str | None = None
+    # Optional: per-agent model config merged into ModelRouter (agent_id -> {provider, model, ...})
+    agent_config: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_entrypoint_or_agent(self) -> "ExtensionManifest":

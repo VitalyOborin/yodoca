@@ -1,12 +1,39 @@
-# Application settings (non-secret)
+# Application settings (non-secret).
+# LLM: agents (provider + model per agent) and providers (API endpoints, keys) below.
+
 supervisor:
   restart_file: sandbox/.restart_requested
   restart_file_check_interval: 5
+
 agents:
+  default:
+    provider: openai
+    model: gpt-5-mini
   orchestrator:
+    provider: lm_studio #openai
     model: mistralai/codestral-22b-v0.1 # gpt-5.2
-    base_url: http://127.0.0.1:1234/v1 # https://api.openai.com/v1
     instructions: prompts/orchestrator.jinja2
 
+providers:
+  openai:
+    type: openai_compatible
+    api_key_secret: OPENAI_API_KEY
+    # base_url omitted => https://api.openai.com/v1
 
+  lm_studio:
+    type: openai_compatible
+    base_url: http://127.0.0.1:1234/v1
+    api_key_literal: lm-studio
+    supports_hosted_tools: false
 
+  anthropic:
+    type: anthropic
+    api_key_secret: ANTHROPIC_API_KEY
+
+  openrouter:
+    type: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key_secret: OPENROUTER_API_KEY
+    default_headers:
+      HTTP-Referer: https://yodoca.app
+      X-Title: Yodoca

@@ -6,6 +6,7 @@ from typing import Any
 from agents import Agent, WebSearchTool
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from core.llm import ModelRouter
 from core.settings import get_setting, load_settings
 from core.tools import shell_tool
 
@@ -31,19 +32,22 @@ def _resolve_instructions(spec: str, template_vars: dict[str, Any] | None = None
 
 
 def create_orchestrator_agent(
+    model_router: ModelRouter,
     extension_tools: list[Any] | None = None,
     agent_tools: list[Any] | None = None,
     capabilities_summary: str = "",
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
     settings = load_settings()
-    model = get_setting(settings, "agents.orchestrator.model", "gpt-5.2")
     instructions_spec = get_setting(settings, "agents.orchestrator.instructions", "")
     instructions = _resolve_instructions(
         instructions_spec,
         template_vars={"capabilities": capabilities_summary},
     )
-    tools: list[Any] = [WebSearchTool(), shell_tool]
+    model = model_router.get_model("orchestrator")
+    tools: list[Any] = []
+    if model_router.supports_hosted_tools("orchestrator"):
+        tools.extend([WebSearchTool(), shell_tool])
     if extension_tools:
         tools.extend(extension_tools)
     if agent_tools:
