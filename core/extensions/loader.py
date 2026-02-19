@@ -11,6 +11,8 @@ from typing import Any
 
 from croniter import croniter
 
+from core.events import EventBus
+from core.events.models import Event
 from core.extensions.contract import (
     AgentDescriptor,
     AgentProvider,
@@ -60,6 +62,7 @@ class Loader:
         self._cron_task: asyncio.Task[Any] | None = None
         self._health_task: asyncio.Task[Any] | None = None
         self._shutdown_event: asyncio.Event | None = None
+        self._event_bus: EventBus | None = None
 
     def set_shutdown_event(self, event: asyncio.Event) -> None:
         self._shutdown_event = event
@@ -67,6 +70,10 @@ class Loader:
     def set_model_router(self, model_router: Any) -> None:
         """Inject ModelRouter for agent model resolution (core/llm)."""
         self._model_router = model_router
+
+    def set_event_bus(self, event_bus: EventBus) -> None:
+        """Inject EventBus for durable event flows."""
+        self._event_bus = event_bus
 
     async def discover(self) -> None:
         """Scan extensions_dir for manifest.yaml; load and filter enabled."""
@@ -219,12 +226,33 @@ class Loader:
                 agent_model=agent_model,
                 model_router=self._model_router,
                 agent_id=agent_id,
+                event_bus=self._event_bus,
             )
             try:
                 await ext.initialize(ctx)
             except Exception as e:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
+
+    def wire_event_subscriptions(self, event_bus: EventBus) -> None:
+        """Wire manifest-driven notify_user handlers. Call after initialize_all."""
+        if not self._router:
+            return
+        router = self._router
+        for manifest in self._manifests:
+            if not manifest.events or not manifest.events.subscribes:
+                continue
+            ext_id = manifest.id
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            for sub in manifest.events.subscribes:
+                if sub.handler != "notify_user":
+                    continue
+
+                async def handler(event: Event) -> None:
+                    await router.notify_user(event.payload.get("text", ""))
+
+                event_bus.subscribe(sub.topic, handler, ext_id)
 
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""

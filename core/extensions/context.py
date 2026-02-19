@@ -4,9 +4,13 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from core.extensions.router import MessageRouter
+
+if TYPE_CHECKING:
+    from core.events.bus import EventBus
+    from core.events.models import Event
 
 
 class ExtensionContext:
@@ -26,6 +30,7 @@ class ExtensionContext:
         agent_model: str = "",
         model_router: Any = None,
         agent_id: str | None = None,
+        event_bus: "EventBus | None" = None,
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -39,6 +44,7 @@ class ExtensionContext:
         self.agent_model: str = agent_model
         self._model_router = model_router
         self.agent_id: str | None = agent_id or extension_id
+        self._event_bus = event_bus
         self.on_user_message = self._router.handle_user_message
 
     @property
@@ -63,6 +69,25 @@ class ExtensionContext:
     def unsubscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Remove a previously registered subscription."""
         self._router.unsubscribe(event, handler)
+
+    async def emit(
+        self,
+        topic: str,
+        payload: dict,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Publish event to the Event Bus. Fire-and-forget."""
+        if self._event_bus:
+            await self._event_bus.publish(topic, self.extension_id, payload, correlation_id)
+
+    def subscribe_event(
+        self,
+        topic: str,
+        handler: Callable[["Event"], Awaitable[None]],
+    ) -> None:
+        """Subscribe to durable events via the Event Bus."""
+        if self._event_bus:
+            self._event_bus.subscribe(topic, handler, self.extension_id)
 
     async def get_secret(self, name: str) -> str | None:
         """Get a secret by name from .env."""

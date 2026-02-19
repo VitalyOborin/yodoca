@@ -18,6 +18,27 @@ class AgentLimits(BaseModel):
     time_budget_ms: int = 120000
 
 
+class EventPublishDeclaration(BaseModel):
+    """Documentation-only: topic published by extension."""
+
+    topic: str
+    description: str = ""
+
+
+class EventSubscribeDeclaration(BaseModel):
+    """Event subscription from manifest. Used by Loader for notify_user; custom = extension wires in code."""
+
+    topic: str
+    handler: Literal["notify_user", "custom"] = "custom"
+
+
+class EventsConfig(BaseModel):
+    """Events section in manifest. publishes = documentation only; subscribes = used by Loader."""
+
+    publishes: list[EventPublishDeclaration] = Field(default_factory=list)
+    subscribes: list[EventSubscribeDeclaration] = Field(default_factory=list)
+
+
 class AgentManifestConfig(BaseModel):
     """Agent section in manifest.yaml."""
 
@@ -48,6 +69,8 @@ class ExtensionManifest(BaseModel):
     agent_id: str | None = None
     # Optional: per-agent model config merged into ModelRouter (agent_id -> {provider, model, ...})
     agent_config: dict[str, Any] | None = None
+    # Optional: events.publishes = documentation only; events.subscribes = Loader wires notify_user
+    events: EventsConfig | None = None
 
     @model_validator(mode="after")
     def _validate_entrypoint_or_agent(self) -> "ExtensionManifest":

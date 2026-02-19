@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from core.agents.orchestrator import create_orchestrator_agent
+from core.events import EventBus
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter
 from core.settings import load_settings
@@ -36,10 +37,15 @@ async def main_async() -> None:
     loader.set_model_router(model_router)
     router = MessageRouter()
 
+    event_bus = EventBus(db_path=data_dir / "event_journal.db")
+    await event_bus.recover()
+    loader.set_event_bus(event_bus)
+
     await loader.discover()
     await loader.load_all()
     await loader.initialize_all(router)
     loader.detect_and_wire_all(router)
+    loader.wire_event_subscriptions(event_bus)
 
     agent = create_orchestrator_agent(
         model_router=model_router,
@@ -49,6 +55,7 @@ async def main_async() -> None:
     )
     router.set_agent(agent)
 
+    await event_bus.start()
     await loader.start_all()
 
     try:
@@ -56,6 +63,7 @@ async def main_async() -> None:
     except asyncio.CancelledError:
         pass  # Ctrl+C or supervisor: shutdown gracefully
     finally:
+        await event_bus.stop()
         await loader.shutdown()
 
 
