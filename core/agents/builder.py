@@ -1,9 +1,9 @@
-"""Builder Agent: creates extensions by contract. No tools for now."""
+"""Builder Agent: creates extensions by contract. Uses file, apply_patch_tool, request_restart, shell, web search."""
 
 from pathlib import Path
 
 from agents import Agent, WebSearchTool
-from core.tools import shell_tool
+from core.tools import apply_patch_tool, file, request_restart, shell_tool
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.settings import get_setting, load_settings
@@ -32,8 +32,7 @@ def _resolve_instructions(spec: str) -> str:
 def create_builder_agent() -> Agent:
     """Create and return the Builder Agent from config (model, instructions).
 
-    Will operate within sandbox and use its own tools/constraints later.
-    For now: no tools.
+    Operates within sandbox with file, patch, restart, shell, and web search tools.
     """
     settings = load_settings()
     model = get_setting(settings, "agents.builder.model", "gpt-5.2-codex")
@@ -46,5 +45,8 @@ def create_builder_agent() -> Agent:
         tools=[
             WebSearchTool(),
             shell_tool,
+            file,
+            apply_patch_tool,
+            request_restart,
         ],
     )
