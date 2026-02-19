@@ -32,6 +32,7 @@ def _resolve_instructions(spec: str, template_vars: dict[str, Any] | None = None
 
 def create_orchestrator_agent(
     extension_tools: list[Any] | None = None,
+    agent_tools: list[Any] | None = None,
     capabilities_summary: str = "",
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
@@ -45,6 +46,8 @@ def create_orchestrator_agent(
     tools: list[Any] = [WebSearchTool(), shell_tool]
     if extension_tools:
         tools.extend(extension_tools)
+    if agent_tools:
+        tools.extend(agent_tools)
     return Agent(
         name="Orchestrator",
         instructions=instructions,

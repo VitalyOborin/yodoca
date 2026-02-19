@@ -3,7 +3,8 @@
 Loader detects capabilities via isinstance(ext, Protocol). No type field in manifest.
 """
 
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -73,3 +74,45 @@ class SetupProvider(Protocol):
 
     async def on_setup_complete(self) -> tuple[bool, str]:
         """Verify everything is set up. Return (success, message)."""
+
+
+@dataclass(frozen=True)
+class AgentResponse:
+    """Structured result from AgentProvider.invoke()."""
+
+    status: Literal["success", "error", "refused"]
+    content: str
+    error: str | None = None
+    tokens_used: int | None = None
+    turns_used: int | None = None
+
+
+@dataclass(frozen=True)
+class AgentInvocationContext:
+    """Typed context passed to AgentProvider.invoke()."""
+
+    conversation_summary: str | None = None
+    user_message: str | None = None
+    correlation_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentDescriptor:
+    """Metadata for LLM routing and Loader wiring."""
+
+    name: str
+    description: str
+    integration_mode: Literal["tool", "handoff"]
+
+
+@runtime_checkable
+class AgentProvider(Protocol):
+    """Extension that provides a specialized AI agent."""
+
+    def get_agent_descriptor(self) -> AgentDescriptor:
+        """Return metadata for LLM routing."""
+
+    async def invoke(
+        self, task: str, context: AgentInvocationContext | None = None
+    ) -> AgentResponse:
+        """Execute a task and return structured result."""

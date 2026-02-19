@@ -1,6 +1,10 @@
 """Extension system: contract, manifest, context, router, loader."""
 
 from core.extensions.contract import (
+    AgentDescriptor,
+    AgentInvocationContext,
+    AgentProvider,
+    AgentResponse,
     ChannelProvider,
     Extension,
     ServiceProvider,
@@ -14,6 +18,10 @@ from core.extensions.router import MessageRouter
 from core.extensions.context import ExtensionContext
 
 __all__ = [
+    "AgentDescriptor",
+    "AgentInvocationContext",
+    "AgentProvider",
+    "AgentResponse",
     "ChannelProvider",
     "Extension",
     "ExtensionContext",

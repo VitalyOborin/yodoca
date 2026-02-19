@@ -28,6 +28,7 @@ async def main_async() -> None:
 
     agent = create_orchestrator_agent(
         extension_tools=loader.get_all_tools(),
+        agent_tools=loader.get_agent_tools(),
         capabilities_summary=loader.get_capabilities_summary(),
     )
     router.set_agent(agent)

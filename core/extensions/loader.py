@@ -12,6 +12,8 @@ from typing import Any
 from croniter import croniter
 
 from core.extensions.contract import (
+    AgentDescriptor,
+    AgentProvider,
     ChannelProvider,
     Extension,
     ServiceProvider,
@@ -49,6 +51,7 @@ class Loader:
         self._extensions: dict[str, Extension] = {}
         self._state: dict[str, ExtensionState] = {}
         self._tool_providers: list[ToolProvider] = []
+        self._agent_providers: dict[str, AgentProvider] = {}
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
         self._schedulers: dict[str, SchedulerProvider] = {}
         self._scheduler_next: dict[str, float] = {}
@@ -120,8 +123,12 @@ class Loader:
                 logger.exception("Failed to load extension %s: %s", manifest.id, e)
 
     def _load_one(self, manifest: ExtensionManifest) -> Extension:
-        """Dynamic import: load module from extension dir, instantiate class."""
+        """Dynamic import or declarative adapter. Declarative agents need no main.py."""
+        if manifest.agent and not manifest.entrypoint:
+            from core.extensions.declarative_agent import DeclarativeAgentAdapter
+            return DeclarativeAgentAdapter(manifest)
         ext_dir = self._extensions_dir / manifest.id
+        assert manifest.entrypoint is not None
         module_name, class_name = manifest.entrypoint.split(":", 1)
         py_path = ext_dir / f"{module_name}.py"
         if not py_path.exists():
@@ -141,6 +148,17 @@ class Loader:
         """Return extension instance only if in depends_on of current extension (used by context)."""
         return self._extensions.get(ext_id)
 
+    def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
+        """Resolve uses_tools to actual tools from ToolProvider extensions."""
+        if not manifest.agent:
+            return []
+        tools: list[Any] = []
+        for ext_id in manifest.agent.uses_tools:
+            ext = self._extensions.get(ext_id)
+            if ext and isinstance(ext, ToolProvider):
+                tools.extend(ext.get_tools())
+        return tools
+
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Skip on exception."""
         self._router = router
@@ -149,6 +167,7 @@ class Loader:
                 continue
             manifest = next(m for m in self._manifests if m.id == ext_id)
             data_dir_path = self._data_dir / ext_id
+            resolved_tools = self._resolve_agent_tools(manifest) if manifest.agent else []
             ctx = ExtensionContext(
                 extension_id=ext_id,
                 config=manifest.config,
@@ -157,6 +176,7 @@ class Loader:
                 get_extension=self._get_extension,
                 data_dir_path=data_dir_path,
                 shutdown_event=self._shutdown_event,
+                resolved_tools=resolved_tools,
             )
             try:
                 await ext.initialize(ctx)
@@ -167,12 +187,15 @@ class Loader:
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
+        self._agent_providers = {}
         self._schedulers = {}
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) == ExtensionState.ERROR:
                 continue
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
+            if isinstance(ext, AgentProvider):
+                self._agent_providers[ext_id] = ext
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider):
@@ -204,14 +227,50 @@ class Loader:
                 logger.exception("get_tools failed: %s", e)
         return tools
 
+    def get_agent_tools(self) -> list[Any]:
+        """Wrap AgentProvider extensions (tool mode) as callable tools for the Orchestrator."""
+        tools: list[Any] = []
+        for ext_id, ext in self._agent_providers.items():
+            descriptor = ext.get_agent_descriptor()
+            if descriptor.integration_mode == "tool":
+                tools.append(self._wrap_agent_as_tool(ext_id, ext, descriptor))
+        return tools
+
+    def _wrap_agent_as_tool(
+        self, ext_id: str, ext: AgentProvider, descriptor: AgentDescriptor
+    ) -> Any:
+        from agents import function_tool
+
+        @function_tool(name_override=f"agent_{ext_id}")
+        async def invoke_agent(task: str) -> str:
+            response = await ext.invoke(task)
+            if response.status == "success":
+                return response.content
+            return f"Agent error: {response.error or response.content}"
+
+        invoke_agent.__doc__ = descriptor.description
+        return invoke_agent
+
     def get_capabilities_summary(self) -> str:
-        """Natural-language summary of extensions for orchestrator prompt."""
-        parts = []
+        """Natural-language summary: tools and agents separate for orchestrator prompt."""
+        tool_parts: list[str] = []
+        agent_parts: list[str] = []
         for m in self._manifests:
-            if m.id in self._extensions and self._state.get(m.id) == ExtensionState.ACTIVE:
-                if m.natural_language_description:
-                    parts.append(f"- {m.id}: {m.natural_language_description.strip()}")
-        return "\n".join(parts) if parts else "No extensions loaded."
+            if m.id not in self._extensions or self._state.get(m.id) == ExtensionState.ERROR:
+                continue
+            if not m.natural_language_description:
+                continue
+            desc = m.natural_language_description.strip()
+            if m.id in self._agent_providers:
+                agent_parts.append(f"- {m.id}: {desc}")
+            else:
+                tool_parts.append(f"- {m.id}: {desc}")
+        sections: list[str] = []
+        if tool_parts:
+            sections.append("Available tools:\n" + "\n".join(tool_parts))
+        if agent_parts:
+            sections.append("Available agents:\n" + "\n".join(agent_parts))
+        return "\n\n".join(sections) if sections else "No extensions loaded."
 
     async def _health_check_loop(self) -> None:
         """Every 30s call health_check(); on False set ERROR and stop()."""

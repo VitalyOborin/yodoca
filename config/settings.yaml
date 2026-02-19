@@ -6,9 +6,6 @@ agents:
   orchestrator:
     model: gpt-5.2
     instructions: prompts/orchestrator.jinja2
-  builder:
-    model: gpt-5.2-codex
-    instructions: prompts/builder.jinja2
 
 
 
