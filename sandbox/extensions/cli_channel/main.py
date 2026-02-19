@@ -1,11 +1,11 @@
-"""CLI channel extension: reads stdin, sends user messages to agent, prints responses."""
+"""CLI channel extension: reads stdin, sends user messages via Event Bus, prints responses."""
 
 import asyncio
 from typing import Any
 
 
 class CliChannelExtension:
-    """Extension + ChannelProvider: REPL loop via on_user_message callback."""
+    """Extension + ChannelProvider: REPL loop; user input is emitted as user.message events."""
 
     def __init__(self) -> None:
         self.context: Any = None
@@ -41,7 +41,14 @@ class CliChannelExtension:
             line = line.strip()
             if not line:
                 continue
-            await self.context.on_user_message(line, "cli_user", self)
+            await self.context.emit(
+                "user.message",
+                {
+                    "text": line,
+                    "user_id": "cli_user",
+                    "channel_id": self.context.extension_id,
+                },
+            )
 
     async def send_to_user(self, user_id: str, message: str) -> None:
         print(message)

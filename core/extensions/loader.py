@@ -254,6 +254,22 @@ class Loader:
 
                 event_bus.subscribe(sub.topic, handler, ext_id)
 
+        # Kernel: route user.message events into the reactive path (agent -> channel)
+        async def kernel_user_message_handler(event: Event) -> None:
+            text = event.payload.get("text", "").strip()
+            user_id = event.payload.get("user_id", "default")
+            channel_id = event.payload.get("channel_id")
+            if not text or not channel_id:
+                logger.warning("user.message missing text or channel_id: %s", event.payload)
+                return
+            channel = router.get_channel(channel_id)
+            if not channel:
+                logger.warning("user.message: unknown channel_id %s", channel_id)
+                return
+            await router.handle_user_message(text, user_id, channel)
+
+        event_bus.subscribe("user.message", kernel_user_message_handler, "kernel")
+
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []

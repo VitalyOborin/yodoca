@@ -30,6 +30,10 @@ class MessageRouter:
         """Register a channel. Called by Loader during protocol wiring."""
         self._channels[ext_id] = channel
 
+    def get_channel(self, ext_id: str) -> ChannelProvider | None:
+        """Return channel by extension id. Used when handling user.message events."""
+        return self._channels.get(ext_id)
+
     def subscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Subscribe to an internal event (e.g. user_message, agent_response)."""
         self._subscribers[event].append(handler)

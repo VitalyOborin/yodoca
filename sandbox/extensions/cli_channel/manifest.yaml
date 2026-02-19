@@ -12,3 +12,9 @@ depends_on: []
 secrets: []
 config: {}
 enabled: true
+
+# Event Bus (ADR 004): publishes is documentation only
+events:
+  publishes:
+    - topic: user.message
+      description: "Fires when the user types a message in the CLI (payload: text, user_id, channel_id)"
