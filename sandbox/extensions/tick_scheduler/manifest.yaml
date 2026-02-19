@@ -2,11 +2,9 @@ id: tick_scheduler
 name: Tick Scheduler
 version: "1.0.0"
 
-description: Scheduler that runs every minute and sends a notification. Verifies Loader cron loop → execute() → router.notify_user() → channel.send_to_user().
-
 entrypoint: main:TickSchedulerExtension
 
-natural_language_description: |
+description: |
   Demo scheduler. Fires every minute and sends a "tick at HH:MM:SS" notification to the user.
   Used to verify SchedulerProvider and the notify path to CLI.
 

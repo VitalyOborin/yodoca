@@ -42,7 +42,7 @@ class DeclarativeAgentAdapter:
     def get_agent_descriptor(self) -> AgentDescriptor:
         return AgentDescriptor(
             name=self._manifest.name,
-            description=self._manifest.natural_language_description,
+            description=self._manifest.description,
             integration_mode=self._manifest.agent.integration_mode,
         )
 

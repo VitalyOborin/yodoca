@@ -1,12 +1,8 @@
 id: builder_agent
 name: Extension Builder Agent
 version: "1.0.0"
-description: >
-  AI agent that creates new extensions for the application.
-  Generates manifest.yaml and prompt files, then requests restart.
-entrypoint: main:BuilderAgentExtension
 
-natural_language_description: |
+description: |
   Use this agent when the user asks to create a new extension, plugin,
   tool, channel, or agent. The Builder generates code following the
   extension contract and requests a system restart to activate it.
@@ -16,6 +12,8 @@ agent:
   integration_mode: tool
   model: gpt-5.2-codex
   instructions_file: prompts/builder.jinja2
+  uses_tools:
+    - core_tools
   limits:
     max_turns: 20
 

@@ -36,9 +36,8 @@ class ExtensionManifest(BaseModel):
     id: str
     name: str
     version: str = "1.0.0"
-    description: str = ""
     entrypoint: str | None = None  # module:ClassName; optional for declarative agents
-    natural_language_description: str = ""
+    description: str = ""
     setup_instructions: str = ""
     depends_on: list[str] = Field(default_factory=list)
     secrets: list[str] = Field(default_factory=list)

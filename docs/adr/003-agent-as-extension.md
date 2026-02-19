@@ -199,7 +199,7 @@ class DeclarativeAgentAdapter:
     def get_agent_descriptor(self) -> AgentDescriptor:
         return AgentDescriptor(
             name=self._manifest.name,
-            description=self._manifest.natural_language_description,
+            description=self._manifest.description,
             integration_mode=self._manifest.agent.integration_mode,
         )
 ```
@@ -241,7 +241,7 @@ description: >
   AI agent specialized in code review: analyzes diffs, finds bugs,
   suggests improvements, checks style compliance.
 
-natural_language_description: |
+description: |
   Use this agent when the user asks to review code, analyze a diff,
   or check code quality. The agent reads files, analyzes code structure,
   and returns a detailed review with actionable suggestions.
@@ -283,7 +283,7 @@ description: >
   Generates manifest.yaml and prompt files, then requests restart.
 entrypoint: main:BuilderAgentExtension
 
-natural_language_description: |
+description: |
   Use this agent when the user asks to create a new extension, plugin,
   tool, channel, or agent. The Builder generates code following the
   extension contract and requests a system restart to activate it.
@@ -433,7 +433,7 @@ class ExtensionManifest(BaseModel):
     version: str = "1.0.0"
     description: str = ""
     entrypoint: str | None = None  # optional for declarative agents
-    natural_language_description: str = ""
+    description: str = ""
     setup_instructions: str = ""
     depends_on: list[str] = Field(default_factory=list)
     secrets: list[str] = Field(default_factory=list)
@@ -461,7 +461,7 @@ Available agents:
 - builder_agent: Use this agent when the user asks to create a new extension...
 ```
 
-This helps the Orchestrator make better routing decisions. The agent descriptions come from `natural_language_description` in the manifest — these should be written for LLM consumption, not human documentation. Good descriptions include: when to use, when NOT to use, what the agent can and cannot do.
+This helps the Orchestrator make better routing decisions. The agent descriptions come from `description` in the manifest — these should be written for LLM consumption, not human documentation. Good descriptions include: when to use, when NOT to use, what the agent can and cannot do.
 
 ## Architecture Diagram
 

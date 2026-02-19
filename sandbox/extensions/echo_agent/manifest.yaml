@@ -1,9 +1,8 @@
 id: echo_agent
 name: Echo Agent
 version: "1.0.0"
-description: Minimal declarative agent that echoes and uses kv. No main.py.
 
-natural_language_description: |
+description: |
   Use this agent to get a short echoed reply. For testing declarative agent loading.
 
 agent:
@@ -13,9 +12,8 @@ agent:
     You are a minimal echo agent. Reply briefly and helpfully.
   uses_tools:
     - kv
-
-limits:
-  max_turns: 3
+  limits:
+    max_turns: 3
 
 depends_on:
   - kv

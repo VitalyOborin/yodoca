@@ -150,11 +150,15 @@ class Loader:
         return self._extensions.get(ext_id)
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
-        """Resolve uses_tools to actual tools from ToolProvider extensions."""
+        """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
         if not manifest.agent:
             return []
         tools: list[Any] = []
         for ext_id in manifest.agent.uses_tools:
+            if ext_id == "core_tools":
+                from core.tools.provider import CoreToolsProvider
+                tools.extend(CoreToolsProvider().get_tools())
+                continue
             ext = self._extensions.get(ext_id)
             if ext and isinstance(ext, ToolProvider):
                 tools.extend(ext.get_tools())
@@ -278,9 +282,9 @@ class Loader:
         for m in self._manifests:
             if m.id not in self._extensions or self._state.get(m.id) == ExtensionState.ERROR:
                 continue
-            if not m.natural_language_description:
+            if not m.description:
                 continue
-            desc = m.natural_language_description.strip()
+            desc = m.description.strip()
             if m.id in self._agent_providers:
                 agent_parts.append(f"- {m.id}: {desc}")
             else:

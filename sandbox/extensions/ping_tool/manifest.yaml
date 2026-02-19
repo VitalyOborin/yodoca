@@ -2,11 +2,9 @@ id: ping_tool
 name: Ping Tool
 version: "1.0.0"
 
-description: Minimal tool that echoes back "pong" with the message. Used to verify Loader → Agent → Tool chain.
-
 entrypoint: main:PingToolExtension
 
-natural_language_description: |
+description: |
   Ping tool. Call with a message; returns "pong: <message>".
   Use to verify that tools are registered and the agent can invoke them.
 

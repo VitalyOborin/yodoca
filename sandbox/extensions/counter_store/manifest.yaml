@@ -2,11 +2,9 @@ id: counter_store
 name: Counter Store
 version: "1.0.0"
 
-description: In-memory counter with increment/get_counter tools and a background task that logs state every 30s. Verifies multi-protocol (ServiceProvider + ToolProvider) detection and shared state.
-
 entrypoint: main:CounterStoreExtension
 
-natural_language_description: |
+description: |
   In-memory counter. Tools: increment(amount) to add, get_counter() to read value.
   Background task logs counter state every 30 seconds. Demo for combined protocols.
 

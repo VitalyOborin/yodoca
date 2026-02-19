@@ -216,7 +216,7 @@ description: >
 entrypoint: main:TelegramChannelExtension   # module:Class
 
 # Description for agent system prompt
-natural_language_description: |
+description: |
   Telegram channel. User writes to bot in Telegram,
   messages go to the agent. Responses are sent back to Telegram.
   Supports proactive notifications.
@@ -380,7 +380,7 @@ Builder Agent sees three things when generating a new extension:
 2. **Two working examples** — full code of `telegram_channel/main.py` and `kv/main.py` directly in the prompt
 3. **Task** — description of what to create from Orchestrator
 
-Builder Agent does not need a `type` field in the manifest. The task description from Orchestrator carries the semantic intent ("create a Telegram channel that receives messages and forwards them to the agent"). Builder reads the protocols in `contract.py`, picks the ones that match, and implements them. The working examples show concrete protocol combinations: `ChannelProvider` + `SetupProvider`, `ServiceProvider` + `ToolProvider`. The `natural_language_description` field in the manifest serves as the semantic label for agents and humans browsing the extension list.
+Builder Agent does not need a `type` field in the manifest. The task description from Orchestrator carries the semantic intent ("create a Telegram channel that receives messages and forwards them to the agent"). Builder reads the protocols in `contract.py`, picks the ones that match, and implements them. The working examples show concrete protocol combinations: `ChannelProvider` + `SetupProvider`, `ServiceProvider` + `ToolProvider`. The `description` field in the manifest serves as the semantic label for agents and humans browsing the extension list.
 
 It generates exactly two files: `manifest.yaml` and `main.py`. After writing the files, it calls `context.request_restart()`. Supervisor notices the flag file and restarts the kernel. On the next startup, Loader discovers the new extension and loads it.
 
