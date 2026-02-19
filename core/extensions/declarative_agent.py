@@ -1,44 +1,15 @@
 """DeclarativeAgentAdapter: AgentProvider created from manifest only — no main.py needed."""
 
-from pathlib import Path
-from typing import Any
-
 from agents import Agent, Runner
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.extensions.contract import (
     AgentDescriptor,
     AgentInvocationContext,
     AgentProvider,
     AgentResponse,
-    Extension,
 )
 from core.extensions.context import ExtensionContext
 from core.extensions.manifest import ExtensionManifest
-
-
-def _resolve_instructions(
-    spec: str,
-    extension_dir: Path,
-    project_root: Path,
-    template_vars: dict[str, Any] | None = None,
-) -> str:
-    """Resolve instructions: try extension dir, then project root. Support Jinja2 or plain file."""
-    if not spec or not spec.strip():
-        return ""
-    spec_stripped = spec.strip()
-    for base in (extension_dir, project_root):
-        path = base / spec_stripped
-        if path.exists() and path.is_file():
-            if path.suffix == ".jinja2" or path.name.endswith(".jinja2"):
-                env = Environment(
-                    loader=FileSystemLoader(path.parent),
-                    autoescape=select_autoescape(enabled_extensions=()),
-                )
-                template = env.get_template(path.name)
-                return template.render(**(template_vars or {})).strip()
-            return path.read_text(encoding="utf-8").strip()
-    return spec_stripped
 
 
 class DeclarativeAgentAdapter:
@@ -49,17 +20,10 @@ class DeclarativeAgentAdapter:
         self._agent: Agent | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
-        extension_dir = context._data_dir_path.parent.parent / "extensions" / self._manifest.id
-        project_root = context._data_dir_path.parent.parent.parent
-        instructions = _resolve_instructions(
-            self._manifest.agent.instructions,
-            extension_dir,
-            project_root,
-        )
         self._agent = Agent(
             name=self._manifest.name,
-            instructions=instructions,
-            model=self._manifest.agent.model,
+            instructions=context.resolved_instructions,
+            model=context.agent_model,
             tools=context.resolved_tools,
         )
 

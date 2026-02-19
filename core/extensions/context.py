@@ -22,6 +22,8 @@ class ExtensionContext:
         data_dir_path: Path,
         shutdown_event: asyncio.Event | None,
         resolved_tools: list[Any] | None = None,
+        resolved_instructions: str = "",
+        agent_model: str = "",
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -31,6 +33,8 @@ class ExtensionContext:
         self._data_dir_path = data_dir_path
         self._shutdown_event = shutdown_event
         self.resolved_tools: list[Any] = resolved_tools or []
+        self.resolved_instructions: str = resolved_instructions
+        self.agent_model: str = agent_model
         self.on_user_message = self._router.handle_user_message
 
     async def notify_user(

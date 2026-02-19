@@ -15,12 +15,9 @@ natural_language_description: |
 agent:
   integration_mode: tool
   model: gpt-5.2-codex
-  instructions: prompts/builder.jinja2
+  instructions_file: prompts/builder.jinja2
   limits:
     max_turns: 20
 
-config:
-  model: gpt-5.2-codex
-  instructions: prompts/builder.jinja2
 depends_on: []
 enabled: true

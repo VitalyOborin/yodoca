@@ -1,30 +1,9 @@
 """Builder Agent extension: programmatic AgentProvider that creates new extensions."""
 
-from pathlib import Path
-
 from agents import Agent, Runner, WebSearchTool
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # Builder is the one extension allowed to use core tools (file, patch, shell, restart).
 from core.tools import apply_patch_tool, file, request_restart, shell_tool
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-
-
-def _resolve_instructions(spec: str) -> str:
-    if not spec or not spec.strip():
-        return ""
-    path = _PROJECT_ROOT / spec.strip()
-    if not path.exists() or not path.is_file():
-        return spec.strip()
-    if path.suffix == ".jinja2" or path.name.endswith(".jinja2"):
-        env = Environment(
-            loader=FileSystemLoader(path.parent),
-            autoescape=select_autoescape(enabled_extensions=()),
-        )
-        template = env.get_template(path.name)
-        return template.render().strip()
-    return path.read_text(encoding="utf-8").strip()
 
 
 class BuilderAgentExtension:
@@ -36,13 +15,10 @@ class BuilderAgentExtension:
 
     async def initialize(self, context) -> None:
         self._context = context
-        instructions_spec = context.get_config("instructions", "prompts/builder.jinja2")
-        instructions = _resolve_instructions(instructions_spec)
-        model = context.get_config("model", "gpt-5.2-codex")
         self._agent = Agent(
             name="ExtensionBuilder",
-            instructions=instructions,
-            model=model,
+            instructions=context.resolved_instructions,
+            model=context.agent_model,
             tools=[
                 WebSearchTool(),
                 shell_tool,
@@ -77,7 +53,7 @@ class BuilderAgentExtension:
             integration_mode="tool",
         )
 
-    async def invoke(self, task: str, context=None): 
+    async def invoke(self, task: str, context=None):
         from core.extensions.contract import AgentResponse
         if not self._agent:
             return AgentResponse(status="error", content="", error="Agent not initialized")

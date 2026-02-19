@@ -21,6 +21,7 @@ from core.extensions.contract import (
     ToolProvider,
 )
 from core.extensions.context import ExtensionContext
+from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
 
@@ -159,6 +160,19 @@ class Loader:
                 tools.extend(ext.get_tools())
         return tools
 
+    def _resolve_agent_instructions(self, manifest: ExtensionManifest, ext_id: str) -> str:
+        """Resolve instructions from agent.instructions and agent.instructions_file (kernel helper)."""
+        if not manifest.agent:
+            return ""
+        extension_dir = self._extensions_dir / ext_id
+        project_root = self._extensions_dir.parent.parent
+        return resolve_instructions(
+            instructions=manifest.agent.instructions,
+            instructions_file=manifest.agent.instructions_file,
+            extension_dir=extension_dir,
+            project_root=project_root,
+        )
+
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Skip on exception."""
         self._router = router
@@ -168,6 +182,10 @@ class Loader:
             manifest = next(m for m in self._manifests if m.id == ext_id)
             data_dir_path = self._data_dir / ext_id
             resolved_tools = self._resolve_agent_tools(manifest) if manifest.agent else []
+            resolved_instructions = (
+                self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
+            )
+            agent_model = manifest.agent.model if manifest.agent else ""
             ctx = ExtensionContext(
                 extension_id=ext_id,
                 config=manifest.config,
@@ -177,6 +195,8 @@ class Loader:
                 data_dir_path=data_dir_path,
                 shutdown_event=self._shutdown_event,
                 resolved_tools=resolved_tools,
+                resolved_instructions=resolved_instructions,
+                agent_model=agent_model,
             )
             try:
                 await ext.initialize(ctx)

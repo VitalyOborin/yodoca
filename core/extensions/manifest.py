@@ -24,6 +24,7 @@ class AgentManifestConfig(BaseModel):
     integration_mode: Literal["tool", "handoff"] = "tool"
     model: str
     instructions: str = ""
+    instructions_file: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     uses_tools: list[str] = Field(default_factory=list)
     limits: AgentLimits = Field(default_factory=AgentLimits)
