@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from core.agents.orchestrator import create_orchestrator_agent
 from core.extensions import Loader, MessageRouter
+from core.openai_config import configure_openai_agents_sdk
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -14,6 +15,8 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 async def main_async() -> None:
     """Bootstrap: discover -> load -> init -> wire -> create agent -> start -> wait for shutdown."""
+    configure_openai_agents_sdk()
+
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
     shutdown_event = asyncio.Event()
