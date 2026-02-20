@@ -1,11 +1,11 @@
 """Key-Value Store extension. Provides kv_set and kv_get tools backed by a JSON file in data_dir."""
 
 import json
-import logging
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from agents import function_tool
+from pydantic import Field
 
 _DATA_FILE = "values.json"
 _TEMP_FILE = "values.json.tmp"
@@ -110,10 +110,17 @@ class KvExtension:
         store = self._store
 
         @function_tool(name_override="kv_set")
-        async def kv_set(key: str, value: str = "") -> str:
+        async def kv_set(
+            key: Annotated[str, Field(min_length=1)],
+            value: str = "",
+        ) -> str:
             """Store a value under key in the persistent key-value store.
-            Pass an empty string (or omit value) to delete the key.
-            Returns a confirmation message.
+
+            Pass an empty string or omit value to delete the key. Returns a confirmation message.
+
+            Args:
+                key: Non-empty key name. Use alphanumeric, underscore, hyphen for best compatibility.
+                value: Value to store. Empty string or omit to delete the key.
             """
             if not key or not key.strip():
                 return "Error: key must be a non-empty string."
@@ -126,9 +133,13 @@ class KvExtension:
             return f"Key '{key.strip()}' set."
 
         @function_tool(name_override="kv_get")
-        async def kv_get(key: str) -> str:
+        async def kv_get(key: Annotated[str, Field(min_length=1)]) -> str:
             """Retrieve the value stored under key from the persistent key-value store.
+
             Returns the stored value, or a message indicating the key does not exist.
+
+            Args:
+                key: Non-empty key name to look up.
             """
             if not key or not key.strip():
                 return "Error: key must be a non-empty string."
