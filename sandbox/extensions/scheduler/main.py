@@ -389,9 +389,12 @@ class SchedulerExtension:
             Provide exactly one of: delay_seconds (seconds from now) or at_iso (ISO 8601 datetime).
 
             Payload contracts for system topics:
-            - system.user.notify: use key "text". Example: payload_json='{"text": "Hello!", "channel_id": null}'
-            - system.agent.task: use key "prompt" (task for orchestrator at fire time). Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
-            - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Run maintenance check"}'
+            - system.user.notify: use key "text" for static messages known at scheduling time.
+              Example: payload_json='{"text": "<ready message>", "channel_id": null}'
+            - system.agent.task: use key "prompt" for dynamic content, decisions, anything requiring reasoning at fire time.
+              Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
+            - system.agent.background: use key "prompt" for maintenance, analysis; no user response needed.
+              Example: payload_json='{"prompt": "<quiet task>"}'
 
             Args:
                 topic: Event topic (e.g. system.user.notify, system.agent.task).
@@ -435,9 +438,12 @@ class SchedulerExtension:
             Provide exactly one of: cron (e.g. '0 9 * * *') or every_seconds. Optionally set until_iso for end datetime.
 
             Payload contracts for system topics:
-            - system.user.notify: use key "text" for static messages known at schedule time. Example: payload_json='{"text": "Daily digest", "channel_id": null}'
-            - system.agent.task: use key "prompt" for dynamic content or reasoning at fire time. Example: payload_json='{"prompt": "Tell the user the current time in HH:MM", "channel_id": null}'
-            - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Check for updates"}'
+            - system.user.notify: use key "text" for static messages known at scheduling time.
+              Example: payload_json='{"text": "<ready message>", "channel_id": null}'
+            - system.agent.task: use key "prompt" for dynamic content, decisions, anything requiring reasoning at fire time.
+              Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
+            - system.agent.background: use key "prompt" for maintenance, analysis; no user response needed.
+              Example: payload_json='{"prompt": "<quiet task>"}'
 
             Args:
                 topic: Event topic (e.g. system.user.notify, system.agent.task).
