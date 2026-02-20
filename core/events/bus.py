@@ -58,6 +58,10 @@ class EventBus:
         self._wake.set()
         return deferred_id
 
+    async def cancel_deferred(self, deferred_id: int) -> None:
+        """Cancel a scheduled deferred event."""
+        await self._journal.cancel_deferred(deferred_id)
+
     def subscribe(
         self,
         topic: str,

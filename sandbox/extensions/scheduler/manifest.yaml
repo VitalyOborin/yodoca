@@ -1,0 +1,15 @@
+id: scheduler
+name: Scheduler
+version: "1.0.0"
+
+entrypoint: main:SchedulerExtension
+
+description: |
+  Time-aware EventBus bridge. Schedule one-shot and recurring events.
+  Tools: schedule_once, schedule_recurring, list_schedules,
+  cancel_schedule, update_schedule.
+
+depends_on: []
+config:
+  tick_interval: 30  # seconds between recurring job checks
+enabled: true

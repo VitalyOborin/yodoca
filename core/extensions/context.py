@@ -103,6 +103,13 @@ class ExtensionContext:
             )
         return None
 
+    async def cancel_deferred(self, deferred_id: int) -> bool:
+        """Cancel a scheduled deferred event. Returns True if cancelled."""
+        if self._event_bus:
+            await self._event_bus.cancel_deferred(deferred_id)
+            return True
+        return False
+
     def subscribe_event(
         self,
         topic: str,
