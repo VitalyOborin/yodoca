@@ -386,6 +386,11 @@ class SchedulerExtension:
             """Schedule a one-shot event to fire once.
             Provide exactly one of: delay_seconds (seconds from now) or at_iso (ISO 8601 datetime).
             topic: event topic; payload_json: JSON string payload.
+
+            Payload contracts for system topics:
+            - system.user.notify: use key "text". Example: payload_json='{"text": "Hello!", "channel_id": null}'
+            - system.agent.task: use key "prompt" (task for orchestrator at fire time). Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
+            - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Run maintenance check"}'
             """
             if (delay_seconds is None) == (at_iso is None):
                 return "Error: provide exactly one of delay_seconds or at_iso."
@@ -420,6 +425,11 @@ class SchedulerExtension:
         ) -> str:
             """Create a recurring schedule. Provide cron (e.g. '0 9 * * *') or every_seconds.
             until_iso: optional ISO 8601 end datetime.
+
+            Payload contracts for system topics:
+            - system.user.notify: use key "text" for static messages known at schedule time. Example: payload_json='{"text": "Daily digest", "channel_id": null}'
+            - system.agent.task: use key "prompt" for dynamic content or reasoning at fire time. Example: payload_json='{"prompt": "Tell the user the current time in HH:MM", "channel_id": null}'
+            - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Check for updates"}'
             """
             if (cron is None or not cron.strip()) == (every_seconds is None or every_seconds <= 0):
                 return "Error: provide exactly one of cron or every_seconds (positive)."
