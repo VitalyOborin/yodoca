@@ -37,6 +37,21 @@ class EventBus:
         self._wake.set()
         return event_id
 
+    async def schedule_at(
+        self,
+        fire_at: float,
+        topic: str,
+        payload: dict,
+        source: str = "scheduler",
+        correlation_id: str | None = None,
+    ) -> int:
+        """Schedule event to be emitted at a specific unix timestamp."""
+        deferred_id = await self._journal.schedule_deferred(
+            topic, source, payload, fire_at, correlation_id
+        )
+        self._wake.set()
+        return deferred_id
+
     def subscribe(
         self,
         topic: str,
@@ -67,10 +82,15 @@ class EventBus:
         logger.info("EventBus stopped")
 
     async def recover(self) -> int:
-        """Call once at startup. Reset 'processing' -> 'pending'. Return count reset."""
+        """Call once at startup. Reset 'processing' -> 'pending'; promote overdue deferred."""
         count = await self._journal.reset_processing_to_pending()
+        due = await self._journal.fetch_due_deferred()
+        for deferred_id, topic, source, payload, correlation_id in due:
+            await self._journal.insert(topic, source, payload, correlation_id)
+            await self._journal.mark_deferred_fired(deferred_id)
+            count += 1
         if count:
-            logger.info("EventBus: recovered %d interrupted events", count)
+            logger.info("EventBus: recovered %d events", count)
         return count
 
     async def _dispatch_loop(self) -> None:
@@ -87,6 +107,11 @@ class EventBus:
 
             if self._stopped:
                 break
+
+            due = await self._journal.fetch_due_deferred()
+            for deferred_id, topic, source, payload, correlation_id in due:
+                await self._journal.insert(topic, source, payload, correlation_id)
+                await self._journal.mark_deferred_fired(deferred_id)
 
             events = await self._journal.fetch_pending(limit=3)
             for event_id, topic, source, payload, created_at, correlation_id in events:
