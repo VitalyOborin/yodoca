@@ -76,7 +76,7 @@ class TestInvokeAgent:
             router.set_agent(mock_agent)
             result = await router.invoke_agent("hello")
         assert result == "agent said this"
-        mock_runner.run.assert_called_once_with(mock_agent, "hello")
+        mock_runner.run.assert_called_once_with(mock_agent, "hello", session=None)
 
 
 class TestSubscribeAndEmit:

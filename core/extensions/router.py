@@ -23,6 +23,7 @@ class MessageRouter:
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
         self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
         self._session: Any = None
+        self._session_id: str | None = None
 
     def set_agent(self, agent: Any) -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
@@ -52,9 +53,10 @@ class MessageRouter:
         """Set middleware to enrich prompt before agent invocation. Called before Runner.run()."""
         self._invoke_middleware = middleware
 
-    def set_session(self, session: Any) -> None:
+    def set_session(self, session: Any, session_id: str) -> None:
         """Set per-agent session for conversation history (short-term memory within a dialog)."""
         self._session = session
+        self._session_id = session_id
 
     async def _emit(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch event to subscribers."""
@@ -91,9 +93,20 @@ class MessageRouter:
         self, text: str, user_id: str, channel: ChannelProvider
     ) -> None:
         """Invoke agent with user message, send response via channel. Serialized."""
-        await self._emit("user_message", {"text": text, "user_id": user_id, "channel": channel})
+        await self._emit(
+            "user_message",
+            {"text": text, "user_id": user_id, "channel": channel, "session_id": self._session_id},
+        )
         response = await self.invoke_agent(text)
-        await self._emit("agent_response", {"user_id": user_id, "text": response, "channel": channel})
+        await self._emit(
+            "agent_response",
+            {
+                "user_id": user_id,
+                "text": response,
+                "channel": channel,
+                "session_id": self._session_id,
+            },
+        )
         await channel.send_to_user(user_id, response)
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:

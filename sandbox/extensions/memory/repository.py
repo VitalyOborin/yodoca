@@ -15,17 +15,17 @@ class MemoryRepository:
     def __init__(self, db: MemoryDatabase) -> None:
         self._db = db
 
-    async def save_episode(self, content: str) -> str:
+    async def save_episode(self, content: str, session_id: str | None = None) -> str:
         """Insert episode; event_time=created_at. Returns new memory id."""
         conn = await self._db._ensure_conn()
         now = int(time.time())
         memory_id = f"ep_{uuid.uuid4().hex[:12]}"
         await conn.execute(
             """
-            INSERT INTO memories (id, kind, content, event_time, created_at)
-            VALUES (?, 'episode', ?, ?, ?)
+            INSERT INTO memories (id, kind, content, session_id, event_time, created_at)
+            VALUES (?, 'episode', ?, ?, ?, ?)
             """,
-            (memory_id, content, now, now),
+            (memory_id, content, session_id, now, now),
         )
         await conn.commit()
         return memory_id
@@ -80,6 +80,7 @@ class MemoryRepository:
         kind: str | None = None,
         tag: str | None = None,
         limit: int = 10,
+        exclude_session_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """FTS5 search. Returns list of memory dicts. Empty query returns []."""
         if not query or not query.strip():
@@ -89,10 +90,14 @@ class MemoryRepository:
         params: list[Any] = [fts_query, limit]
         kind_filter = " AND m.kind = ?" if kind else ""
         tag_filter = " AND m.tags LIKE ?" if tag else ""
+        session_filter = ""
         if kind:
             params.append(kind)
         if tag:
             params.append(f'%"{tag}"%')
+        if exclude_session_id:
+            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
+            params.append(exclude_session_id)
         sql = f"""
             SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
                    m.confidence, m.tags
@@ -106,6 +111,7 @@ class MemoryRepository:
             WHERE m.valid_until IS NULL
             {kind_filter}
             {tag_filter}
+            {session_filter}
         """
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
@@ -140,6 +146,52 @@ class MemoryRepository:
         row = await cursor.fetchone()
         latest = row[0] if row and row[0] else None
         return {"counts": counts, "latest_created_at": latest}
+
+    async def ensure_session(self, session_id: str) -> None:
+        """Register session on first sight."""
+        conn = await self._db._ensure_conn()
+        await conn.execute(
+            """INSERT OR IGNORE INTO sessions_consolidations (session_id, first_seen_at)
+               VALUES (?, ?)""",
+            (session_id, int(time.time())),
+        )
+        await conn.commit()
+
+    async def get_pending_consolidations(
+        self, exclude_session_id: str
+    ) -> list[str]:
+        """Return session_ids that need consolidation (all except current)."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT session_id FROM sessions_consolidations
+               WHERE consolidated_at IS NULL
+                 AND session_id != ?""",
+            (exclude_session_id,),
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+    async def mark_session_consolidated(self, session_id: str) -> None:
+        conn = await self._db._ensure_conn()
+        await conn.execute(
+            """UPDATE sessions_consolidations SET consolidated_at = ?
+               WHERE session_id = ?""",
+            (int(time.time()), session_id),
+        )
+        await conn.commit()
+
+    async def get_episodes_by_session(self, session_id: str) -> list[dict[str, Any]]:
+        """Fetch all episodes for a session (for consolidation)."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT id, content FROM memories
+               WHERE session_id = ? AND kind = 'episode'
+                 AND valid_until IS NULL
+               ORDER BY created_at""",
+            (session_id,),
+        )
+        rows = await cursor.fetchall()
+        return [{"id": r[0], "content": r[1]} for r in rows]
 
 
 def _escape_fts5_query(q: str) -> str:

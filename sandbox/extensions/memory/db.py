@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id           TEXT PRIMARY KEY,
     kind         TEXT NOT NULL,
     content      TEXT NOT NULL,
+    session_id   TEXT,
     embedding    BLOB,
 
     event_time   INTEGER NOT NULL,
@@ -27,6 +28,14 @@ CREATE TABLE IF NOT EXISTS memories (
     entity_ids   TEXT DEFAULT '[]',
     tags         TEXT DEFAULT '[]',
     attributes   TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
+
+CREATE TABLE IF NOT EXISTS sessions_consolidations (
+    session_id       TEXT PRIMARY KEY,
+    first_seen_at    INTEGER NOT NULL,
+    consolidated_at  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS entities (
@@ -73,6 +82,16 @@ class MemoryDatabase:
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.executescript(_SCHEMA)
         await self._conn.commit()
+        await self._migrate_schema()
+
+    async def _migrate_schema(self) -> None:
+        """Add session_id to existing memories table if missing (no backward compat)."""
+        assert self._conn is not None
+        try:
+            await self._conn.execute("ALTER TABLE memories ADD COLUMN session_id TEXT")
+            await self._conn.commit()
+        except Exception:
+            pass  # Column already exists or table is new
 
     async def _ensure_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
