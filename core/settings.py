@@ -18,6 +18,11 @@ _DEFAULTS: dict[str, Any] = {
         },
     },
     "providers": {},
+    "event_bus": {
+        "db_path": "sandbox/data/event_journal.db",
+        "poll_interval": 5.0,
+        "batch_size": 3,
+    },
 }
 
 _cached: dict[str, Any] | None = None

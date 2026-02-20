@@ -37,7 +37,15 @@ async def main_async() -> None:
     loader.set_model_router(model_router)
     router = MessageRouter()
 
-    event_bus = EventBus(db_path=data_dir / "event_journal.db")
+    eb_cfg = settings.get("event_bus", {})
+    db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
+    poll_interval = eb_cfg.get("poll_interval", 5.0)
+    batch_size = eb_cfg.get("batch_size", 3)
+    event_bus = EventBus(
+        db_path=db_path,
+        poll_interval=poll_interval,
+        batch_size=batch_size,
+    )
     await event_bus.recover()
     loader.set_event_bus(event_bus)
 

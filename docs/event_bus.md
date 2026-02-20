@@ -268,9 +268,13 @@ checkin_trigger: emit checkin.started {step:1, total:3}
 
 ## Configuration
 
-- **DB path**: `sandbox/data/event_journal.db` (from runner)
-- **Poll interval**: 5.0 seconds (EventBus default); can be reduced for faster deferred firing
-- **Batch size**: 3 pending events per loop iteration (hardcoded)
+Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `db_path` | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root) |
+| `poll_interval` | `5.0` | Dispatch loop wait timeout in seconds; lower values reduce deferred event latency |
+| `batch_size` | `3` | Max pending events fetched per loop iteration |
 
 ---
 

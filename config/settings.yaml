@@ -37,3 +37,8 @@ providers:
     default_headers:
       HTTP-Referer: https://yodoca.app
       X-Title: Yodoca
+
+event_bus:
+  db_path: sandbox/data/event_journal.db   # relative to project root
+  poll_interval: 5.0                       # seconds; lower = faster deferred firing
+  batch_size: 3                            # pending events per dispatch iteration

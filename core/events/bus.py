@@ -15,9 +15,15 @@ logger = logging.getLogger(__name__)
 class EventBus:
     """Durable event bus: publish to journal, dispatch loop delivers to handlers."""
 
-    def __init__(self, db_path: Path, poll_interval: float = 5.0) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        poll_interval: float = 5.0,
+        batch_size: int = 3,
+    ) -> None:
         self._journal = EventJournal(db_path)
         self._poll_interval = poll_interval
+        self._batch_size = batch_size
         self._wake = asyncio.Event()
         self._subscribers: dict[str, list[tuple[Callable[[Event], Awaitable[None]], str]]] = (
             defaultdict(list)
@@ -113,7 +119,7 @@ class EventBus:
                 await self._journal.insert(topic, source, payload, correlation_id)
                 await self._journal.mark_deferred_fired(deferred_id)
 
-            events = await self._journal.fetch_pending(limit=3)
+            events = await self._journal.fetch_pending(limit=self._batch_size)
             for event_id, topic, source, payload, created_at, correlation_id in events:
                 if self._stopped:
                     break
