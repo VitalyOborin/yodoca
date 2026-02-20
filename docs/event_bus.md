@@ -20,7 +20,7 @@ The Event Bus provides:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           Extensions                                      │
+│                           Extensions                                    │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
 │  │ ctx.emit()   │  │ ctx.schedule │  │ ctx.subscribe│                   │
 │  │ ctx.schedule │  │ _at()        │  │ _event()     │                   │
@@ -29,18 +29,18 @@ The Event Bus provides:
           │                 │                 │
           ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           EventBus                                        │
-│  publish() ──► journal.insert() ──► event_journal (pending)              │
-│  schedule_at() ──► journal.schedule_deferred() ──► deferred_events       │
-│  subscribe() ──► in-memory handlers                                       │
+│                           EventBus                                      │
+│  publish() ──► journal.insert() ──► event_journal (pending)             │
+│  schedule_at() ──► journal.schedule_deferred() ──► deferred_events      │
+│  subscribe() ──► in-memory handlers                                     │
 └─────────────────────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     _dispatch_loop (single loop)                          │
-│  1. Promote due deferred_events → event_journal (pending)                │
-│  2. Fetch pending from event_journal                                     │
-│  3. Deliver to all subscribers; mark done/failed                         │
+│                     _dispatch_loop (single loop)                        │
+│  1. Promote due deferred_events → event_journal (pending)               │
+│  2. Fetch pending from event_journal                                    │
+│  3. Deliver to all subscribers; mark done/failed                        │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -50,31 +50,35 @@ The Event Bus provides:
 
 ### `event_journal`
 
-| Column         | Type   | Description                                      |
-|----------------|--------|--------------------------------------------------|
-| id             | int    | Primary key                                      |
-| topic          | text   | Event topic (e.g. `reminder.due`, `user.message`)|
-| source         | text   | Extension ID that published                      |
-| payload        | text   | JSON-serialized payload                          |
-| correlation_id | text   | Optional correlation for tracing                |
-| status         | text   | `pending` → `processing` → `done` \| `failed`   |
-| created_at     | real   | Unix timestamp                                   |
-| processed_at   | real   | Set when done/failed                             |
-| error          | text   | Error message if failed                          |
+
+| Column         | Type | Description                                       |
+| -------------- | ---- | ------------------------------------------------- |
+| id             | int  | Primary key                                       |
+| topic          | text | Event topic (e.g. `reminder.due`, `user.message`) |
+| source         | text | Extension ID that published                       |
+| payload        | text | JSON-serialized payload                           |
+| correlation_id | text | Optional correlation for tracing                  |
+| status         | text | `pending` → `processing` → `done` | `failed`      |
+| created_at     | real | Unix timestamp                                    |
+| processed_at   | real | Set when done/failed                              |
+| error          | text | Error message if failed                           |
+
 
 ### `deferred_events`
 
-| Column         | Type   | Description                                      |
-|----------------|--------|--------------------------------------------------|
-| id             | int    | Primary key                                      |
-| topic          | text   | Event topic                                      |
-| source         | text   | Extension ID                                     |
-| payload        | text   | JSON-serialized payload                          |
-| correlation_id | text   | Optional                                         |
-| fire_at        | real   | Unix timestamp when event should fire            |
-| status         | text   | `scheduled` → `fired` \| `cancelled`             |
-| created_at     | real   | Unix timestamp                                   |
-| fired_at       | real   | Set when fired                                   |
+
+| Column         | Type | Description                           |
+| -------------- | ---- | ------------------------------------- |
+| id             | int  | Primary key                           |
+| topic          | text | Event topic                           |
+| source         | text | Extension ID                          |
+| payload        | text | JSON-serialized payload               |
+| correlation_id | text | Optional                              |
+| fire_at        | real | Unix timestamp when event should fire |
+| status         | text | `scheduled` → `fired` | `cancelled`   |
+| created_at     | real | Unix timestamp                        |
+| fired_at       | real | Set when fired                        |
+
 
 Deferred events use a separate table because their lifecycle (`scheduled` → `fired`/`cancelled`) differs from the journal (`pending` → `done`/`failed`). When `fire_at <= now()`, they are promoted into `event_journal` as `pending` and processed by the same dispatch loop.
 
@@ -210,12 +214,14 @@ The dispatch loop then processes recovered events normally.
 
 ## Built-in Topics
 
-| Topic          | Source        | Payload                          | Purpose                    |
-|----------------|---------------|----------------------------------|----------------------------|
-| `user.message` | cli_channel   | `text`, `user_id`, `channel_id`  | User input → agent         |
-| `reminder.due` | extensions    | `text`, optional `channel_id`   | Deferred reminders         |
-| `checkin.started` | extensions | `step`, `total`                  | Multi-step workflows       |
-| `task.received`   | extensions | `text`                           | Proactive task processing  |
+
+| Topic             | Source      | Payload                         | Purpose                   |
+| ----------------- | ----------- | ------------------------------- | ------------------------- |
+| `user.message`    | cli_channel | `text`, `user_id`, `channel_id` | User input → agent        |
+| `reminder.due`    | extensions  | `text`, optional `channel_id`   | Deferred reminders        |
+| `checkin.started` | extensions  | `step`, `total`                 | Multi-step workflows      |
+| `task.received`   | extensions  | `text`                          | Proactive task processing |
+
 
 ---
 
@@ -256,13 +262,15 @@ checkin_trigger: emit checkin.started {step:1, total:3}
 
 ## Design Decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| Separate `deferred_events` table | Different lifecycle; avoids mixing `scheduled` with `pending/done/failed` |
-| Single dispatch loop | Deferred promotion is one SQL query per iteration; no extra thread/loop |
-| Promote deferred → journal | Reuses retry, correlation, mark_done/failed; no special handling |
-| `poll_interval` + `_wake` | Balance between latency and CPU; `schedule_at` wakes loop for near-term events |
-| ExtensionContext only | Extensions never import core; single API surface |
+
+| Decision                         | Rationale                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| Separate `deferred_events` table | Different lifecycle; avoids mixing `scheduled` with `pending/done/failed`      |
+| Single dispatch loop             | Deferred promotion is one SQL query per iteration; no extra thread/loop        |
+| Promote deferred → journal       | Reuses retry, correlation, mark_done/failed; no special handling               |
+| `poll_interval` + `_wake`        | Balance between latency and CPU; `schedule_at` wakes loop for near-term events |
+| ExtensionContext only            | Extensions never import core; single API surface                               |
+
 
 ---
 
@@ -270,11 +278,13 @@ checkin_trigger: emit checkin.started {step:1, total:3}
 
 Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `db_path` | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root) |
-| `poll_interval` | `5.0` | Dispatch loop wait timeout in seconds; lower values reduce deferred event latency |
-| `batch_size` | `3` | Max pending events fetched per loop iteration |
+
+| Key             | Default                         | Description                                                                       |
+| --------------- | ------------------------------- | --------------------------------------------------------------------------------- |
+| `db_path`       | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root)                                      |
+| `poll_interval` | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce deferred event latency |
+| `batch_size`    | `3`                             | Max pending events fetched per loop iteration                                     |
+
 
 ---
 
@@ -283,3 +293,4 @@ Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 - **event_journal**: Query by `topic`, `status`, `correlation_id` for debugging
 - **deferred_events**: Query `fire_at`, `status` to inspect scheduled work
 - Logs: `EventBus: recovered N events` at startup; handler exceptions logged with `subscriber_id` and `event_id`
+
