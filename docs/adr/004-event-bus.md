@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed.
+Accepted. Implemented
+
 
 ## Principle: Pure Transport
 
