@@ -27,22 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_ej_status_created ON event_journal(status, create
 CREATE INDEX IF NOT EXISTS idx_ej_correlation ON event_journal(correlation_id);
 """
 
-_DEFERRED_SCHEMA = """
-CREATE TABLE IF NOT EXISTS deferred_events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic           TEXT    NOT NULL,
-    source          TEXT    NOT NULL,
-    payload         TEXT    NOT NULL,
-    correlation_id  TEXT,
-    fire_at         REAL    NOT NULL,
-    status          TEXT    NOT NULL DEFAULT 'scheduled',
-    created_at      REAL    NOT NULL,
-    fired_at        REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_de_fire_at ON deferred_events(fire_at, status);
-"""
-
 
 class EventJournal:
     """SQLite-backed event journal. One connection per instance."""
@@ -57,7 +41,6 @@ class EventJournal:
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA synchronous=NORMAL")
             await self._conn.executescript(_SCHEMA)
-            await self._conn.executescript(_DEFERRED_SCHEMA)
             await self._conn.commit()
         return self._conn
 
@@ -144,65 +127,3 @@ class EventJournal:
         )
         await conn.commit()
         return cursor.rowcount or 0
-
-    async def schedule_deferred(
-        self,
-        topic: str,
-        source: str,
-        payload: dict,
-        fire_at: float,
-        correlation_id: str | None = None,
-    ) -> int:
-        """Insert a deferred event. Returns row id."""
-        conn = await self._ensure_conn()
-        now = time.time()
-        cursor = await conn.execute(
-            """
-            INSERT INTO deferred_events (topic, source, payload, correlation_id, fire_at, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'scheduled', ?)
-            """,
-            (topic, source, json.dumps(payload), correlation_id, fire_at, now),
-        )
-        await conn.commit()
-        return cursor.lastrowid or 0
-
-    async def fetch_due_deferred(
-        self,
-    ) -> list[tuple[int, str, str, dict, str | None]]:
-        """Fetch scheduled events with fire_at <= now(). Returns (id, topic, source, payload, correlation_id)."""
-        conn = await self._ensure_conn()
-        now = time.time()
-        cursor = await conn.execute(
-            """
-            SELECT id, topic, source, payload, correlation_id
-            FROM deferred_events
-            WHERE status = 'scheduled' AND fire_at <= ?
-            ORDER BY fire_at
-            """,
-            (now,),
-        )
-        rows = await cursor.fetchall()
-        result: list[tuple[int, str, str, dict, str | None]] = []
-        for row in rows:
-            payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
-            result.append((row[0], row[1], row[2], payload, row[4]))
-        return result
-
-    async def mark_deferred_fired(self, deferred_id: int) -> None:
-        """Mark deferred event as fired."""
-        conn = await self._ensure_conn()
-        now = time.time()
-        await conn.execute(
-            "UPDATE deferred_events SET status = 'fired', fired_at = ? WHERE id = ?",
-            (now, deferred_id),
-        )
-        await conn.commit()
-
-    async def cancel_deferred(self, deferred_id: int) -> None:
-        """Mark deferred event as cancelled."""
-        conn = await self._ensure_conn()
-        await conn.execute(
-            "UPDATE deferred_events SET status = 'cancelled' WHERE id = ?",
-            (deferred_id,),
-        )
-        await conn.commit()

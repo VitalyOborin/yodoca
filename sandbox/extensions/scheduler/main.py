@@ -14,7 +14,6 @@ from croniter import croniter
 _ONE_SHOT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS one_shot_schedules (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    deferred_id  INTEGER NOT NULL,
     topic        TEXT NOT NULL,
     payload      TEXT NOT NULL,
     fire_at      REAL NOT NULL,
@@ -22,7 +21,7 @@ CREATE TABLE IF NOT EXISTS one_shot_schedules (
     created_at   REAL NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_oss_deferred ON one_shot_schedules(deferred_id);
+CREATE INDEX IF NOT EXISTS idx_oss_fire_at ON one_shot_schedules(fire_at, status);
 CREATE INDEX IF NOT EXISTS idx_oss_status ON one_shot_schedules(status);
 """
 
@@ -55,6 +54,13 @@ class _SchedulerStore:
             self._conn = await aiosqlite.connect(str(self._db_path))
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA synchronous=NORMAL")
+            cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='one_shot_schedules'"
+            )
+            if await cursor.fetchone():
+                info = await self._conn.execute("PRAGMA table_info(one_shot_schedules)")
+                if any(row[1] == "deferred_id" for row in await info.fetchall()):
+                    await self._conn.execute("DROP TABLE one_shot_schedules")
             await self._conn.executescript(_ONE_SHOT_SCHEMA)
             await self._conn.executescript(_RECURRING_SCHEMA)
             await self._conn.commit()
@@ -66,19 +72,44 @@ class _SchedulerStore:
             self._conn = None
 
     async def insert_one_shot(
-        self, deferred_id: int, topic: str, payload: str, fire_at: float
+        self, topic: str, payload: str, fire_at: float
     ) -> int:
         conn = await self._ensure_conn()
         now = time.time()
         cursor = await conn.execute(
             """
-            INSERT INTO one_shot_schedules (deferred_id, topic, payload, fire_at, status, created_at)
-            VALUES (?, ?, ?, ?, 'scheduled', ?)
+            INSERT INTO one_shot_schedules (topic, payload, fire_at, status, created_at)
+            VALUES (?, ?, ?, 'scheduled', ?)
             """,
-            (deferred_id, topic, payload, fire_at, now),
+            (topic, payload, fire_at, now),
         )
         await conn.commit()
         return cursor.lastrowid or 0
+
+    async def fetch_due_one_shot(self, now: float) -> list[dict[str, Any]]:
+        """Fetch one-shot schedules due to fire (status=scheduled, fire_at <= now)."""
+        conn = await self._ensure_conn()
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """
+            SELECT id, topic, payload, fire_at
+            FROM one_shot_schedules
+            WHERE status = 'scheduled' AND fire_at <= ?
+            ORDER BY fire_at
+            """,
+            (now,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def mark_one_shot_fired(self, row_id: int) -> None:
+        """Mark one-shot schedule as fired."""
+        conn = await self._ensure_conn()
+        await conn.execute(
+            "UPDATE one_shot_schedules SET status = 'fired' WHERE id = ?",
+            (row_id,),
+        )
+        await conn.commit()
 
     async def insert_recurring(
         self,
@@ -178,20 +209,10 @@ class _SchedulerStore:
         self, status_filter: str | None = None
     ) -> list[dict[str, Any]]:
         conn = await self._ensure_conn()
-        now = time.time()
-        await conn.execute(
-            """
-            UPDATE one_shot_schedules SET status = 'fired'
-            WHERE status = 'scheduled' AND fire_at <= ?
-            """,
-            (now,),
-        )
-        await conn.commit()
-
         conn.row_factory = aiosqlite.Row
         result: list[dict[str, Any]] = []
 
-        oss_sql = "SELECT id, deferred_id, topic, payload, fire_at, status, created_at FROM one_shot_schedules"
+        oss_sql = "SELECT id, topic, payload, fire_at, status, created_at FROM one_shot_schedules"
         oss_params: tuple = ()
         if status_filter:
             oss_sql += " WHERE status = ?"
@@ -219,22 +240,15 @@ class _SchedulerStore:
 
         return result
 
-    async def cancel_one_shot(self, row_id: int) -> int | None:
+    async def cancel_one_shot(self, row_id: int) -> bool:
+        """Mark one-shot as cancelled. Returns True if found and was scheduled."""
         conn = await self._ensure_conn()
         cursor = await conn.execute(
-            "SELECT deferred_id FROM one_shot_schedules WHERE id = ? AND status = 'scheduled'",
-            (row_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        deferred_id = row[0]
-        await conn.execute(
-            "UPDATE one_shot_schedules SET status = 'cancelled' WHERE id = ?",
+            "UPDATE one_shot_schedules SET status = 'cancelled' WHERE id = ? AND status = 'scheduled'",
             (row_id,),
         )
         await conn.commit()
-        return deferred_id
+        return cursor.rowcount > 0
 
     async def cancel_recurring(self, row_id: int) -> None:
         conn = await self._ensure_conn()
@@ -339,6 +353,11 @@ class SchedulerExtension:
         if self._store:
             now = time.time()
             await self._store.recover_recurring(now)
+            due = await self._store.fetch_due_one_shot(now)
+            for row in due:
+                payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                await self._ctx.emit(row["topic"], payload)
+                await self._store.mark_one_shot_fired(row["id"])
 
     async def stop(self) -> None:
         pass
@@ -387,13 +406,8 @@ class SchedulerExtension:
                 delay = fire_at - time.time()
             else:
                 delay = delay_seconds
-            deferred_id = await ctx.schedule_at(delay, topic, payload)
-            if deferred_id is None:
-                return "Error: EventBus not available."
             fire_at = time.time() + delay
-            row_id = await store.insert_one_shot(
-                deferred_id, topic, payload_json, fire_at
-            )
+            row_id = await store.insert_one_shot(topic, payload_json, fire_at)
             return f"Scheduled one-shot #{row_id}: topic={topic}, fires in {int(delay)}s."
 
         @function_tool(name_override="schedule_recurring")
@@ -463,10 +477,9 @@ class SchedulerExtension:
         ) -> str:
             """Cancel a schedule. schedule_type: one_shot or recurring."""
             if schedule_type == "one_shot":
-                deferred_id = await store.cancel_one_shot(schedule_id)
-                if deferred_id is None:
+                ok = await store.cancel_one_shot(schedule_id)
+                if not ok:
                     return f"Schedule #{schedule_id} not found or already fired/cancelled."
-                await ctx.cancel_deferred(deferred_id)
             elif schedule_type == "recurring":
                 await store.cancel_recurring(schedule_id)
             else:
@@ -520,8 +533,13 @@ class SchedulerExtension:
             try:
                 await asyncio.sleep(self._tick_interval)
                 now = time.time()
-                due = await store.fetch_due_recurring(now)
-                for row in due:
+                due_one_shot = await store.fetch_due_one_shot(now)
+                for row in due_one_shot:
+                    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                    await ctx.emit(row["topic"], payload)
+                    await store.mark_one_shot_fired(row["id"])
+                due_recurring = await store.fetch_due_recurring(now)
+                for row in due_recurring:
                     payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
                     await ctx.emit(row["topic"], payload)
                     await store.advance_next(row["id"], now)

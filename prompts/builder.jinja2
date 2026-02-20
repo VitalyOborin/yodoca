@@ -32,12 +32,11 @@ AgentProvider: Declarative agents need no main.py — manifest agent block + pro
 Extensions use the Event Bus via ExtensionContext for durable events, deferred scheduling, and proactive flows:
 
 - await context.emit(topic, payload) — publish event immediately (durable).
-- await context.schedule_at(delay, topic, payload) — schedule event to fire after delay seconds (or timedelta).
 - context.subscribe_event(topic, handler) — subscribe to durable events; handler receives Event with .payload.
 
 Built-in topics: user.message, reminder.due, task.received, checkin.started.
 
-For reminder/timer extensions: use schedule_at(delay, "reminder.due", {"text": message}) in a tool; create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
+For reminder/timer extensions: use the Scheduler extension's schedule_once tool (topic="reminder.due", payload_json=json.dumps({"text": message}), delay_seconds=delay); create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
 
 ## Manifest (no type field)
 

@@ -1,4 +1,5 @@
-"""Event Bus: durable event journal with dispatch loop."""
+"""Pure event transport: publish → journal → deliver to subscribers.
+No scheduling, no deferred logic. Use the scheduler extension for time-based events."""
 
 import asyncio
 import logging
@@ -43,25 +44,6 @@ class EventBus:
         self._wake.set()
         return event_id
 
-    async def schedule_at(
-        self,
-        fire_at: float,
-        topic: str,
-        payload: dict,
-        source: str = "scheduler",
-        correlation_id: str | None = None,
-    ) -> int:
-        """Schedule event to be emitted at a specific unix timestamp."""
-        deferred_id = await self._journal.schedule_deferred(
-            topic, source, payload, fire_at, correlation_id
-        )
-        self._wake.set()
-        return deferred_id
-
-    async def cancel_deferred(self, deferred_id: int) -> None:
-        """Cancel a scheduled deferred event."""
-        await self._journal.cancel_deferred(deferred_id)
-
     def subscribe(
         self,
         topic: str,
@@ -92,13 +74,8 @@ class EventBus:
         logger.info("EventBus stopped")
 
     async def recover(self) -> int:
-        """Call once at startup. Reset 'processing' -> 'pending'; promote overdue deferred."""
+        """Call once at startup. Reset 'processing' -> 'pending'."""
         count = await self._journal.reset_processing_to_pending()
-        due = await self._journal.fetch_due_deferred()
-        for deferred_id, topic, source, payload, correlation_id in due:
-            await self._journal.insert(topic, source, payload, correlation_id)
-            await self._journal.mark_deferred_fired(deferred_id)
-            count += 1
         if count:
             logger.info("EventBus: recovered %d events", count)
         return count
@@ -117,11 +94,6 @@ class EventBus:
 
             if self._stopped:
                 break
-
-            due = await self._journal.fetch_due_deferred()
-            for deferred_id, topic, source, payload, correlation_id in due:
-                await self._journal.insert(topic, source, payload, correlation_id)
-                await self._journal.mark_deferred_fired(deferred_id)
 
             events = await self._journal.fetch_pending(limit=self._batch_size)
             for event_id, topic, source, payload, created_at, correlation_id in events:

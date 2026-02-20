@@ -1,6 +1,8 @@
 # Event Bus
 
-A durable, SQLite-backed event bus for extension-to-agent flows, proactive notifications, and deferred scheduling. This document describes the architecture, interfaces, and usage patterns for developers and architects.
+A durable, SQLite-backed **pure event transport** for extension-to-agent flows and proactive notifications. This document describes the architecture, interfaces, and usage patterns for developers and architects.
+
+**Principle: EventBus = pure transport.** `publish(topic, source, payload) → journal → deliver to subscribers`. No scheduling, no deferred logic. Use the Scheduler extension for time-based events.
 
 ---
 
@@ -10,7 +12,6 @@ The Event Bus provides:
 
 - **Durable publishing** — events are persisted to SQLite before delivery; no loss on process crash
 - **At-least-once delivery** — events are marked `done` only after all handlers succeed; interrupted events are recovered on restart
-- **Deferred scheduling** — events can be scheduled to fire at a future timestamp
 - **Topic-based routing** — multiple subscribers per topic; handlers are invoked in registration order
 - **Correlation** — optional `correlation_id` for tracing related events
 
@@ -21,26 +22,24 @@ The Event Bus provides:
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           Extensions                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
-│  │ ctx.emit()   │  │ ctx.schedule │  │ ctx.subscribe│                   │
-│  │ ctx.schedule │  │ _at()        │  │ _event()     │                   │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                   │
-└─────────┼─────────────────┼─────────────────┼───────────────────────────┘
-          │                 │                 │
-          ▼                 ▼                 ▼
+│  ┌──────────────┐  ┌──────────────────┐                                 │
+│  │ ctx.emit()   │  │ ctx.subscribe_   │                                 │
+│  │              │  │ event()          │                                 │
+│  └──────┬───────┘  └──────┬───────────┘                                 │
+└─────────┼─────────────────┼─────────────────────────────────────────────┘
+          │                 │
+          ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           EventBus                                      │
+│                           EventBus (pure transport)                     │
 │  publish() ──► journal.insert() ──► event_journal (pending)             │
-│  schedule_at() ──► journal.schedule_deferred() ──► deferred_events      │
 │  subscribe() ──► in-memory handlers                                     │
 └─────────────────────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                     _dispatch_loop (single loop)                        │
-│  1. Promote due deferred_events → event_journal (pending)               │
-│  2. Fetch pending from event_journal                                    │
-│  3. Deliver to all subscribers; mark done/failed                        │
+│  1. Fetch pending from event_journal                                    │
+│  2. Deliver to all subscribers; mark done/failed                        │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,25 +62,6 @@ The Event Bus provides:
 | processed_at   | real | Set when done/failed                              |
 | error          | text | Error message if failed                           |
 
-
-### `deferred_events`
-
-
-| Column         | Type | Description                           |
-| -------------- | ---- | ------------------------------------- |
-| id             | int  | Primary key                           |
-| topic          | text | Event topic                           |
-| source         | text | Extension ID                          |
-| payload        | text | JSON-serialized payload               |
-| correlation_id | text | Optional                              |
-| fire_at        | real | Unix timestamp when event should fire |
-| status         | text | `scheduled` → `fired` | `cancelled`   |
-| created_at     | real | Unix timestamp                        |
-| fired_at       | real | Set when fired                        |
-
-
-Deferred events use a separate table because their lifecycle (`scheduled` → `fired`/`cancelled`) differs from the journal (`pending` → `done`/`failed`). When `fire_at <= now()`, they are promoted into `event_journal` as `pending` and processed by the same dispatch loop.
-
 ---
 
 ## ExtensionContext API
@@ -101,17 +81,7 @@ await self._ctx.emit("alert", {"level": "warning"}, correlation_id="req-123")
 - **payload**: dict (JSON-serializable)
 - **source**: automatically set to `extension_id`
 
-### `schedule_at(delay, topic, payload, correlation_id=None)`
-
-Schedule an event to fire after `delay` seconds (or a `timedelta`). Returns `deferred_id` or `None` if no event bus.
-
-```python
-await self._ctx.schedule_at(5.0, "reminder.due", {"text": "Drink water"})
-await self._ctx.schedule_at(timedelta(hours=2), "reminder.due", {"text": "Stand-up"})
-```
-
-- **delay**: `float` (seconds) or `timedelta`
-- **topic**, **payload**, **correlation_id**: same as `emit`
+For time-based events (reminders, recurring tasks), use the **Scheduler extension** and its `schedule_once` / `schedule_recurring` tools. The Event Bus does not provide scheduling.
 
 ### `notify_user(text, channel_id=None)`
 
@@ -138,7 +108,8 @@ async def _on_checkin(self, event):
     step = event.payload.get("step", 1)
     total = event.payload.get("total", 3)
     if step < total:
-        await self._ctx.schedule_at(8, "checkin.started", {"step": step + 1, "total": total})
+        # Use Scheduler extension's schedule_once tool for delayed events
+        pass  # agent schedules via schedule_once tool
 ```
 
 ---
@@ -218,9 +189,8 @@ class Event:
 The Event Bus runs a single `_dispatch_loop`:
 
 1. **Wait** for `_wake` or `poll_interval` timeout (default 5s)
-2. **Promote** due deferred events: `fetch_due_deferred()` → `insert` into journal → `mark_deferred_fired`
-3. **Fetch** pending events from journal (limit 3 per iteration)
-4. **Deliver** to all subscribers; mark `processing` → `done` or `failed`
+2. **Fetch** pending events from journal (limit 3 per iteration)
+3. **Deliver** to all subscribers; mark `processing` → `done` or `failed`
 
 Handlers run sequentially per event. If any handler raises, the event is marked `failed` with the error message; other handlers for that topic still run.
 
@@ -231,8 +201,7 @@ Handlers run sequentially per event. If any handler raises, the event is marked 
 `recover()` is called once at startup (before `start()`):
 
 1. Reset `processing` → `pending` (events interrupted by crash)
-2. Promote overdue deferred events into the journal
-3. Log total recovered count
+2. Log total recovered count
 
 The dispatch loop then processes recovered events normally.
 
@@ -263,39 +232,22 @@ Extension A: ctx.emit("task.received", {"text": "..."})
     → status=done
 ```
 
-### Deferred Publish
+### Time-Based Events (Scheduler Extension)
 
-```
-Extension B: ctx.schedule_at(60, "reminder.due", {"text": "..."})
-    → journal.schedule_deferred() → deferred_events, status=scheduled
-    → _wake.set()
-    → (60s later) dispatch loop: fetch_due_deferred → insert → mark_fired
-    → dispatch loop fetches pending, delivers
-    → status=done
-```
-
-### Chain of Deferred Events
-
-```
-checkin_trigger: emit checkin.started {step:1, total:3}
-    → checkin_agent (invoke_agent): responds to user
-    → checkin_processor (subscribe_event): schedule_at(8, checkin.started, {step:2, total:3})
-    → (8s later) deferred fires → checkin.started {step:2}
-    → repeat until step=3
-```
+For reminders, recurring tasks, or delayed events, use the **Scheduler extension** (`schedule_once`, `schedule_recurring` tools). The Scheduler runs its own tick loop, emits events via `ctx.emit()` when due, and is fully autonomous from the Event Bus.
 
 ---
 
 ## Design Decisions
 
 
-| Decision                         | Rationale                                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| Separate `deferred_events` table | Different lifecycle; avoids mixing `scheduled` with `pending/done/failed`      |
-| Single dispatch loop             | Deferred promotion is one SQL query per iteration; no extra thread/loop        |
-| Promote deferred → journal       | Reuses retry, correlation, mark_done/failed; no special handling               |
-| `poll_interval` + `_wake`        | Balance between latency and CPU; `schedule_at` wakes loop for near-term events |
-| ExtensionContext only            | Extensions never import core; single API surface                               |
+| Decision              | Rationale                                                       |
+| --------------------- | --------------------------------------------------------------- |
+| Pure transport        | EventBus only publishes and delivers; no scheduling logic      |
+| Scheduler extension   | Time-based events handled by autonomous extension               |
+| Single dispatch loop  | One loop, one journal; simple and predictable                   |
+| `poll_interval` + `_wake` | Balance between latency and CPU; `publish` wakes loop       |
+| ExtensionContext only | Extensions never import core; single API surface                 |
 
 
 ---
@@ -308,7 +260,7 @@ Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 | Key             | Default                         | Description                                                                       |
 | --------------- | ------------------------------- | --------------------------------------------------------------------------------- |
 | `db_path`       | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root)                                      |
-| `poll_interval` | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce deferred event latency |
+| `poll_interval` | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce event latency |
 | `batch_size`    | `3`                             | Max pending events fetched per loop iteration                                     |
 
 
@@ -317,6 +269,5 @@ Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 ## Observability
 
 - **event_journal**: Query by `topic`, `status`, `correlation_id` for debugging
-- **deferred_events**: Query `fire_at`, `status` to inspect scheduled work
 - Logs: `EventBus: recovered N events` at startup; handler exceptions logged with `subscriber_id` and `event_id`
 

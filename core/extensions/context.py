@@ -3,8 +3,6 @@
 import asyncio
 import logging
 import os
-import time
-from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -89,34 +87,6 @@ class ExtensionContext:
         """Publish event to the Event Bus. Fire-and-forget."""
         if self._event_bus:
             await self._event_bus.publish(topic, self.extension_id, payload, correlation_id)
-
-    async def schedule_at(
-        self,
-        delay: float | timedelta,
-        topic: str,
-        payload: dict,
-        correlation_id: str | None = None,
-    ) -> int | None:
-        """Schedule event to fire after delay seconds (or timedelta). Returns deferred_id or None."""
-        if self._event_bus:
-            if isinstance(delay, timedelta):
-                delay = delay.total_seconds()
-            fire_at = time.time() + delay
-            return await self._event_bus.schedule_at(
-                fire_at=fire_at,
-                topic=topic,
-                payload=payload,
-                source=self.extension_id,
-                correlation_id=correlation_id,
-            )
-        return None
-
-    async def cancel_deferred(self, deferred_id: int) -> bool:
-        """Cancel a scheduled deferred event. Returns True if cancelled."""
-        if self._event_bus:
-            await self._event_bus.cancel_deferred(deferred_id)
-            return True
-        return False
 
     async def request_agent_task(
         self, prompt: str, channel_id: str | None = None

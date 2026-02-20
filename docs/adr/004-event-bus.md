@@ -4,6 +4,10 @@
 
 Proposed.
 
+## Principle: Pure Transport
+
+EventBus is **pure event transport**: `publish(topic, source, payload) → journal → deliver to subscribers`. No scheduling, no deferred logic, no time-based semantics. Use the Scheduler extension for time-based events.
+
 ## Context
 
 ADR 002 chose **direct callbacks** over an Event Bus to keep the nano-kernel simple: channels call `on_user_message`, the scheduler returns `dict` and the kernel calls `notify_user`. Internal pub/sub in `MessageRouter` (`subscribe` / `_emit`) exists only for middleware-style hooks (`user_message`, `agent_response`) and is in-memory, not persisted.
