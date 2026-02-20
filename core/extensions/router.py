@@ -22,6 +22,7 @@ class MessageRouter:
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
         self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
+        self._session: Any = None
 
     def set_agent(self, agent: Any) -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
@@ -51,6 +52,10 @@ class MessageRouter:
         """Set middleware to enrich prompt before agent invocation. Called before Runner.run()."""
         self._invoke_middleware = middleware
 
+    def set_session(self, session: Any) -> None:
+        """Set per-agent session for conversation history (short-term memory within a dialog)."""
+        self._session = session
+
     async def _emit(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch event to subscribers."""
         for handler in self._subscribers.get(event, []):
@@ -72,7 +77,11 @@ class MessageRouter:
             try:
                 from agents import Runner
 
-                result = await Runner.run(self._agent, prompt)
+                result = await Runner.run(
+                    self._agent,
+                    prompt,
+                    session=self._session,
+                )
                 return result.final_output or ""
             except Exception as e:
                 logger.exception("Agent invocation failed: %s", e)

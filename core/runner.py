@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from agents.extensions.memory import SQLAlchemySession
+
 from core.agents.orchestrator import create_orchestrator_agent
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
@@ -65,6 +67,17 @@ async def main_async() -> None:
 
     await event_bus.start()
     await loader.start_all()
+
+    session_dir = data_dir / "orchestrator"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_db = session_dir / "session.db"
+    session = SQLAlchemySession.from_url(
+        "orchestrator",
+        url=f"sqlite+aiosqlite:///{session_db.resolve().as_posix()}",
+        create_tables=True,
+    )
+    router.set_session(session)
+
     loader.wire_context_providers(router)
 
     try:
