@@ -467,18 +467,23 @@ class SchedulerExtension:
 
         @function_tool(name_override="list_schedules")
         async def list_schedules(status: str | None = None) -> str:
-            """List all schedules. Optional status filter: scheduled, fired, cancelled, active, paused."""
+            """List all schedules. Returns JSON array.
+            Optional status filter: scheduled, fired, cancelled, active, paused.
+            """
             rows = await store.list_all(status)
             if not rows:
-                return "No schedules found."
-            lines = ["ID | type | topic | payload | fire_at/next_fire | status"]
+                return "[]"
+            result = []
             for r in rows:
-                fire_str = datetime.fromtimestamp(r["fire_at_or_next"]).isoformat()
-                payload_preview = (r["payload"][:40] + "...") if len(r["payload"]) > 40 else r["payload"]
-                lines.append(
-                    f"{r['id']} | {r['type']} | {r['topic']} | {payload_preview} | {fire_str} | {r['status']}"
-                )
-            return "\n".join(lines)
+                result.append({
+                    "id": r["id"],
+                    "type": r["type"],
+                    "topic": r["topic"],
+                    "payload": json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
+                    "next_fire_iso": datetime.fromtimestamp(r["fire_at_or_next"]).isoformat(),
+                    "status": r["status"],
+                })
+            return json.dumps(result, ensure_ascii=False)
 
         @function_tool(name_override="cancel_schedule")
         async def cancel_schedule(
