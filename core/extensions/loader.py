@@ -13,6 +13,7 @@ from croniter import croniter
 
 from core.events import EventBus
 from core.events.models import Event
+from core.events.topics import SystemTopics
 from core.extensions.contract import (
     AgentDescriptor,
     AgentInvocationContext,
@@ -264,11 +265,45 @@ class Loader:
                     result[sub.topic] = ext_id
         return result
 
+    def _wire_system_topics(self, event_bus: EventBus) -> None:
+        """Register guaranteed system topic handlers. Called before extension wiring."""
+        if not self._router:
+            return
+        router = self._router
+
+        async def on_user_notify(event: Event) -> None:
+            await router.notify_user(
+                event.payload.get("text", ""),
+                event.payload.get("channel_id"),
+            )
+
+        event_bus.subscribe(SystemTopics.USER_NOTIFY, on_user_notify, "kernel.system")
+
+        async def on_agent_task(event: Event) -> None:
+            prompt = event.payload.get("prompt", "")
+            channel_id = event.payload.get("channel_id")
+            response = await router.invoke_agent(prompt)
+            if response:
+                await router.notify_user(response, channel_id)
+
+        event_bus.subscribe(SystemTopics.AGENT_TASK, on_agent_task, "kernel.system")
+
+        async def on_agent_background(event: Event) -> None:
+            prompt = event.payload.get("prompt", "")
+            await router.invoke_agent(prompt)
+
+        event_bus.subscribe(
+            SystemTopics.AGENT_BACKGROUND, on_agent_background, "kernel.system"
+        )
+
     def wire_event_subscriptions(self, event_bus: EventBus) -> None:
         """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
         if not self._router:
             return
         router = self._router
+
+        self._wire_system_topics(event_bus)
+
         for manifest in self._manifests:
             if not manifest.events or not manifest.events.subscribes:
                 continue

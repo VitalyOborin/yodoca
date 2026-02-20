@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.events import EventBus
+from core.events.topics import SystemTopics
 from core.extensions.contract import (
     AgentDescriptor,
     AgentProvider,
@@ -230,6 +231,32 @@ class TestProactiveLoop:
         handlers = event_bus._subscribers["email.received"]
         proactive = [h for h in handlers if h[1] == "kernel.proactive"]
         assert len(proactive) == 1
+
+    @pytest.mark.asyncio
+    async def test_wire_event_subscriptions_registers_system_topics(
+        self, tmp_path: Path
+    ) -> None:
+        """wire_event_subscriptions registers system topic handlers first."""
+        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path)
+        loader._router = MessageRouter()
+        loader._manifests = []
+        loader._extensions = {}
+        loader._state = {}
+        loader._agent_providers = {}
+
+        event_bus = EventBus(db_path=tmp_path / "events.db")
+        await event_bus.recover()
+        loader.wire_event_subscriptions(event_bus)
+
+        for topic in (
+            SystemTopics.USER_NOTIFY,
+            SystemTopics.AGENT_TASK,
+            SystemTopics.AGENT_BACKGROUND,
+        ):
+            assert topic in event_bus._subscribers
+            handlers = event_bus._subscribers[topic]
+            kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
+            assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
 
 
 class TestInitializeAndLifecycle:

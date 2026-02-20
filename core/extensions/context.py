@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from core.events.topics import SystemTopics
 from core.extensions.router import MessageRouter
 
 if TYPE_CHECKING:
@@ -57,8 +58,15 @@ class ExtensionContext:
     async def notify_user(
         self, text: str, channel_id: str | None = None
     ) -> None:
-        """Send notification to user. Single-user app — kernel resolves channel."""
-        await self._router.notify_user(text, channel_id)
+        """Send notification to user via system.user.notify. Guaranteed delivery."""
+        if self._event_bus:
+            await self._event_bus.publish(
+                SystemTopics.USER_NOTIFY,
+                self.extension_id,
+                {"text": text, "channel_id": channel_id},
+            )
+        else:
+            await self._router.notify_user(text, channel_id)
 
     async def invoke_agent(self, prompt: str) -> str:
         """Ask the agent to process a prompt and return a response."""
@@ -109,6 +117,24 @@ class ExtensionContext:
             await self._event_bus.cancel_deferred(deferred_id)
             return True
         return False
+
+    async def request_agent_task(
+        self, prompt: str, channel_id: str | None = None
+    ) -> None:
+        """Ask the Orchestrator to handle a task. Response goes to user."""
+        await self.emit(
+            SystemTopics.AGENT_TASK,
+            {"prompt": prompt, "channel_id": channel_id},
+        )
+
+    async def request_agent_background(
+        self, prompt: str, correlation_id: str | None = None
+    ) -> None:
+        """Trigger the Orchestrator silently. No user response."""
+        await self.emit(
+            SystemTopics.AGENT_BACKGROUND,
+            {"prompt": prompt, "correlation_id": correlation_id},
+        )
 
     def subscribe_event(
         self,

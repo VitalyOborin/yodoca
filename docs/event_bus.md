@@ -113,6 +113,18 @@ await self._ctx.schedule_at(timedelta(hours=2), "reminder.due", {"text": "Stand-
 - **delay**: `float` (seconds) or `timedelta`
 - **topic**, **payload**, **correlation_id**: same as `emit`
 
+### `notify_user(text, channel_id=None)`
+
+Send a message to the user. Internally emits `system.user.notify`. Guaranteed delivery via kernel handler.
+
+### `request_agent_task(prompt, channel_id=None)`
+
+Ask the Orchestrator to handle a task. Response goes to user. Emits `system.agent.task`.
+
+### `request_agent_background(prompt, correlation_id=None)`
+
+Trigger the Orchestrator silently; no user response. Emits `system.agent.background`.
+
 ### `subscribe_event(topic, handler)`
 
 Register an async handler for a topic. Called from `initialize()`. Handler receives an `Event` (or equivalent dict-like object).
@@ -128,6 +140,20 @@ async def _on_checkin(self, event):
     if step < total:
         await self._ctx.schedule_at(8, "checkin.started", {"step": step + 1, "total": total})
 ```
+
+---
+
+## System Topics
+
+Guaranteed topics that always have a kernel-registered handler. Use these when you need reliable delivery to the user or orchestrator.
+
+| Topic | Payload | Handler |
+| ----- | ------- | ------- |
+| `system.user.notify` | `{text, channel_id?}` | Delivers message to user via active channel |
+| `system.agent.task` | `{prompt, channel_id?, correlation_id?}` | Invokes Orchestrator; response to user |
+| `system.agent.background` | `{prompt, correlation_id?}` | Invokes Orchestrator silently |
+
+Use via `ctx.notify_user()`, `ctx.request_agent_task()`, `ctx.request_agent_background()`, or emit directly with `ctx.emit(SystemTopics.USER_NOTIFY, {...})`. The Scheduler extension uses these topics when the agent schedules reminders.
 
 ---
 
