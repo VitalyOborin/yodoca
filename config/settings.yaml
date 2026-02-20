@@ -11,7 +11,7 @@ agents:
     model: gpt-5-mini
   orchestrator:
     provider: openai # lm_studio
-    model: gpt-5-mini # gpt-5.2 # mistralai/codestral-22b-v0.1
+    model: gpt-5.2 # gpt-5.2 # mistralai/codestral-22b-v0.1
     instructions: prompts/orchestrator.jinja2
 
 providers:
