@@ -7,7 +7,7 @@ entrypoint: main:SchedulerExtension
 description: |
   Time-aware EventBus bridge. Schedule one-shot and recurring events.
   Tools: schedule_once, schedule_recurring, list_schedules,
-  cancel_schedule, update_schedule.
+  cancel_schedule, update_recurring_schedule.
 
 depends_on: []
 config:

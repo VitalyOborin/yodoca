@@ -117,7 +117,7 @@ class TestSchedulerExtension:
         assert "schedule_recurring" in names
         assert "list_schedules" in names
         assert "cancel_schedule" in names
-        assert "update_schedule" in names
+        assert "update_recurring_schedule" in names
         await ext.destroy()
 
     @pytest.mark.asyncio

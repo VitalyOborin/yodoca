@@ -5,9 +5,10 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import aiosqlite
+from pydantic import Field
 from agents import function_tool
 from croniter import croniter
 
@@ -380,17 +381,23 @@ class SchedulerExtension:
         async def schedule_once(
             topic: str,
             payload_json: str,
-            delay_seconds: float | None = None,
+            delay_seconds: Annotated[float | None, Field(default=None, gt=0)] = None,
             at_iso: str | None = None,
         ) -> str:
             """Schedule a one-shot event to fire once.
+
             Provide exactly one of: delay_seconds (seconds from now) or at_iso (ISO 8601 datetime).
-            topic: event topic; payload_json: JSON string payload.
 
             Payload contracts for system topics:
             - system.user.notify: use key "text". Example: payload_json='{"text": "Hello!", "channel_id": null}'
             - system.agent.task: use key "prompt" (task for orchestrator at fire time). Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
             - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Run maintenance check"}'
+
+            Args:
+                topic: Event topic (e.g. system.user.notify, system.agent.task).
+                payload_json: JSON string payload. For system.user.notify use {"text": "..."}.
+                delay_seconds: Seconds from now until fire. Mutually exclusive with at_iso.
+                at_iso: ISO 8601 datetime (e.g. 2025-02-21T10:00:00). Mutually exclusive with delay_seconds.
             """
             if (delay_seconds is None) == (at_iso is None):
                 return "Error: provide exactly one of delay_seconds or at_iso."
@@ -423,13 +430,21 @@ class SchedulerExtension:
             every_seconds: float | None = None,
             until_iso: str | None = None,
         ) -> str:
-            """Create a recurring schedule. Provide cron (e.g. '0 9 * * *') or every_seconds.
-            until_iso: optional ISO 8601 end datetime.
+            """Create a recurring schedule.
+
+            Provide exactly one of: cron (e.g. '0 9 * * *') or every_seconds. Optionally set until_iso for end datetime.
 
             Payload contracts for system topics:
             - system.user.notify: use key "text" for static messages known at schedule time. Example: payload_json='{"text": "Daily digest", "channel_id": null}'
             - system.agent.task: use key "prompt" for dynamic content or reasoning at fire time. Example: payload_json='{"prompt": "Tell the user the current time in HH:MM", "channel_id": null}'
             - system.agent.background: use key "prompt". Example: payload_json='{"prompt": "Check for updates"}'
+
+            Args:
+                topic: Event topic (e.g. system.user.notify, system.agent.task).
+                payload_json: JSON string payload. For system.user.notify use {"text": "..."}.
+                cron: Cron expression (e.g. '0 9 * * *' for daily at 9:00). Mutually exclusive with every_seconds.
+                every_seconds: Interval in seconds. Mutually exclusive with cron.
+                until_iso: Optional ISO 8601 end datetime. Schedule stops after this time.
             """
             if (cron is None or not cron.strip()) == (every_seconds is None or every_seconds <= 0):
                 return "Error: provide exactly one of cron or every_seconds (positive)."
@@ -466,9 +481,14 @@ class SchedulerExtension:
             return f"Recurring schedule #{row_id} created. Next fire: {iso}."
 
         @function_tool(name_override="list_schedules")
-        async def list_schedules(status: str | None = None) -> str:
+        async def list_schedules(
+            status: Literal["scheduled", "fired", "cancelled", "active", "paused"] | None = None,
+        ) -> str:
             """List all schedules. Returns JSON array.
-            Optional status filter: scheduled, fired, cancelled, active, paused.
+
+            Args:
+                status: Optional filter. For one-shot: scheduled, fired, cancelled.
+                    For recurring: active, paused, cancelled.
             """
             rows = await store.list_all(status)
             if not rows:
@@ -488,30 +508,39 @@ class SchedulerExtension:
         @function_tool(name_override="cancel_schedule")
         async def cancel_schedule(
             schedule_id: int,
-            schedule_type: str = "one_shot",
+            schedule_type: Literal["one_shot", "recurring"] = "one_shot",
         ) -> str:
-            """Cancel a schedule. schedule_type: one_shot or recurring."""
+            """Cancel a schedule.
+
+            Args:
+                schedule_id: ID of the schedule to cancel (from list_schedules).
+                schedule_type: one_shot or recurring.
+            """
             if schedule_type == "one_shot":
                 ok = await store.cancel_one_shot(schedule_id)
                 if not ok:
                     return f"Schedule #{schedule_id} not found or already fired/cancelled."
-            elif schedule_type == "recurring":
-                await store.cancel_recurring(schedule_id)
             else:
-                return "Error: schedule_type must be one_shot or recurring."
+                await store.cancel_recurring(schedule_id)
             return f"Schedule #{schedule_id} cancelled."
 
-        @function_tool(name_override="update_schedule")
-        async def update_schedule(
+        @function_tool(name_override="update_recurring_schedule")
+        async def update_recurring_schedule(
             schedule_id: int,
             cron: str | None = None,
             every_seconds: float | None = None,
             until_iso: str | None = None,
-            status: str | None = None,
+            status: Literal["active", "paused"] | None = None,
         ) -> str:
-            """Update a recurring schedule. status: active or paused."""
-            if status and status not in ("active", "paused"):
-                return "Error: status must be active or paused."
+            """Update a recurring schedule. Does not apply to one-shot schedules.
+
+            Args:
+                schedule_id: ID of the recurring schedule (from list_schedules).
+                cron: New cron expression. Mutually exclusive with every_seconds.
+                every_seconds: New interval in seconds. Mutually exclusive with cron.
+                until_iso: New ISO 8601 end datetime.
+                status: active or paused.
+            """
             until_at: float | None = None
             if until_iso:
                 try:
@@ -536,7 +565,7 @@ class SchedulerExtension:
             schedule_recurring,
             list_schedules,
             cancel_schedule,
-            update_schedule,
+            update_recurring_schedule,
         ]
 
     async def run_background(self) -> None:
