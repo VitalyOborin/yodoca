@@ -19,6 +19,7 @@ from core.extensions.contract import (
     AgentInvocationContext,
     AgentProvider,
     ChannelProvider,
+    ContextProvider,
     Extension,
     ServiceProvider,
     SchedulerProvider,
@@ -363,6 +364,35 @@ class Loader:
                     logger.exception("Proactive handler for %s failed: %s", _topic, e)
 
             event_bus.subscribe(topic, proactive_handler, "kernel.proactive")
+
+    def _collect_context_providers(self) -> list[ContextProvider]:
+        """Collect ContextProvider extensions (ACTIVE only), sorted by context_priority."""
+        providers = [
+            ext
+            for ext_id, ext in self._extensions.items()
+            if isinstance(ext, ContextProvider)
+            and self._state.get(ext_id, ExtensionState.INACTIVE) == ExtensionState.ACTIVE
+        ]
+        return sorted(providers, key=lambda p: p.context_priority)
+
+    def wire_context_providers(self, router: MessageRouter) -> None:
+        """Wire ContextProvider chain into router's invoke middleware."""
+        providers = self._collect_context_providers()
+        if not providers:
+            return
+
+        async def _middleware(prompt: str, agent_id: str | None = None) -> str:
+            parts: list[str] = []
+            for provider in providers:
+                ctx = await provider.get_context(prompt, agent_id=agent_id)
+                if ctx:
+                    parts.append(ctx)
+            if not parts:
+                return prompt
+            header = "\n\n---\n\n".join(parts)
+            return f"{header}\n\n---\n\n{prompt}"
+
+        router.set_invoke_middleware(_middleware)
 
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""

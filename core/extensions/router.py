@@ -6,7 +6,7 @@ Serializes agent invocations. Dispatches user_message and agent_response for mid
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from core.extensions.contract import ChannelProvider
 
@@ -21,6 +21,7 @@ class MessageRouter:
         self._channels: dict[str, ChannelProvider] = {}
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
+        self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
 
     def set_agent(self, agent: Any) -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
@@ -43,6 +44,13 @@ class MessageRouter:
         if event in self._subscribers:
             self._subscribers[event] = [h for h in self._subscribers[event] if h != handler]
 
+    def set_invoke_middleware(
+        self,
+        middleware: Callable[[str, str | None], Awaitable[str]],
+    ) -> None:
+        """Set middleware to enrich prompt before agent invocation. Called before Runner.run()."""
+        self._invoke_middleware = middleware
+
     async def _emit(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch event to subscribers."""
         for handler in self._subscribers.get(event, []):
@@ -54,15 +62,17 @@ class MessageRouter:
             except Exception as e:
                 logger.exception("Event handler error [%s]: %s", event, e)
 
-    async def invoke_agent(self, prompt: str) -> str:
+    async def invoke_agent(self, prompt: str, agent_id: str | None = None) -> str:
         """Run agent with prompt; return response. Serialized with other invocations."""
         if not self._agent:
             return "(No agent configured.)"
+        if self._invoke_middleware:
+            prompt = await self._invoke_middleware(prompt.strip(), agent_id)
         async with self._lock:
             try:
                 from agents import Runner
 
-                result = await Runner.run(self._agent, prompt.strip())
+                result = await Runner.run(self._agent, prompt)
                 return result.final_output or ""
             except Exception as e:
                 logger.exception("Agent invocation failed: %s", e)

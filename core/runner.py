@@ -65,6 +65,7 @@ async def main_async() -> None:
 
     await event_bus.start()
     await loader.start_all()
+    loader.wire_context_providers(router)
 
     try:
         await shutdown_event.wait()

@@ -63,6 +63,29 @@ class SchedulerProvider(Protocol):
 
 
 @runtime_checkable
+class ContextProvider(Protocol):
+    """Extension that enriches agent context before each invocation.
+    Called by the kernel before Runner.run() on every agent turn.
+    Multiple ContextProviders coexist; kernel calls them in priority order.
+    """
+
+    @property
+    def context_priority(self) -> int:
+        """Lower value = earlier in chain. Default: 100."""
+        return 100
+
+    async def get_context(
+        self,
+        prompt: str,
+        *,
+        agent_id: str | None = None,
+    ) -> str | None:
+        """Return context string to prepend, or None/empty to skip."""
+
+        ...
+
+
+@runtime_checkable
 class SetupProvider(Protocol):
     """Extension that needs configuration (secrets, settings)."""
 
