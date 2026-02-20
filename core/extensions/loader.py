@@ -192,6 +192,7 @@ class Loader:
             instructions_file=manifest.agent.instructions_file,
             extension_dir=extension_dir,
             project_root=project_root,
+            template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
         )
 
     async def initialize_all(self, router: MessageRouter) -> None:
