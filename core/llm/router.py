@@ -67,6 +67,11 @@ class ModelRouter:
         self._providers["openai_compatible"] = openai_compat
         self._providers["anthropic"] = AnthropicProvider()
 
+    def get_default_provider(self) -> str | None:
+        """Return provider id from default agent config, or None."""
+        cfg = self._agent_configs.get("default")
+        return cfg.provider if cfg else None
+
     def register_agent_config(self, agent_id: str, config: dict[str, Any]) -> None:
         """Register agent config from extension manifest (agent_config block)."""
         provider_id = config.get("provider")

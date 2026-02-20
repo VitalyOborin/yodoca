@@ -198,6 +198,16 @@ class Loader:
         """Create context per extension, call initialize(ctx). Skip on exception."""
         self._router = router
         if self._model_router:
+            default_provider = self._model_router.get_default_provider()
+            for manifest in self._manifests:
+                if manifest.agent and default_provider:
+                    agent_id = manifest.agent_id or manifest.id
+                    if manifest.agent_config and agent_id in manifest.agent_config:
+                        continue
+                    self._model_router.register_agent_config(
+                        agent_id,
+                        {"provider": default_provider, "model": manifest.agent.model},
+                    )
             for manifest in self._manifests:
                 if manifest.agent_config:
                     for aid, acfg in manifest.agent_config.items():
