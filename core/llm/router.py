@@ -116,6 +116,45 @@ class ModelRouter:
         self._cache[agent_id] = model_instance
         return model_instance
 
+    def get_provider_client(
+        self,
+        provider_id: str | None = None,
+    ) -> "AsyncOpenAI | None":
+        """Build a raw AsyncOpenAI client for a provider.
+
+        Args:
+            provider_id: Explicit provider ID. None = first openai_compatible with a valid key.
+
+        Returns:
+            AsyncOpenAI client or None if provider not found or no key.
+
+        Used by extensions needing direct provider access (e.g., embedding).
+        """
+        from openai import AsyncOpenAI
+
+        if provider_id:
+            candidates = [provider_id]
+        else:
+            candidates = [
+                pid
+                for pid, cfg in self._provider_configs.items()
+                if cfg.type == "openai_compatible"
+            ]
+        for pid in candidates:
+            pcfg = self._provider_configs.get(pid)
+            if not pcfg or pcfg.type != "openai_compatible":
+                continue
+            key = self._resolve_key(pcfg)
+            if not key:
+                continue
+            return AsyncOpenAI(
+                base_url=pcfg.base_url,
+                api_key=key,
+                default_headers=pcfg.default_headers or None,
+                timeout=30.0,
+            )
+        return None
+
     def supports_hosted_tools(self, agent_id: str) -> bool:
         """Return True if the provider for this agent supports OpenAI hosted tool types."""
         agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get("default")

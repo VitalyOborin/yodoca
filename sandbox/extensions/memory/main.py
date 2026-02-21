@@ -11,7 +11,6 @@ if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
 from db import MemoryDatabase
-from embeddings import EmbeddingService
 from repository import MemoryRepository
 from tools import build_consolidator_tools, build_tools
 
@@ -27,7 +26,6 @@ class MemoryExtension:
         self._ctx: Any = None
         self._current_session_id: str | None = None
         self._episodes_per_chunk: int = 30
-        self._embedding: EmbeddingService | None = None
         self._embed_fn: Any = None
 
     # --- ContextProvider ---
@@ -45,8 +43,8 @@ class MemoryExtension:
         if not self._repo:
             return None
         query_embedding = None
-        if self._embedding:
-            query_embedding = await self._embedding.generate(prompt)
+        if self._embed_fn:
+            query_embedding = await self._embed_fn(prompt)
         results = await self._repo.hybrid_search(
             prompt,
             query_embedding=query_embedding,
@@ -77,15 +75,21 @@ class MemoryExtension:
     async def initialize(self, context: Any) -> None:
         self._ctx = context
         self._episodes_per_chunk = context.get_config("episodes_per_chunk", 30)
-        api_key = context.get_secret("OPENAI_API_KEY")
-        if api_key:
-            self._embedding = EmbeddingService(api_key)
-            self._embed_fn = self._embedding.generate
-        else:
-            logger.warning("OPENAI_API_KEY not set, embeddings disabled (FTS5-only)")
         db_path = context.data_dir / "memory.db"
         self._db = MemoryDatabase(db_path)
         await self._db.initialize()
+        embedding_ext = context.get_extension("embedding")
+        if (
+            embedding_ext
+            and embedding_ext.health_check()
+            and self._db.vec_available
+        ):
+            self._embed_fn = lambda text: embedding_ext.embed(text, dimensions=256)
+        else:
+            if not embedding_ext or not embedding_ext.health_check():
+                logger.warning("embedding extension unavailable, FTS5-only mode")
+            elif not self._db.vec_available:
+                logger.warning("vec_memories dimension mismatch, FTS5-only mode")
         self._repo = MemoryRepository(self._db)
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)

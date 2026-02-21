@@ -65,7 +65,15 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEG
     INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
     INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+CREATE TABLE IF NOT EXISTS memory_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+
+EMBEDDING_DIMS = 256  # ADR 005 Phase 2; must match embedding extension when used
 
 
 class MemoryDatabase:
@@ -74,6 +82,12 @@ class MemoryDatabase:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._conn: aiosqlite.Connection | None = None
+        self._vec_available: bool = False
+
+    @property
+    def vec_available(self) -> bool:
+        """True if vec_memories table exists and dimensions match. Vector search disabled otherwise."""
+        return self._vec_available
 
     async def initialize(self) -> None:
         """Create connection and deploy schema."""
@@ -87,14 +101,43 @@ class MemoryDatabase:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.executescript(_SCHEMA)
-        await self._conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                memory_id TEXT PRIMARY KEY,
-                embedding float[256]
-            )
-        """)
+        await self._ensure_vec_memories()
         await self._conn.commit()
         await self._migrate_schema()
+
+    async def _ensure_vec_memories(self) -> None:
+        """Create vec_memories if dimensions match. Disable vector search on mismatch."""
+        assert self._conn is not None
+        cursor = await self._conn.execute(
+            "SELECT value FROM memory_metadata WHERE key = 'embedding_dimensions'"
+        )
+        row = await cursor.fetchone()
+        stored_dims = int(row[0]) if row and row[0] else None
+        expected = EMBEDDING_DIMS
+        if stored_dims is None:
+            await self._conn.execute(
+                f"""
+                CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                    memory_id TEXT PRIMARY KEY,
+                    embedding float[{expected}]
+                )
+                """
+            )
+            await self._conn.execute(
+                "INSERT OR REPLACE INTO memory_metadata (key, value) VALUES ('embedding_dimensions', ?)",
+                (str(expected),),
+            )
+            self._vec_available = True
+        elif stored_dims != expected:
+            logger.error(
+                "Embedding dimensions mismatch: vec_memories is float[%d] but memory expects %d. "
+                "Semantic search disabled. To fix: DROP TABLE vec_memories; DELETE FROM memory_metadata WHERE key='embedding_dimensions'; then restart.",
+                stored_dims,
+                expected,
+            )
+            self._vec_available = False
+        else:
+            self._vec_available = True
 
     async def _migrate_schema(self) -> None:
         """Add session_id to existing memories table if missing (no backward compat)."""

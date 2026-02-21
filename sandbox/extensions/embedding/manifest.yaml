@@ -1,0 +1,11 @@
+id: embedding
+name: Embedding
+version: "1.0.0"
+description: "Embedding generation via configured LLM providers (OpenAI-compatible)."
+entrypoint: main:EmbeddingExtension
+depends_on: []
+config:
+  default_model: text-embedding-3-large
+  default_dimensions: 256
+  provider: null  # null = auto-detect first openai_compatible from settings.yaml
+enabled: true
