@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+_UNSET = object()  # Sentinel: reflection cache not yet populated
+
 # Ensure extension dir is on path for sibling imports (db, repository, tools)
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
@@ -30,6 +32,9 @@ class MemoryExtension:
         self._episodes_per_chunk: int = 30
         self._embed_fn: Any = None
         self._entity_link_fn: Any = None
+        # Cache for latest reflection: changes at most once a week.
+        # Invalidated on save_reflection(). Avoids an SQL query per prompt.
+        self._reflection_cache: dict[str, Any] | None | object = _UNSET
 
     # --- ContextProvider ---
     @property
@@ -59,9 +64,10 @@ class MemoryExtension:
         if results:
             lines = "\n".join(f"- {r['content']}" for r in results)
             sections.append(f"## Relevant memory\n{lines}")
-        reflection = await self._repo.get_latest_reflection()
-        if reflection:
-            sections.append(f"## Weekly insight\n{reflection['content']}")
+        if self._reflection_cache is _UNSET:
+            self._reflection_cache = await self._repo.get_latest_reflection()
+        if self._reflection_cache:
+            sections.append(f"## Weekly insight\n{self._reflection_cache['content']}")
         return "\n\n".join(sections) if sections else None
 
     # --- ToolProvider ---
@@ -234,6 +240,7 @@ class MemoryExtension:
             embedding = await self._embed_fn(content)
             if embedding:
                 await self._repo.save_embedding(memory_id, embedding)
+        self._reflection_cache = {"id": memory_id, "content": content}
         return memory_id
 
     async def get_latest_reflection_timestamp(self) -> int | None:
