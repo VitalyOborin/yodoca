@@ -95,6 +95,10 @@ class MemoryRepository:
             "UPDATE memories SET valid_until = ? WHERE id = ? AND valid_until IS NULL",
             (now, memory_id),
         )
+        await conn.execute(
+            "DELETE FROM vec_memories WHERE memory_id = ?",
+            (memory_id,),
+        )
         await conn.commit()
         return cursor.rowcount is not None and cursor.rowcount > 0
 
@@ -430,6 +434,10 @@ class MemoryRepository:
                     await conn.execute(
                         "UPDATE memories SET valid_until = ? WHERE id = ?",
                         (now, fact["id"]),
+                    )
+                    await conn.execute(
+                        "DELETE FROM vec_memories WHERE memory_id = ?",
+                        (fact["id"],),
                     )
                     pruned += 1
                 else:
