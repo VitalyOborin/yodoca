@@ -61,7 +61,7 @@ class MemoryConsolidatorExtension:
 
     # --- SchedulerProvider ---
     def get_schedule(self) -> str:
-        return "0 3 * * *"  # 3 AM daily
+        return "0 3 * * *"  # 03:00 daily
 
     async def execute(self) -> dict[str, Any] | None:
         mem = self._ctx.get_extension("memory")
