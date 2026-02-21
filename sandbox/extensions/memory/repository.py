@@ -15,17 +15,23 @@ class MemoryRepository:
     def __init__(self, db: MemoryDatabase) -> None:
         self._db = db
 
-    async def save_episode(self, content: str, session_id: str | None = None) -> str:
+    async def save_episode(
+        self,
+        content: str,
+        session_id: str | None = None,
+        source_ids: list[str] | None = None,
+    ) -> str:
         """Insert episode; event_time=created_at. Returns new memory id."""
         conn = await self._db._ensure_conn()
         now = int(time.time())
         memory_id = f"ep_{uuid.uuid4().hex[:12]}"
+        source_ids_json = json.dumps(source_ids if source_ids is not None else [])
         await conn.execute(
             """
-            INSERT INTO memories (id, kind, content, session_id, event_time, created_at)
-            VALUES (?, 'episode', ?, ?, ?, ?)
+            INSERT INTO memories (id, kind, content, session_id, event_time, created_at, source_ids)
+            VALUES (?, 'episode', ?, ?, ?, ?, ?)
             """,
-            (memory_id, content, session_id, now, now),
+            (memory_id, content, session_id, now, now, source_ids_json),
         )
         await conn.commit()
         return memory_id

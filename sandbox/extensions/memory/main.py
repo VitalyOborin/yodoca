@@ -94,7 +94,11 @@ class MemoryExtension:
 
         if not text:
             return
-        await self._repo.save_episode(f"User: {text}", session_id=self._current_session_id)
+        await self._repo.save_episode(
+            f"{text}", 
+            session_id=self._current_session_id,
+            source_ids=[],
+        )
 
     async def _on_agent_response(self, data: dict[str, Any]) -> None:
         """MessageRouter: agent_response. Save assistant response as episode."""
@@ -104,8 +108,9 @@ class MemoryExtension:
         if not text:
             return
         await self._repo.save_episode(
-            f"Assistant: {text}",
+            f"{text}",
             session_id=self._current_session_id,
+            source_ids=["orchestrator"],
         )
 
     async def _trigger_consolidation(self, current_session_id: str) -> None:
