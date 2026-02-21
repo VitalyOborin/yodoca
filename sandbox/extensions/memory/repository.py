@@ -1,12 +1,16 @@
 """MemoryRepository: CRUD and FTS5 search. No business logic."""
 
 import json
+import logging
+import math
 import re
 import time
 import uuid
 from typing import Any
 
 from db import MemoryDatabase  # noqa: I001 - db loaded from ext dir via sys.path
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryRepository:
@@ -96,11 +100,14 @@ class MemoryRepository:
     async def update_confidence(
         self, memory_id: str, confidence: float, decay_rate: float
     ) -> bool:
-        """Update confidence and decay_rate (e.g. for confirm_fact)."""
+        """Update confidence, decay_rate, and last_accessed (e.g. for confirm_fact)."""
         conn = await self._db._ensure_conn()
+        now = int(time.time())
         cursor = await conn.execute(
-            "UPDATE memories SET confidence = ?, decay_rate = ? WHERE id = ? AND valid_until IS NULL",
-            (confidence, decay_rate, memory_id),
+            """UPDATE memories
+               SET confidence = ?, decay_rate = ?, last_accessed = ?
+               WHERE id = ? AND valid_until IS NULL""",
+            (confidence, decay_rate, now, memory_id),
         )
         await conn.commit()
         return cursor.rowcount is not None and cursor.rowcount > 0
@@ -261,6 +268,74 @@ class MemoryRepository:
         total = int(rows[0][3]) if rows else 0
         page = [{"id": r[0], "content": r[1], "source_role": r[2]} for r in rows]
         return (page, total)
+
+    async def get_facts_for_decay(self) -> list[dict[str, Any]]:
+        """Return active facts with decay_rate > 0, sorted oldest first."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT id, confidence, decay_rate, last_accessed, created_at
+               FROM memories
+               WHERE kind = 'fact'
+                 AND valid_until IS NULL
+                 AND decay_rate > 0
+               ORDER BY COALESCE(last_accessed, created_at) ASC, created_at ASC""",
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "confidence": r[1],
+                "decay_rate": r[2],
+                "last_accessed": r[3],
+                "created_at": r[4],
+            }
+            for r in rows
+        ]
+
+    async def apply_decay_and_prune(
+        self, threshold: float = 0.05
+    ) -> dict[str, Any]:
+        """
+        Apply Ebbinghaus decay: confidence *= exp(-decay_rate * days_since_access).
+        Soft-delete facts where new_confidence < threshold.
+        Returns stats: {decayed, pruned, errors}.
+        """
+        facts = await self.get_facts_for_decay()
+        now = int(time.time())
+        decayed = 0
+        pruned = 0
+        errors: list[str] = []
+        conn = await self._db._ensure_conn()
+
+        for fact in facts:
+            try:
+                ref_ts = fact["last_accessed"] or fact["created_at"]
+                days = max(0.0, (now - ref_ts) / 86400.0)
+                new_conf = fact["confidence"] * math.exp(
+                    -fact["decay_rate"] * days
+                )
+                new_conf = max(0.0, min(1.0, new_conf))
+
+                if new_conf < threshold:
+                    await conn.execute(
+                        "UPDATE memories SET valid_until = ? WHERE id = ?",
+                        (now, fact["id"]),
+                    )
+                    pruned += 1
+                else:
+                    await conn.execute(
+                        """UPDATE memories
+                           SET confidence = ?, last_accessed = ?
+                           WHERE id = ?""",
+                        (new_conf, now, fact["id"]),
+                    )
+                    decayed += 1
+            except Exception as e:
+                errors.append(f"fact {fact['id']}: {e}")
+                logger.exception("Decay error for fact %s", fact["id"])
+
+        await conn.commit()
+        return {"decayed": decayed, "pruned": pruned, "errors": errors}
 
     async def save_facts_batch(
         self, session_id: str, facts: list[dict[str, Any]]

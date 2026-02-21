@@ -148,3 +148,16 @@ class MemoryExtension:
         if not self._repo:
             return []
         return await self._repo.get_all_pending_consolidations()
+
+    async def run_decay_and_prune(self, threshold: float = 0.05) -> dict[str, Any]:
+        """Public API: apply Ebbinghaus decay to all active facts.
+
+        Called by memory_maintenance scheduler. Returns stats dict.
+        """
+        if not self._repo:
+            return {
+                "decayed": 0,
+                "pruned": 0,
+                "errors": ["repository not initialized"],
+            }
+        return await self._repo.apply_decay_and_prune(threshold)

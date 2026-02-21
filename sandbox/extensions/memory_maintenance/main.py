@@ -100,7 +100,7 @@ class MemoryMaintenanceExtension:
             case "execute_consolidation":
                 return await self._run_consolidation()
             case "execute_decay":
-                return await self._run_decay_placeholder()
+                return await self._run_decay_and_prune()
             case _:
                 logger.warning("Unknown scheduled task: %s", task_name)
                 return None
@@ -125,10 +125,27 @@ class MemoryMaintenanceExtension:
         logger.info("Consolidation triggered for %d pending sessions", len(pending))
         return None
 
-    async def _run_decay_placeholder(self) -> dict[str, Any] | None:
-        """Placeholder for future Ebbinghaus decay and prune. Not yet implemented."""
-        logger.info("execute_decay not yet implemented")
-        return None
+    async def _run_decay_and_prune(self) -> dict[str, Any] | None:
+        """Apply Ebbinghaus decay; soft-delete facts below threshold."""
+        mem = self._ctx.get_extension("memory")
+        if not mem:
+            logger.warning("memory extension not available for decay")
+            return None
+
+        threshold = self._ctx.get_config("decay_threshold", 0.05)
+        stats = await mem.run_decay_and_prune(threshold)
+
+        logger.info(
+            "Decay complete: %d facts updated, %d facts pruned (threshold=%.2f)",
+            stats["decayed"],
+            stats["pruned"],
+            threshold,
+        )
+
+        if stats["errors"]:
+            logger.warning("Decay errors: %s", stats["errors"])
+
+        return None  # No user notification for background maintenance
 
     # --- Lifecycle ---
 
