@@ -1,6 +1,5 @@
 """Memory extension: ToolProvider + ContextProvider. Long-term memory across sessions."""
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -13,7 +12,7 @@ if str(_ext_dir) not in sys.path:
 
 from db import MemoryDatabase
 from repository import MemoryRepository
-from tools import build_tools
+from tools import build_consolidator_tools, build_tools
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,7 @@ class MemoryExtension:
     def __init__(self) -> None:
         self._db: MemoryDatabase | None = None
         self._repo: MemoryRepository | None = None
+        self._ctx: Any = None
         self._current_session_id: str | None = None
 
     # --- ContextProvider ---
@@ -56,8 +56,15 @@ class MemoryExtension:
             return []
         return build_tools(self._repo)
 
+    def get_consolidator_tools(self) -> list[Any]:
+        """Tools for consolidator agent only. Not exposed to Orchestrator."""
+        if not self._repo:
+            return []
+        return build_consolidator_tools(self._repo)
+
     # --- Lifecycle ---
     async def initialize(self, context: Any) -> None:
+        self._ctx = context
         db_path = context.data_dir / "memory.db"
         self._db = MemoryDatabase(db_path)
         await self._db.initialize()
@@ -115,15 +122,27 @@ class MemoryExtension:
         )
 
     async def _trigger_consolidation(self, current_session_id: str) -> None:
-        """Fire-and-forget consolidation for all pending non-current sessions."""
+        """Emit memory.session_completed for all pending non-current sessions."""
         pending = await self._repo.get_pending_consolidations(current_session_id)
         for session_id in pending:
-            asyncio.create_task(self._consolidate_session(session_id))
+            await self._ctx.emit(
+                "memory.session_completed",
+                {
+                    "session_id": session_id,
+                    "prompt": f"Consolidate session {session_id}: extract semantic facts.",
+                },
+            )
 
-    async def _consolidate_session(self, session_id: str) -> None:
-        """Placeholder: extract facts from completed session. Implemented in Phase 2."""
-        await self._repo.mark_session_consolidated(session_id)
-        logger.info(
-            "Session %s marked consolidated (Phase 2: LLM extraction pending)",
-            session_id,
-        )
+    async def get_pending_consolidations(
+        self, exclude_session_id: str
+    ) -> list[str]:
+        """Return session_ids that need consolidation (exclude current)."""
+        if not self._repo:
+            return []
+        return await self._repo.get_pending_consolidations(exclude_session_id)
+
+    async def get_all_pending_consolidations(self) -> list[str]:
+        """Return all session_ids that need consolidation (for scheduler)."""
+        if not self._repo:
+            return []
+        return await self._repo.get_all_pending_consolidations()

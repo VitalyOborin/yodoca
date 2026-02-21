@@ -347,7 +347,7 @@ class Loader:
             async def proactive_handler(
                 event: Event, _topic: str = topic, _agent: AgentProvider = agent
             ) -> None:
-                task = f"Background event '{_topic}': {event.payload}"
+                task = event.payload.get("prompt") or f"Background event '{_topic}': {event.payload}"
                 context = AgentInvocationContext(correlation_id=event.correlation_id)
                 try:
                     response = await _agent.invoke(task, context)

@@ -1,0 +1,25 @@
+id: memory_consolidator
+name: Memory Consolidator
+version: "1.0.0"
+description: Extracts semantic facts from completed conversation sessions.
+
+entrypoint: main:MemoryConsolidatorExtension
+
+agent:
+  integration_mode: tool
+  model: gpt-5-mini
+  instructions_file: prompts/memory_consolidator.jinja2
+  uses_tools:
+    - memory
+  limits:
+    max_turns: 5
+
+events:
+  subscribes:
+    - topic: memory.session_completed
+      handler: invoke_agent
+
+depends_on:
+  - memory
+
+enabled: true

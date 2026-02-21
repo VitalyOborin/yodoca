@@ -79,3 +79,60 @@ def build_tools(repo: Any) -> list[Any]:
         return "\n".join(lines) if lines else "No memories yet."
 
     return [search_memory, remember_fact, correct_fact, confirm_fact, memory_stats]
+
+
+def build_consolidator_tools(repo: Any) -> list[Any]:
+    """Build consolidator-only tools. Not exposed to Orchestrator."""
+
+    @function_tool(name_override="get_episodes_for_consolidation")
+    async def get_episodes_for_consolidation(
+        session_id: Annotated[str, Field(description="Session ID to fetch episodes for")],
+    ) -> str:
+        """Fetch all episodes for a session. Use before extracting facts."""
+        episodes = await repo.get_episodes_by_session(session_id)
+        if not episodes:
+            return "No episodes found for this session."
+        lines = [f"[{e['id']}] ({e.get('source_role', '?')}): {e['content']}" for e in episodes]
+        return "\n".join(lines)
+
+    @function_tool(name_override="save_fact_with_sources")
+    async def save_fact_with_sources(
+        content: Annotated[str, Field(min_length=1, description="Fact content")],
+        source_ids: Annotated[
+            list[str],
+            Field(description="Episode IDs that support this fact"),
+        ],
+        session_id: Annotated[
+            str | None,
+            Field(default=None, description="Session ID for provenance"),
+        ] = None,
+        confidence: Annotated[float, Field(default=1.0, ge=0, le=1)] = 1.0,
+    ) -> str:
+        """Save a fact with provenance. source_ids are episode IDs from get_episodes_for_consolidation."""
+        memory_id = await repo.save_fact_with_sources(
+            content, source_ids, session_id=session_id, confidence=confidence
+        )
+        return f"Saved fact (id={memory_id})"
+
+    @function_tool(name_override="mark_session_consolidated")
+    async def mark_session_consolidated(
+        session_id: Annotated[str, Field(description="Session ID to mark as consolidated")],
+    ) -> str:
+        """Mark session as consolidated. Call after extraction is complete."""
+        await repo.mark_session_consolidated(session_id)
+        return f"Session {session_id} marked consolidated."
+
+    @function_tool(name_override="is_session_consolidated")
+    async def is_session_consolidated(
+        session_id: Annotated[str, Field(description="Session ID to check")],
+    ) -> str:
+        """Check if session was already consolidated. Skip if true to avoid duplicates."""
+        ok = await repo.is_session_consolidated(session_id)
+        return "yes" if ok else "no"
+
+    return [
+        get_episodes_for_consolidation,
+        save_fact_with_sources,
+        mark_session_consolidated,
+        is_session_consolidated,
+    ]

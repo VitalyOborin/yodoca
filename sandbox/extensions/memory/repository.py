@@ -57,6 +57,31 @@ class MemoryRepository:
         await conn.commit()
         return memory_id
 
+    async def save_fact_with_sources(
+        self,
+        content: str,
+        source_ids: list[str],
+        session_id: str | None = None,
+        confidence: float = 1.0,
+        tags: list[str] | None = None,
+    ) -> str:
+        """Insert fact with provenance. Returns new memory id."""
+        conn = await self._db._ensure_conn()
+        now = int(time.time())
+        memory_id = f"fact_{uuid.uuid4().hex[:12]}"
+        source_ids_json = json.dumps(source_ids)
+        tags_json = json.dumps(tags or [])
+        await conn.execute(
+            """
+            INSERT INTO memories (id, kind, content, session_id, event_time, created_at,
+                                 confidence, tags, source_ids)
+            VALUES (?, 'fact', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (memory_id, content, session_id, now, now, confidence, tags_json, source_ids_json),
+        )
+        await conn.commit()
+        return memory_id
+
     async def soft_delete(self, memory_id: str) -> bool:
         """Set valid_until=now. Returns True if row existed."""
         conn = await self._db._ensure_conn()
@@ -176,6 +201,27 @@ class MemoryRepository:
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
+
+    async def get_all_pending_consolidations(self) -> list[str]:
+        """Return all session_ids that need consolidation (no exclusions)."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT session_id FROM sessions_consolidations
+               WHERE consolidated_at IS NULL""",
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+    async def is_session_consolidated(self, session_id: str) -> bool:
+        """Check if session was already consolidated. Prevents duplicate runs."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT 1 FROM sessions_consolidations
+               WHERE session_id = ? AND consolidated_at IS NOT NULL""",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row is not None
 
     async def mark_session_consolidated(self, session_id: str) -> None:
         conn = await self._db._ensure_conn()

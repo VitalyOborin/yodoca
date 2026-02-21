@@ -1,163 +1,268 @@
-# Yodoca — Автономный ИИ агент
+# Yodoca: Local-First, Self-Evolving AI Agent Platform
 
-Экспериментальное приложение — **Agentic OS**: среда выполнения для ИИ-агента, где почти вся функциональность реализована как расширения. Ядро минимально: управление жизненным циклом, шина событий и контроль безопасности. Всё остальное — каналы связи, инструменты, фоновые сервисы — подключается как расширения.
+A local-first AI agent runtime designed for **always-on automation** and **self-extension**.  
+The core stays tiny (nano-kernel); all capabilities live in **extensions** (channels, tools, services, schedulers, even other agents).  
+A **Supervisor** manages lifecycle and safe restarts, while a **durable SQLite event journal** enables proactive flows and auditability.
 
-## Основные принципы
-- **Microkernel** - вся основная минимально необходимая логика сконцентрирована в ядре с ИИ агентом
-- **Extension-first** - любое расширение системы возможно за счет изолированных extensions, которые выполняют контракты.
-- **Security by design** - безопасность принимаемых решений, HITL, требуется подтверждение от пользователя для опасных действий.
+> Status: Early / experimental. Single-user, self-hosted by design.
 
-## Чем занимается проект
+---
 
-- **Оркестратор** — основной агент, который общается с пользователем, проверяет доступные расширения и выбирает подходящие инструменты.
-- **Создание расширений** — если нужной возможности нет, агент может предложить создать новое расширение через Builder Agent (с подтверждением пользователя).
-- **Расширяемая архитектура** — типы расширений: `tool`, `channel`, `service`, `scheduler`, `monitor`, `middleware`. Расширения общаются через Event Bus, не зная друг о друге напрямую.
-- **Мультиканальность** — CLI и Telegram (и другие каналы через расширения). Сообщения приходят как `user_message`, ответы уходят как `agent_response`.
-- **Безопасность** — права доступа, секреты, human-in-the-loop при активации новых расширений.
-- **Песочница** — расширения работают в `sandbox/`, ядро в `ai/` не трогают.
+## Why this project
 
-## Запуск
+Most "AI assistants" are reactive: they respond only when you type. This project targets a different UX:
 
-### Требования
+- **Push, not pull**: channels (Telegram, CLI, Web UI) wake the agent when messages arrive.
+- **Proactive automation**: schedulers and background services emit events; the agent can react without manual prompts.
+- **Self-evolving**: a Builder agent can generate new extensions and trigger a controlled restart to load them.
+
+---
+
+## Core ideas
+
+### 1) Supervisor + Core as separate processes
+You always run the app via the Supervisor:
+
+- Supervisor is the **only entry point**.
+- Core (nano-kernel + orchestrator) runs as a **child process**.
+- Extensions can request a restart by writing a flag; Supervisor restarts core safely.
+
+### 2) Nano-kernel
+The kernel intentionally does very little:
+- discovers and loads extensions
+- wires them via a small `ExtensionContext`
+- routes messages (reactive path)
+- runs a durable event dispatch loop (event-driven path)
+
+### 3) Extensions-first architecture
+All functionality lives in extensions under `sandbox/extensions/<extension_id>/`.
+
+Extensions are "typed" by the protocols they implement (capabilities are detected at runtime):
+- `ChannelProvider` — receive user messages and send responses (CLI, Telegram, Web UI)
+- `ToolProvider` — expose tools/functions to the orchestrator
+- `ServiceProvider` — background loops (caches, inbox watchers, memory store)
+- `SchedulerProvider` — cron-like tasks (reminders, periodic monitors)
+- `SetupProvider` — guided configuration (tokens, secrets, credentials)
+
+### 4) Durable Event Bus (SQLite journal)
+A single SQLite table acts as:
+- a queue (pending → processing → done/failed)
+- an audit log of "what happened"
+- a backbone for proactive workflows
+
+Delivery is **at-least-once**, so handlers should be idempotent or deduplicate by `event.id`.
+
+### 5) Memory as an extension
+Long-term memory is implemented as an extension, with:
+- fast append-only writes on the hot path
+- background consolidation (summaries, indexing)
+- optional full-text search (and embeddings later, if needed)
+
+---
+
+## Architecture (high level)
+
+```
+┌────────────────────────────────────────┐
+│               SUPERVISOR               │  process watcher
+│        spawn · monitor · restart       │
+└────────────────────┬───────────────────┘
+│ subprocess
+┌────────────────────▼───────────────────┐
+│               NANO-KERNEL              │
+│ Loader → MessageRouter → Orchestrator  │
+│        → EventBus (SQLite journal)     │
+└───────────────┬───────────────┬────────┘
+                │
+  sandbox/extensions/      sandbox/data/
+(channels/tools/etc.)   (per-extension state)
+```
+
+---
+
+## Features
+
+- Always-on runtime via Supervisor-managed core process
+- Extension system with a minimal, generation-friendly contract (`manifest.yaml` + `main.py`)
+- Channels: CLI + (optional) Telegram (and more via extensions)
+- Durable event bus (SQLite WAL) for asynchronous flows + observability
+- Scheduler extensions for cron-like automation
+- Memory extension for long-term context (search + consolidation)
+- Safe restarts initiated by extensions (e.g., after generating new code)
+
+---
+
+## Quick start
+
+### Prerequisites
 - Python 3.12+
-- Зависимости (установить: `uv sync`)
-- Файл `.env` в корне проекта с переменными окружения (например, `OPENAI_API_KEY`)
+- Works best on a local machine (Windows/Linux/macOS)
 
-### Запуск приложения
+### Run
 ```bash
+# 1) Clone
+git clone <your-repo-url>
+cd yodoca
+
+# 2) Create venv and install deps (uv recommended)
+uv sync
+# Or with pip:
+# pip install -e .
+
+# 3) Configure secrets (optional, for certain extensions)
+cp .env.example .env
+# edit .env — add OPENAI_API_KEY, etc.
+
+# 4) Start via Supervisor
 uv run python -m supervisor
 ```
 
-## Конфигурация провайдеров и моделей
+---
 
-Назначение LLM провайдеров и моделей задаётся в **`config/settings.yaml`**: блок **`agents`** (провайдер и модель для каждого агента) и блок **`providers`** (описание API: тип, base_url, ключи). Ядро (модуль `core/llm/`) читает настройки при старте и по `agent_id` отдаёт каждому агенту готовый экземпляр модели (OpenAI Agents SDK). Смена провайдера или модели — правка YAML, без изменений кода.
+## Configuration
 
-### Структура конфигурации
+LLM providers and models are configured in **`config/settings.yaml`**:
+- **`agents`** — per-agent: `provider`, `model`, optional `instructions`, `temperature`, `max_tokens`
+- **`providers`** — API definitions: `type` (openai_compatible / anthropic), `base_url`, `api_key_secret` or `api_key_literal`
 
-- **`agents`** — для каждого агента: `provider`, `model`, при необходимости `instructions`, `temperature`, `max_tokens`.
-- **`providers`** — список провайдеров (OpenAI, LM Studio, Anthropic, OpenRouter и т.д.). Для неизвестного `agent_id` используется запись **`default`** в блоке `agents` (если задана).
+Secrets live in `.env`; never store API keys in YAML. See `config/settings.yaml` for examples.
 
-### Провайдеры
+---
 
-Каждый провайдер задаётся полем `type` и опционально `base_url`, ключом API и заголовками:
+## Repository layout (conceptual)
 
-| Поле | Описание |
-|------|----------|
-| `type` | `openai_compatible` (OpenAI, LM Studio, OpenRouter) или `anthropic` |
-| `base_url` | URL API. Не указывать — используется `https://api.openai.com/v1` для OpenAI |
-| `api_key_secret` | Имя переменной окружения с ключом (например `OPENAI_API_KEY`) |
-| `api_key_literal` | Фиксированная строка вместо ключа (для LM Studio часто `lm-studio`) |
-| `default_headers` | Доп. заголовки запросов (например для OpenRouter: `HTTP-Referer`, `X-Title`) |
+```
+supervisor/              # process watcher
+  __main__.py
+  runner.py
 
-**В том же файле `config/settings.yaml` задаётся блок `agents` и блок `providers`. Примеры:**
+core/                    # nano-kernel
+  __main__.py
+  agents/                # orchestrator, builder
+  extensions/            # extension contracts, loader, context, router
+  events/                # SQLite journal-backed EventBus
 
-```yaml
-agents:
-  orchestrator:
-    provider: openai
-    model: gpt-5.2
-    instructions: prompts/orchestrator.jinja2
-
-providers:
-  openai:
-    type: openai_compatible
-    api_key_secret: OPENAI_API_KEY
-
-  lm_studio:
-    type: openai_compatible
-    base_url: http://127.0.0.1:1234/v1
-    api_key_literal: lm-studio
-
-  anthropic:
-    type: anthropic
-    api_key_secret: ANTHROPIC_API_KEY
-
-  openrouter:
-    type: openai_compatible
-    base_url: https://openrouter.ai/api/v1
-    api_key_secret: OPENROUTER_API_KEY
-    default_headers:
-      HTTP-Referer: https://your-app.example.com
-      X-Title: YourApp
+sandbox/
+  extensions/            # all extensions live here
+    cli_channel/
+      manifest.yaml
+      main.py
+    telegram_channel/
+      manifest.yaml
+      main.py
+    memory/
+    kv/
+  data/                  # per-extension private data (SQLite, caches, etc.)
 ```
 
-Для провайдера **Anthropic** нужна опциональная зависимость: `uv sync --extra litellm` (или `pip install 'openai-agents[litellm]'`).
+---
 
-### Агенты
+## Creating an extension
 
-В блоке **`agents`** каждому агенту задаётся провайдер, модель и при необходимости параметры:
+Each extension is a folder:
 
-| Поле | Описание |
-|------|----------|
-| `provider` | ID провайдера из блока `providers` |
-| `model` | Имя модели у этого провайдера (например `gpt-4o`, `mistralai/codestral-22b-v0.1`, `claude-3-5-sonnet-20241022`) |
-| `temperature` | Опционально, по умолчанию 0.7 |
-| `max_tokens` | Опционально |
-
-**Примеры:**
-
-```yaml
-agents:
-  default:
-    provider: openai
-    model: gpt-5
-
-  orchestrator:
-    provider: lm_studio
-    model: mistralai/codestral-22b-v0.1
-    temperature: 0.7
-
-  builder:
-    provider: anthropic
-    model: claude-3-5-sonnet-20241022
-    temperature: 0.2
+```
+sandbox/extensions/<extension_id>/
+  manifest.yaml
+  main.py
 ```
 
-- **`orchestrator`** — основной агент приложения.
-- **`default`** — используется для любого агента (в т.ч. из расширений), для которого нет отдельной записи.
-- Имена вроде **`builder`**, **`memory_consolidator`** — для агентов расширений; расширение указывает свой `agent_id` в манифесте (или используется id расширения).
-
-### Расширения с агентами
-
-Чтобы расширение-агент использовало конкретную модель из `config/settings.yaml`:
-
-1. В **`config/settings.yaml`** в блоке `agents` добавьте запись с нужным `agent_id` (например, id расширения или осмысленное имя).
-2. В **`manifest.yaml`** расширения при необходимости укажите **`agent_id`** — по нему ядро вызовет `model_router.get_model(agent_id)`.
-
-Пример манифеста:
+### `manifest.yaml` (minimal example)
 
 ```yaml
-id: builder_agent
-name: Extension Builder Agent
-agent_id: builder   # соответствует agents.builder в config/settings.yaml
-agent:
-  integration_mode: tool
-  model: gpt-5.2-codex   # игнорируется при наличии model_router; иначе fallback
-  instructions_file: prompts/builder.jinja2
-  ...
+id: telegram_channel
+name: Telegram Bot Channel
+version: "1.0.0"
+
+description: >
+  User communication channel via Telegram bot.
+  Receives incoming messages and sends agent responses.
+
+entrypoint: main:TelegramChannelExtension
+
+setup_instructions: |
+  A bot token from @BotFather is needed for setup.
+
+depends_on:
+  - kv
+
+config:
+  parse_mode: MarkdownV2
+
+enabled: true
 ```
 
-Если **`agent_id`** не указан, используется **id расширения** (например `builder_agent`). Тогда в `config/settings.yaml` в блоке `agents` должна быть запись с таким ключом или будет использован **`default`**.
+### Capabilities (by protocol)
 
-Расширение может объявить свою конфигурацию модели прямо в манифесте через **`agent_config`** (без правки общего `config/settings.yaml`):
+Implement one or more protocols in `main.py`:
 
-```yaml
-id: memory
-name: Cognitive Memory
-agent_config:
-  consolidator_agent:
-    provider: lm_studio
-    model: qwen2.5-7b
-    temperature: 0.3
-```
+* Channel (receive/send)
+* Tool (functions for the agent)
+* Service (background loop)
+* Scheduler (cron task)
+* Setup (configuration flow)
 
-Так в роутер добавляются записи для `consolidator_agent` и т.п.; код расширения получает `ModelRouter` через `ExtensionContext.model_router` и вызывает `get_model("consolidator_agent")`.
+---
 
-### Секреты
+## Event-driven flows
 
-Ключи API не хранятся в YAML. Используйте:
+Extensions can publish events (durable) and subscribe to topics.
 
-- **`api_key_secret`** — имя переменной окружения (значение берётся из `.env` / окружения).
-- **`api_key_literal`** — фиксированная строка (удобно для локальных провайдеров вроде LM Studio, где ключ не нужен).
+Examples:
 
-В корне проекта должен быть файл **`.env`** с нужными переменными (например `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Вся конфигурация провайдеров и агентов — в одном файле **`config/settings.yaml`** (блоки `agents` и `providers`).
+* `email.received` → a processor extension formats a prompt → invokes the agent → emits `user.notify`
+* `tick` → monitoring extension checks something → emits `user.notify`
+
+The event journal provides traceability and debugging:
+
+* pending/processing/done/failed
+* correlation IDs for causal chains (optional)
+
+---
+
+## Security notes
+
+This is a **single-user local** system.
+
+* Extensions are trusted code running on your machine.
+* Secrets should be stored in `.env` (or OS keychain later).
+* If you plan to run untrusted extensions, add sandboxing/isolation (future work).
+
+---
+
+## Roadmap (suggested)
+
+* [ ] Better extension packaging/versioning + compatibility checks
+* [ ] Optional WASM sandboxing for untrusted extensions
+* [ ] Web UI channel
+* [ ] Event retries / dead-letter support
+* [ ] Memory: embeddings + retrieval policies (opt-in)
+* [ ] Agent-as-extension: specialized agents with constrained toolsets
+
+---
+
+## Contributing
+
+Contributions are welcome:
+
+* new extensions (channels, tools, integrations)
+* docs and examples
+* bug reports and reproducible test cases
+* architecture proposals as ADRs
+
+Open a PR and include:
+
+* motivation/use case
+* a minimal working example
+* tests (when applicable)
+
+---
+
+## Acknowledgements
+
+Inspired by practical lessons from building local-first agent runtimes:
+
+* keep the core tiny
+* move capabilities to extensions
+* make background work observable and durable
+* optimize for iteration and real-world workflows
