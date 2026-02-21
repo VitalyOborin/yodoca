@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS entities (
     protected      INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS memory_entities (
+    memory_id TEXT NOT NULL REFERENCES memories(id),
+    entity_id TEXT NOT NULL REFERENCES entities(id),
+    PRIMARY KEY (memory_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_me_entity ON memory_entities(entity_id);
+CREATE INDEX IF NOT EXISTS idx_me_memory ON memory_entities(memory_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content,
     content='memories',

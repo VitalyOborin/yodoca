@@ -99,6 +99,10 @@ class MemoryRepository:
             "DELETE FROM vec_memories WHERE memory_id = ?",
             (memory_id,),
         )
+        await conn.execute(
+            "DELETE FROM memory_entities WHERE memory_id = ?",
+            (memory_id,),
+        )
         await conn.commit()
         return cursor.rowcount is not None and cursor.rowcount > 0
 
@@ -238,6 +242,7 @@ class MemoryRepository:
         self,
         fts_results: list[dict[str, Any]],
         vec_results: list[dict[str, Any]],
+        entity_results: list[dict[str, Any]] | None = None,
         k: int = 60,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
@@ -253,6 +258,12 @@ class MemoryRepository:
             scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
             if mid not in all_items:
                 all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
+        if entity_results:
+            for rank, item in enumerate(entity_results, start=1):
+                mid = item["id"]
+                scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
+                if mid not in all_items:
+                    all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
         return [all_items[mid] for mid, _ in ranked]
 
@@ -265,12 +276,21 @@ class MemoryRepository:
         limit: int = 10,
         exclude_session_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Hybrid FTS5 + vector with RRF. If query_embedding is None, FTS5-only."""
+        """Hybrid FTS5 + vector + entity with RRF. If query_embedding is None, FTS5 + entity."""
         fts_results = await self.fts_search(
             query, kind=kind, tag=tag, limit=limit * 2, exclude_session_id=exclude_session_id
         )
+        entity_results = await self.entity_search_for_rrf(
+            query,
+            kind=kind,
+            tag=tag,
+            limit=limit * 2,
+            exclude_session_id=exclude_session_id,
+        )
         if not query_embedding:
-            return fts_results[:limit]
+            return self._rrf_merge(
+                fts_results, [], entity_results=entity_results, k=60, limit=limit
+            )
         vec_results = await self.vector_search(
             query_embedding,
             kind=kind,
@@ -278,7 +298,9 @@ class MemoryRepository:
             limit=limit * 2,
             exclude_session_id=exclude_session_id,
         )
-        return self._rrf_merge(fts_results, vec_results, k=60, limit=limit)
+        return self._rrf_merge(
+            fts_results, vec_results, entity_results=entity_results, k=60, limit=limit
+        )
 
     async def get_stats(self) -> dict[str, Any]:
         """Counts by kind, latest created_at."""
@@ -298,6 +320,233 @@ class MemoryRepository:
         row = await cursor.fetchone()
         latest = row[0] if row and row[0] else None
         return {"counts": counts, "latest_created_at": latest}
+
+    # --- Entity CRUD ---
+
+    async def create_or_get_entity(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        aliases: list[str] | None = None,
+    ) -> str:
+        """Create entity or return existing ID. Increment mention_count on match, merge aliases."""
+        conn = await self._db._ensure_conn()
+        canonical_lower = canonical_name.lower().strip()
+        if not canonical_lower:
+            raise ValueError("canonical_name cannot be empty")
+
+        # Lookup by canonical_name + type
+        cursor = await conn.execute(
+            "SELECT id FROM entities WHERE LOWER(canonical_name) = ? AND type = ?",
+            (canonical_lower, entity_type),
+        )
+        row = await cursor.fetchone()
+        if row:
+            entity_id = row[0]
+            await conn.execute(
+                "UPDATE entities SET mention_count = mention_count + 1 WHERE id = ?",
+                (entity_id,),
+            )
+            if aliases:
+                await self._merge_aliases(conn, entity_id, aliases)
+            await conn.commit()
+            return entity_id
+
+        # Lookup by alias match (aliases JSON contains quoted strings)
+        alias_pattern = f'%"{canonical_lower}"%'
+        cursor = await conn.execute(
+            """SELECT id FROM entities
+               WHERE type = ? AND (LOWER(aliases) LIKE ? OR LOWER(canonical_name) LIKE ?)
+               LIMIT 1""",
+            (entity_type, alias_pattern, f"%{canonical_lower}%"),
+        )
+        row = await cursor.fetchone()
+        if row:
+            entity_id = row[0]
+            await conn.execute(
+                "UPDATE entities SET mention_count = mention_count + 1 WHERE id = ?",
+                (entity_id,),
+            )
+            if aliases:
+                await self._merge_aliases(conn, entity_id, aliases)
+            await conn.commit()
+            return entity_id
+
+        # Create new entity
+        entity_id = f"ent_{uuid.uuid4().hex[:12]}"
+        aliases_json = json.dumps(aliases or [])
+        await conn.execute(
+            """INSERT INTO entities (id, canonical_name, type, aliases, mention_count)
+               VALUES (?, ?, ?, ?, 1)""",
+            (entity_id, canonical_name.strip(), entity_type, aliases_json),
+        )
+        await conn.commit()
+        return entity_id
+
+    async def _merge_aliases(
+        self, conn: Any, entity_id: str, new_aliases: list[str]
+    ) -> None:
+        """Add new aliases to entity (no duplicates)."""
+        cursor = await conn.execute(
+            "SELECT aliases FROM entities WHERE id = ?", (entity_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return
+        existing = set(json.loads(row[0]) if row[0] else [])
+        merged = list(existing | set(a.strip() for a in new_aliases if a.strip()))
+        await conn.execute(
+            "UPDATE entities SET aliases = ? WHERE id = ?",
+            (json.dumps(merged), entity_id),
+        )
+
+    async def link_memory_to_entities(
+        self, memory_id: str, entity_ids: list[str]
+    ) -> None:
+        """Create memory_entities links. Idempotent (INSERT OR IGNORE)."""
+        if not entity_ids:
+            return
+        conn = await self._db._ensure_conn()
+        for entity_id in entity_ids:
+            await conn.execute(
+                """INSERT OR IGNORE INTO memory_entities (memory_id, entity_id)
+                   VALUES (?, ?)""",
+                (memory_id, entity_id),
+            )
+        await conn.commit()
+
+    async def search_entities(
+        self,
+        query: str,
+        entity_type: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search entities by canonical_name or aliases (case-insensitive partial match)."""
+        if not query or not query.strip():
+            return []
+        conn = await self._db._ensure_conn()
+        query_lower = f"%{query.lower().strip()}%"
+        type_filter = " AND type = ?" if entity_type else ""
+        params: list[Any] = [query_lower, query_lower]
+        if entity_type:
+            params.append(entity_type)
+        params.append(limit)
+        cursor = await conn.execute(
+            f"""
+            SELECT id, canonical_name, type, aliases, mention_count
+            FROM entities
+            WHERE (LOWER(canonical_name) LIKE ? OR LOWER(aliases) LIKE ?)
+            {type_filter}
+            ORDER BY mention_count DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "canonical_name": r[1],
+                "type": r[2],
+                "aliases": json.loads(r[3]) if r[3] else [],
+                "mention_count": r[4],
+            }
+            for r in rows
+        ]
+
+    async def get_memories_by_entity(
+        self,
+        entity_id: str,
+        kind: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Get memories linked to entity via junction table."""
+        conn = await self._db._ensure_conn()
+        kind_filter = " AND m.kind = ?" if kind else ""
+        params: list[Any] = [entity_id]
+        if kind:
+            params.append(kind)
+        params.append(limit)
+        cursor = await conn.execute(
+            f"""
+            SELECT m.id, m.kind, m.content, m.created_at, m.confidence
+            FROM memories m
+            INNER JOIN memory_entities me ON me.memory_id = m.id
+            WHERE me.entity_id = ?
+              AND m.valid_until IS NULL
+            {kind_filter}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "content": r[2],
+                "created_at": r[3],
+                "confidence": r[4],
+            }
+            for r in rows
+        ]
+
+    async def entity_search_for_rrf(
+        self,
+        query: str,
+        kind: str | None = None,
+        tag: str | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Entity-based memory search for RRF. Returns same dict shape as fts_search."""
+        if not query or not query.strip():
+            return []
+        conn = await self._db._ensure_conn()
+        query_lower = f"%{query.lower().strip()}%"
+        kind_filter = " AND m.kind = ?" if kind else ""
+        tag_filter = " AND m.tags LIKE ?" if tag else ""
+        session_filter = ""
+        params: list[Any] = [query_lower, query_lower]
+        if kind:
+            params.append(kind)
+        if tag:
+            params.append(f'%"{tag}"%')
+        if exclude_session_id:
+            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
+            params.append(exclude_session_id)
+        params.append(limit)
+        cursor = await conn.execute(
+            f"""
+            SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
+                   m.confidence, m.tags
+            FROM memories m
+            INNER JOIN memory_entities me ON me.memory_id = m.id
+            INNER JOIN entities e ON e.id = me.entity_id
+            WHERE m.valid_until IS NULL
+              AND (LOWER(e.canonical_name) LIKE ? OR LOWER(e.aliases) LIKE ?)
+            {kind_filter}
+            {tag_filter}
+            {session_filter}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "tags": json.loads(r[6]) if r[6] else [],
+            }
+            for r in rows
+        ]
 
     async def ensure_session(self, session_id: str) -> None:
         """Register session on first sight."""
@@ -437,6 +686,10 @@ class MemoryRepository:
                     )
                     await conn.execute(
                         "DELETE FROM vec_memories WHERE memory_id = ?",
+                        (fact["id"],),
+                    )
+                    await conn.execute(
+                        "DELETE FROM memory_entities WHERE memory_id = ?",
                         (fact["id"],),
                     )
                     pruned += 1

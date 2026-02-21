@@ -60,6 +60,27 @@ class MemoryStatsResult(BaseModel):
     latest_created_at: str | None = Field(default=None, description="ISO timestamp of latest memory")
 
 
+class EntityProfile(BaseModel):
+    """Entity profile for get_entity_info."""
+
+    name: str = Field(description="Canonical entity name")
+    type: str = Field(description="Entity type: person, project, organization, etc.")
+    aliases: list[str] = Field(default_factory=list, description="Alternative names")
+    mention_count: int = Field(ge=0, description="Number of times entity was mentioned")
+
+
+class GetEntityInfoResult(BaseModel):
+    """Result of get_entity_info."""
+
+    entity: EntityProfile | None = Field(
+        default=None, description="Entity profile if found"
+    )
+    memories: list[MemoryItem] = Field(
+        default_factory=list, description="Memories linked to this entity"
+    )
+    found: bool = Field(description="True if entity was found")
+
+
 # --- Structured output models (Consolidator tools) ---
 
 
@@ -132,10 +153,13 @@ class IsSessionConsolidatedResult(BaseModel):
 # --- Tool builders ---
 
 EmbedFn = Callable[[str], Awaitable[list[float] | None]] | None
+EntityLinkFn = Callable[[str, str], Awaitable[list[str] | None]] | None
 
 
-def build_tools(repo: Any, embed_fn: EmbedFn = None) -> list[Any]:
-    """Build the 5 memory tools bound to the given repository and optional embed_fn."""
+def build_tools(
+    repo: Any, embed_fn: EmbedFn = None, entity_link_fn: EntityLinkFn = None
+) -> list[Any]:
+    """Build the 6 memory tools bound to the given repository and optional embed_fn, entity_link_fn."""
 
     @function_tool(name_override="search_memory")
     async def search_memory(
@@ -182,6 +206,8 @@ def build_tools(repo: Any, embed_fn: EmbedFn = None) -> list[Any]:
             embedding = await embed_fn(content)
             if embedding:
                 await repo.save_embedding(memory_id, embedding)
+        if entity_link_fn:
+            await entity_link_fn(memory_id, content)
         preview = f"{content[:80]}..." if len(content) > 80 else content
         return RememberFactResult(
             memory_id=memory_id,
@@ -207,6 +233,8 @@ def build_tools(repo: Any, embed_fn: EmbedFn = None) -> list[Any]:
             embedding = await embed_fn(new_content)
             if embedding:
                 await repo.save_embedding(new_id, embedding)
+        if entity_link_fn:
+            await entity_link_fn(new_id, new_content)
         return CorrectFactResult(
             success=True,
             new_memory_id=new_id,
@@ -242,11 +270,62 @@ def build_tools(repo: Any, embed_fn: EmbedFn = None) -> list[Any]:
         )
         return MemoryStatsResult(counts=counts, latest_created_at=latest_str)
 
-    return [search_memory, remember_fact, correct_fact, confirm_fact, memory_stats]
+    @function_tool(name_override="get_entity_info")
+    async def get_entity_info(
+        name: Annotated[
+            str,
+            Field(min_length=1, description="Entity name or alias to search"),
+        ],
+        kind: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Filter memories by kind: fact or episode",
+            ),
+        ] = None,
+        limit: Annotated[
+            int, Field(default=10, ge=1, le=50, description="Max memories to return")
+        ] = 10,
+    ) -> GetEntityInfoResult:
+        """Get profile of an entity: facts, episodes, aliases. For 'Tell me about X'."""
+        entities = await repo.search_entities(name, limit=3)
+        if not entities:
+            return GetEntityInfoResult(
+                entity=None, memories=[], found=False
+            )
+        entity = entities[0]
+        memories = await repo.get_memories_by_entity(
+            entity["id"], kind=kind, limit=limit
+        )
+        return GetEntityInfoResult(
+            entity=EntityProfile(
+                name=entity["canonical_name"],
+                type=entity["type"],
+                aliases=entity["aliases"],
+                mention_count=entity["mention_count"],
+            ),
+            memories=[
+                MemoryItem(id=m["id"], kind=m["kind"], content=m["content"])
+                for m in memories
+            ],
+            found=True,
+        )
+
+    return [
+        search_memory,
+        remember_fact,
+        correct_fact,
+        confirm_fact,
+        memory_stats,
+        get_entity_info,
+    ]
 
 
 def build_consolidator_tools(
-    repo: Any, episodes_per_chunk: int = 30, embed_fn: EmbedFn = None
+    repo: Any,
+    episodes_per_chunk: int = 30,
+    embed_fn: EmbedFn = None,
+    entity_link_fn: EntityLinkFn = None,
 ) -> list[Any]:
     """Build consolidator-only tools. Not exposed to Orchestrator."""
 
@@ -290,13 +369,17 @@ def build_consolidator_tools(
         """Save multiple facts in one call. Use after extracting from all episode chunks."""
         batch = [f.model_dump() for f in facts]
         result = await repo.save_facts_batch(session_id, batch)
-        if embed_fn:
+        if embed_fn or entity_link_fn:
             for s in result["saved"]:
                 content = s.get("content")
-                if content:
-                    embedding = await embed_fn(content)
-                    if embedding:
-                        await repo.save_embedding(s["id"], embedding)
+                memory_id = s.get("id")
+                if content and memory_id:
+                    if embed_fn:
+                        embedding = await embed_fn(content)
+                        if embedding:
+                            await repo.save_embedding(memory_id, embedding)
+                    if entity_link_fn:
+                        await entity_link_fn(memory_id, content)
         saved_items = [
             SavedFactItem(
                 id=s["id"],

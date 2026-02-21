@@ -11,6 +11,7 @@ if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
 from db import MemoryDatabase
+from entity_linker import extract_and_link
 from repository import MemoryRepository
 from tools import build_consolidator_tools, build_tools
 
@@ -27,6 +28,7 @@ class MemoryExtension:
         self._current_session_id: str | None = None
         self._episodes_per_chunk: int = 30
         self._embed_fn: Any = None
+        self._entity_link_fn: Any = None
 
     # --- ContextProvider ---
     @property
@@ -61,14 +63,14 @@ class MemoryExtension:
     def get_tools(self) -> list[Any]:
         if not self._repo:
             return []
-        return build_tools(self._repo, self._embed_fn)
+        return build_tools(self._repo, self._embed_fn, self._entity_link_fn)
 
     def get_consolidator_tools(self) -> list[Any]:
         """Tools for consolidator agent only. Not exposed to Orchestrator."""
         if not self._repo:
             return []
         return build_consolidator_tools(
-            self._repo, self._episodes_per_chunk, self._embed_fn
+            self._repo, self._episodes_per_chunk, self._embed_fn, self._entity_link_fn
         )
 
     # --- Lifecycle ---
@@ -91,6 +93,14 @@ class MemoryExtension:
             elif not self._db.vec_available:
                 logger.warning("vec_memories dimension mismatch, FTS5-only mode")
         self._repo = MemoryRepository(self._db)
+        ner_ext = context.get_extension("ner")
+        if ner_ext and ner_ext.health_check():
+            self._entity_link_fn = lambda mid, content: extract_and_link(
+                ner_ext, self._repo, mid, content
+            )
+        else:
+            logger.info("ner extension unavailable, entity extraction disabled")
+            self._entity_link_fn = None
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
 
@@ -123,11 +133,13 @@ class MemoryExtension:
 
         if not text:
             return
-        await self._repo.save_episode(
+        memory_id = await self._repo.save_episode(
             f"{text}",
             session_id=self._current_session_id,
             source_role="user",
         )
+        if self._entity_link_fn:
+            await self._entity_link_fn(memory_id, text)
 
     async def _on_agent_response(self, data: dict[str, Any]) -> None:
         """MessageRouter: agent_response. Save assistant response as episode."""
@@ -137,11 +149,13 @@ class MemoryExtension:
         if not text:
             return
         agent_name = data.get("agent_id") or "orchestrator"
-        await self._repo.save_episode(
+        memory_id = await self._repo.save_episode(
             f"{text}",
             session_id=self._current_session_id,
             source_role=agent_name,
         )
+        if self._entity_link_fn:
+            await self._entity_link_fn(memory_id, text)
 
     async def _trigger_consolidation(self, current_session_id: str) -> None:
         """Emit memory.session_completed for all pending non-current sessions."""
