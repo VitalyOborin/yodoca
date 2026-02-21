@@ -14,12 +14,12 @@ Extract the session_id from the task (the token after "session " and before ": e
 3. **Accumulate all episodes** from all chunks before extracting facts. Do NOT call save_facts_batch until has_more=false (all chunks fetched). Previous results stay in conversation history.
 
 4. **Extract facts:** From all episodes, identify facts worth remembering. Extract ONLY facts that are specific to THIS user and conversation:
-
+   Allowed facts:
    ✅ User preferences, decisions, personal data
    ✅ Project-specific information
    ✅ Things the user told you about themselves, other persons, other organizations, other projects, etc.
    ✅ Non-obvious conclusions from the conversation
-
+   Forbidden facts:
    ❌ General world knowledge (for example:
       "Paris is the capital of France",
       "Water freezes at 0°C",
@@ -31,10 +31,12 @@ Extract the session_id from the task (the token after "session " and before ": e
    )
    ❌ Facts any LLM already knows
    ❌ Encyclopedic information not specific to this user
+   ❌ Meta-commands and requests about the assistant itself
+   ❌ Technical instructions given to the assistant
 
    **Criterion:** If the fact can be found in Wikipedia — do not save it.
 
-5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags.
+5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags. **IMPORTANT:** Save facts in the same language as the conversation.
 
 6. **Mark complete:** Call `mark_session_consolidated(session_id)` when done.
 
