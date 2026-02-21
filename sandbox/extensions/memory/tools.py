@@ -75,19 +75,40 @@ class EpisodeItem(BaseModel):
 
 
 class GetEpisodesResult(BaseModel):
-    """Episodes for a session."""
+    """Episodes for a session (paginated)."""
 
     session_id: str = Field(description="Session ID")
-    episodes: list[EpisodeItem] = Field(default_factory=list, description="Episodes in the session")
-    total: int = Field(ge=0, description="Number of episodes")
+    episodes: list[EpisodeItem] = Field(default_factory=list, description="Episodes in this chunk")
+    total: int = Field(ge=0, description="Total episodes in session")
+    has_more: bool = Field(default=False, description="True if more chunks available")
+    next_offset: int | None = Field(default=None, description="Offset for next chunk if has_more")
 
 
-class SaveFactWithSourcesResult(BaseModel):
-    """Result of saving a fact with provenance."""
+class FactInput(BaseModel):
+    """Single fact for batch save."""
 
-    memory_id: str = Field(description="ID of the saved fact")
-    content_preview: str = Field(description="Short preview of the saved content")
-    success: bool = Field(description="Whether the save succeeded")
+    content: str = Field(min_length=1, description="Fact as a clear standalone statement")
+    source_ids: list[str] = Field(description="Episode IDs supporting this fact")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    tags: list[str] = Field(default_factory=list)
+
+
+class SavedFactItem(BaseModel):
+    """A saved fact from batch."""
+
+    id: str = Field(description="Saved fact ID")
+    content_preview: str = Field(description="First 80 chars of content")
+    duplicate: bool = Field(default=False, description="True if skipped as duplicate")
+
+
+class SaveFactsBatchResult(BaseModel):
+    """Result of batch fact save."""
+
+    session_id: str = Field(description="Session ID")
+    saved: list[SavedFactItem] = Field(default_factory=list)
+    saved_count: int = Field(ge=0, description="Number of facts actually saved")
+    skipped_duplicates: int = Field(ge=0, description="Duplicates skipped")
+    errors: list[str] = Field(default_factory=list, description="Errors for failed saves")
 
 
 class MarkSessionResult(BaseModel):
@@ -207,51 +228,63 @@ def build_tools(repo: Any) -> list[Any]:
     return [search_memory, remember_fact, correct_fact, confirm_fact, memory_stats]
 
 
-def build_consolidator_tools(repo: Any) -> list[Any]:
+def build_consolidator_tools(repo: Any, episodes_per_chunk: int = 30) -> list[Any]:
     """Build consolidator-only tools. Not exposed to Orchestrator."""
 
     @function_tool(name_override="get_episodes_for_consolidation")
     async def get_episodes_for_consolidation(
         session_id: Annotated[str, Field(description="Session ID to fetch episodes for")],
+        offset: Annotated[int, Field(default=0, ge=0, description="Offset for pagination")] = 0,
+        limit: Annotated[
+            int,
+            Field(default=episodes_per_chunk, ge=1, le=100, description="Chunk size"),
+        ] = episodes_per_chunk,
     ) -> GetEpisodesResult:
-        """Fetch all episodes for a session. Use before extracting facts."""
-        episodes = await repo.get_episodes_by_session(session_id)
+        """Fetch episodes for a session (paginated). Call with offset=next_offset until has_more=false."""
+        page, total = await repo.get_episodes_by_session(session_id, offset, limit)
         items = [
             EpisodeItem(
                 id=e["id"],
                 role=e.get("source_role"),
                 content=e["content"],
             )
-            for e in episodes
+            for e in page
         ]
+        has_more = (offset + len(page)) < total
+        next_offset = offset + limit if has_more else None
         return GetEpisodesResult(
             session_id=session_id,
             episodes=items,
-            total=len(items),
+            total=total,
+            has_more=has_more,
+            next_offset=next_offset,
         )
 
-    @function_tool(name_override="save_fact_with_sources")
-    async def save_fact_with_sources(
-        content: Annotated[str, Field(min_length=1, description="Fact content")],
-        source_ids: Annotated[
-            list[str],
-            Field(description="Episode IDs that support this fact"),
+    @function_tool(name_override="save_facts_batch")
+    async def save_facts_batch(
+        session_id: Annotated[str, Field(description="Session ID for provenance")],
+        facts: Annotated[
+            list[FactInput],
+            Field(default_factory=list, description="Facts to save (may be empty)"),
         ],
-        session_id: Annotated[
-            str | None,
-            Field(default=None, description="Session ID for provenance"),
-        ] = None,
-        confidence: Annotated[float, Field(default=1.0, ge=0, le=1)] = 1.0,
-    ) -> SaveFactWithSourcesResult:
-        """Save a fact with provenance. source_ids are episode IDs from get_episodes_for_consolidation."""
-        memory_id = await repo.save_fact_with_sources(
-            content, source_ids, session_id=session_id, confidence=confidence
-        )
-        preview = f"{content[:80]}..." if len(content) > 80 else content
-        return SaveFactWithSourcesResult(
-            memory_id=memory_id,
-            content_preview=preview,
-            success=True,
+    ) -> SaveFactsBatchResult:
+        """Save multiple facts in one call. Use after extracting from all episode chunks."""
+        batch = [f.model_dump() for f in facts]
+        result = await repo.save_facts_batch(session_id, batch)
+        saved_items = [
+            SavedFactItem(
+                id=s["id"],
+                content_preview=s["content_preview"],
+                duplicate=s.get("duplicate", False),
+            )
+            for s in result["saved"]
+        ]
+        return SaveFactsBatchResult(
+            session_id=session_id,
+            saved=saved_items,
+            saved_count=len(saved_items),
+            skipped_duplicates=result["skipped_duplicates"],
+            errors=result["errors"],
         )
 
     @function_tool(name_override="mark_session_consolidated")
@@ -277,7 +310,7 @@ def build_consolidator_tools(repo: Any) -> list[Any]:
 
     return [
         get_episodes_for_consolidation,
-        save_fact_with_sources,
+        save_facts_batch,
         mark_session_consolidated,
         is_session_consolidated,
     ]

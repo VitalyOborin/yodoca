@@ -12,7 +12,7 @@ agent:
   uses_tools:
     - memory
   limits:
-    max_turns: 5
+    max_turns: 15  # N_chunks + 3; supports up to ~12 chunks = 360 episodes
 
 events:
   subscribes:

@@ -243,21 +243,85 @@ class MemoryRepository:
         row = await cursor.fetchone()
         return row[0] if row and row[0] is not None else 0
 
-    async def get_episodes_by_session(self, session_id: str) -> list[dict[str, Any]]:
-        """Fetch all episodes for a session (for consolidation)."""
+    async def get_episodes_by_session(
+        self, session_id: str, offset: int = 0, limit: int = 30
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Fetch episodes for a session (paginated). Returns (page, total_count)."""
         conn = await self._db._ensure_conn()
         cursor = await conn.execute(
-            """SELECT id, content, source_role FROM memories
+            """SELECT id, content, source_role, COUNT(*) OVER() AS total_count
+               FROM memories
                WHERE session_id = ? AND kind = 'episode'
                  AND valid_until IS NULL
-               ORDER BY created_at""",
-            (session_id,),
+               ORDER BY created_at
+               LIMIT ? OFFSET ?""",
+            (session_id, limit, offset),
         )
         rows = await cursor.fetchall()
-        return [{"id": r[0], "content": r[1], "source_role": r[2]} for r in rows]
+        total = int(rows[0][3]) if rows else 0
+        page = [{"id": r[0], "content": r[1], "source_role": r[2]} for r in rows]
+        return (page, total)
+
+    async def save_facts_batch(
+        self, session_id: str, facts: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Save facts with two-level deduplication. Returns saved, skipped_duplicates, errors."""
+        result: dict[str, Any] = {
+            "saved": [],
+            "skipped_duplicates": 0,
+            "errors": [],
+        }
+        if not facts:
+            return result
+
+        seen: set[str] = set()
+        for fact in facts:
+            content = (fact.get("content") or "").strip()
+            if not content:
+                continue
+            normalized = content.lower().strip()
+            # Level 1: intra-batch exact dupes
+            if normalized in seen:
+                result["skipped_duplicates"] += 1
+                continue
+            seen.add(normalized)
+
+            # Level 2: against existing memory (TODO: batch FTS lookup for future optimization)
+            existing = await self.fts_search(content, kind="fact", limit=1)
+            if existing:
+                wa = set(content.lower().split())
+                wb = set(existing[0]["content"].lower().split())
+                if len(wa) >= 5 and len(wb) >= 5 and _jaccard(content, existing[0]["content"]) > 0.75:
+                    result["skipped_duplicates"] += 1
+                    continue
+
+            try:
+                memory_id = await self.save_fact_with_sources(
+                    content=content,
+                    source_ids=fact.get("source_ids") or [],
+                    session_id=session_id,
+                    confidence=float(fact.get("confidence", 1.0)),
+                    tags=fact.get("tags"),
+                )
+                preview = f"{content[:80]}..." if len(content) > 80 else content
+                result["saved"].append(
+                    {"id": memory_id, "content_preview": preview, "duplicate": False}
+                )
+            except Exception as e:
+                result["errors"].append(f"{content[:50]}...: {e}")
+
+        return result
 
 
 def _escape_fts5_query(q: str) -> str:
     """Sanitize for FTS5: keep only word chars and spaces. Prevents query syntax errors."""
     q = re.sub(r"[^\w\s]", " ", q, flags=re.UNICODE)
     return " ".join(w for w in q.split() if w)
+
+
+def _jaccard(a: str, b: str) -> float:
+    """Jaccard similarity on word sets. Used for Level 2 dedup (5+ words only)."""
+    wa, wb = set(a.lower().split()), set(b.lower().split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)

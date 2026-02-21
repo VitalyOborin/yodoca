@@ -25,6 +25,7 @@ class MemoryExtension:
         self._repo: MemoryRepository | None = None
         self._ctx: Any = None
         self._current_session_id: str | None = None
+        self._episodes_per_chunk: int = 30
 
     # --- ContextProvider ---
     @property
@@ -60,11 +61,12 @@ class MemoryExtension:
         """Tools for consolidator agent only. Not exposed to Orchestrator."""
         if not self._repo:
             return []
-        return build_consolidator_tools(self._repo)
+        return build_consolidator_tools(self._repo, self._episodes_per_chunk)
 
     # --- Lifecycle ---
     async def initialize(self, context: Any) -> None:
         self._ctx = context
+        self._episodes_per_chunk = context.get_config("episodes_per_chunk", 30)
         db_path = context.data_dir / "memory.db"
         self._db = MemoryDatabase(db_path)
         await self._db.initialize()
