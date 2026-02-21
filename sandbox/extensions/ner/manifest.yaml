@@ -1,0 +1,34 @@
+id: ner
+name: Named Entity Recognition
+version: "1.0.0"
+description: >
+  Multi-provider NER with configurable strategy pipelines.
+  Providers: regex (always-on), spaCy (local ML), LLM (cloud, high accuracy).
+entrypoint: main:NerExtension
+depends_on: []
+config:
+  cache_max_size: 512
+  strategies:
+    fast:
+      pipeline: [regex]
+      cache: true
+      max_latency_ms: 10
+    local:
+      pipeline: [regex, spacy]
+      cache: true
+      max_latency_ms: 200
+    accurate:
+      pipeline: [regex, spacy, llm]
+      cache: true
+      max_latency_ms: 5000
+  providers:
+    regex:
+      enabled: true
+    spacy:
+      enabled: false
+      model: xx_ent_wiki_sm
+    llm:
+      enabled: false
+      provider: null
+      model: null
+enabled: true
