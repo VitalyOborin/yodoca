@@ -34,6 +34,11 @@ class ConsolidationResult(BaseModel):
         ge=0,
         description="Number of facts saved to memory",
     )
+    conflicts_resolved: int = Field(
+        default=0,
+        ge=0,
+        description="Contradictions detected and resolved",
+    )
     skipped: bool = Field(
         default=False,
         description="True if session was already consolidated (no work done)",

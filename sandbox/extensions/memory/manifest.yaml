@@ -7,4 +7,5 @@ depends_on:
   - embedding
 config:
   episodes_per_chunk: 30
+  conflict_min_confidence: 0.8
 enabled: true

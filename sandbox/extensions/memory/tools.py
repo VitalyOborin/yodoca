@@ -4,11 +4,14 @@ All tools return structured output (Pydantic models) for reliable parsing by the
 See: https://openai.github.io/openai-agents-python/tools/
 """
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Awaitable, Callable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 # --- Structured output models (Orchestrator tools) ---
@@ -119,6 +122,10 @@ class SavedFactItem(BaseModel):
 
     id: str = Field(description="Saved fact ID")
     content_preview: str = Field(description="First 80 chars of content")
+    confidence: float = Field(
+        default=0.8,
+        description="Confidence 0-1; use for conflict detection (skip if < 0.8)",
+    )
     duplicate: bool = Field(default=False, description="True if skipped as duplicate")
 
 
@@ -148,6 +155,35 @@ class IsSessionConsolidatedResult(BaseModel):
 
     session_id: str = Field(description="Session ID that was checked")
     consolidated: bool = Field(description="True if session was already consolidated")
+
+
+class ConflictCandidate(BaseModel):
+    """A potentially conflicting fact from memory."""
+
+    id: str = Field(description="Memory ID of the candidate")
+    content: str = Field(description="Fact content")
+    confidence: float = Field(description="Current confidence of the fact")
+
+
+class DetectConflictsResult(BaseModel):
+    """Result of conflict detection for a new fact."""
+
+    candidates: list[ConflictCandidate] = Field(
+        default_factory=list,
+        description="Potentially conflicting facts from memory",
+    )
+    has_candidates: bool = Field(
+        description="True if any candidates were found",
+    )
+
+
+class ResolveConflictResult(BaseModel):
+    """Result of resolving a conflict."""
+
+    success: bool = Field(description="Whether the resolution succeeded")
+    old_fact_id: str = Field(description="ID of the superseded fact")
+    new_fact_id: str = Field(description="ID of the new fact")
+    message: str = Field(description="Human-readable status message")
 
 
 # --- Tool builders ---
@@ -326,6 +362,7 @@ def build_consolidator_tools(
     episodes_per_chunk: int = 30,
     embed_fn: EmbedFn = None,
     entity_link_fn: EntityLinkFn = None,
+    conflict_min_confidence: float = 0.8,
 ) -> list[Any]:
     """Build consolidator-only tools. Not exposed to Orchestrator."""
 
@@ -384,6 +421,7 @@ def build_consolidator_tools(
             SavedFactItem(
                 id=s["id"],
                 content_preview=s["content_preview"],
+                confidence=s.get("confidence", 0.8),
                 duplicate=s.get("duplicate", False),
             )
             for s in result["saved"]
@@ -417,9 +455,88 @@ def build_consolidator_tools(
         ok = await repo.is_session_consolidated(session_id)
         return IsSessionConsolidatedResult(session_id=session_id, consolidated=ok)
 
+    @function_tool(name_override="detect_conflicts")
+    async def detect_conflicts(
+        new_fact_id: Annotated[str, Field(description="ID of the newly saved fact")],
+        new_fact_content: Annotated[str, Field(description="Content of the new fact")],
+        session_id: Annotated[
+            str,
+            Field(
+                default="",
+                description="Session ID (auto-filled from fact if empty, to exclude same-session facts)",
+            ),
+        ] = "",
+    ) -> DetectConflictsResult:
+        """Find potentially conflicting facts from memory. Returns candidates for LLM evaluation."""
+        exclude_sid = session_id
+        if not exclude_sid:
+            exclude_sid = await repo.get_memory_session_id(new_fact_id) or ""
+        query_embedding = await embed_fn(new_fact_content) if embed_fn else None
+        results = await repo.hybrid_search(
+            new_fact_content,
+            query_embedding=query_embedding,
+            kind="fact",
+            limit=5,
+            exclude_session_id=exclude_sid or None,
+        )
+        candidates = [
+            ConflictCandidate(
+                id=r["id"],
+                content=r["content"],
+                confidence=float(r.get("confidence", 1.0)),
+            )
+            for r in results
+            if r["id"] != new_fact_id
+        ]
+        return DetectConflictsResult(
+            candidates=candidates,
+            has_candidates=len(candidates) > 0,
+        )
+
+    @function_tool(name_override="resolve_conflict")
+    async def resolve_conflict(
+        new_fact_id: Annotated[str, Field(description="ID of the new fact (superseding)")],
+        old_fact_id: Annotated[str, Field(description="ID of the old fact to supersede")],
+        reason: Annotated[str, Field(description="Brief reason for the conflict resolution")],
+    ) -> ResolveConflictResult:
+        """Resolve a conflict: drop old fact confidence to 0.3, mark new fact as superseding."""
+        ok_old = await repo.update_confidence(
+            old_fact_id, confidence=0.3, decay_rate=0.5
+        )
+        if not ok_old:
+            return ResolveConflictResult(
+                success=False,
+                old_fact_id=old_fact_id,
+                new_fact_id=new_fact_id,
+                message=f"Old fact {old_fact_id} not found or already superseded.",
+            )
+        ok_new = await repo.update_attributes(
+            new_fact_id,
+            {"supersedes": old_fact_id, "conflict_reason": reason},
+        )
+        if not ok_new:
+            logger.warning(
+                "Conflict resolved but could not update new fact attributes: %s",
+                new_fact_id,
+            )
+        logger.info(
+            "Conflict resolved: %s supersedes %s (reason: %s)",
+            new_fact_id,
+            old_fact_id,
+            reason,
+        )
+        return ResolveConflictResult(
+            success=True,
+            old_fact_id=old_fact_id,
+            new_fact_id=new_fact_id,
+            message=f"Resolved: {new_fact_id} supersedes {old_fact_id}.",
+        )
+
     return [
         get_episodes_for_consolidation,
         save_facts_batch,
         mark_session_consolidated,
         is_session_consolidated,
+        detect_conflicts,
+        resolve_conflict,
     ]

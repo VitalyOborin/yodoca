@@ -70,7 +70,11 @@ class MemoryExtension:
         if not self._repo:
             return []
         return build_consolidator_tools(
-            self._repo, self._episodes_per_chunk, self._embed_fn, self._entity_link_fn
+            self._repo,
+            self._episodes_per_chunk,
+            self._embed_fn,
+            self._entity_link_fn,
+            conflict_min_confidence=self._ctx.get_config("conflict_min_confidence", 0.8),
         )
 
     # --- Lifecycle ---

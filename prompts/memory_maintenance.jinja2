@@ -40,12 +40,23 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags. **IMPORTANT:** Save facts in the same language as the conversation.
 
+5.5. **Detect and resolve conflicts:** For each saved fact with confidence >= 0.8 (from save_facts_batch result), call `detect_conflicts(new_fact_id, content)`. Skip facts with confidence < 0.8 — they are tentative and not worth checking. If save_facts_batch returned 0 saved facts, skip this step entirely.
+
+   If candidates are returned, evaluate whether any is a genuine contradiction (not just an update or clarification). A contradiction means the old and new facts CANNOT both be true simultaneously.
+   Examples:
+   - CONFLICT: "Works at Google" vs "Works at Amazon" (mutually exclusive)
+   - NOT a conflict: "Likes Python" vs "Also likes Rust" (compatible)
+   - NOT a conflict: "Started project Alpha" vs "Project Alpha uses React" (different aspects)
+   If a genuine conflict exists, call `resolve_conflict(new_fact_id, old_fact_id, reason)`.
+   If detect_conflicts returns has_candidates=false, move to the next fact immediately.
+
 6. **Mark complete:** Call `mark_session_consolidated(session_id)` when done.
 
 7. **Produce structured output:** Your final response must be a JSON object with:
    - session_id: the session you consolidated
    - success: true if consolidation completed (or was skipped)
    - facts_extracted: set to saved_count from save_facts_batch result (not the number you attempted to save)
+   - conflicts_resolved: number of contradictions you resolved via resolve_conflict
    - skipped: true only if is_session_consolidated returned consolidated=true
    - summary: brief human-readable summary (e.g. "Extracted 3 preferences" or "Already consolidated")
 

@@ -13,6 +13,9 @@ from db import MemoryDatabase  # noqa: I001 - db loaded from ext dir via sys.pat
 
 logger = logging.getLogger(__name__)
 
+# If fact count exceeds this, fall back to per-fact FTS for Level 2 dedup (memory footprint).
+_DEDUP_PREFETCH_LIMIT = 20_000
+
 
 class MemoryRepository:
     """Database operations for memories. FTS5 sync is handled by DB triggers."""
@@ -120,6 +123,35 @@ class MemoryRepository:
         )
         await conn.commit()
         return cursor.rowcount is not None and cursor.rowcount > 0
+
+    async def update_attributes(self, memory_id: str, patch: dict[str, Any]) -> bool:
+        """Merge patch into memory's attributes JSON. Returns True if row existed."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT attributes FROM memories WHERE id = ? AND valid_until IS NULL",
+            (memory_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        current = json.loads(row[0]) if row[0] else {}
+        merged = {**current, **patch}
+        await conn.execute(
+            "UPDATE memories SET attributes = ? WHERE id = ?",
+            (json.dumps(merged), memory_id),
+        )
+        await conn.commit()
+        return True
+
+    async def get_memory_session_id(self, memory_id: str) -> str | None:
+        """Return session_id for a memory, or None if not found."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT session_id FROM memories WHERE id = ? AND valid_until IS NULL",
+            (memory_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else None
 
     async def fts_search(
         self,
@@ -708,6 +740,35 @@ class MemoryRepository:
         await conn.commit()
         return {"decayed": decayed, "pruned": pruned, "errors": errors}
 
+    async def _get_existing_facts_for_dedup(
+        self, kind: str = "fact"
+    ) -> list[dict[str, str]]:
+        """Fetch id + content of all active facts for batch dedup. Returns lightweight dicts."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT id, content FROM memories
+               WHERE kind = ? AND valid_until IS NULL""",
+            (kind,),
+        )
+        rows = await cursor.fetchall()
+        return [{"id": r[0], "content": r[1] or ""} for r in rows]
+
+    @staticmethod
+    def _is_duplicate_of_existing(
+        content: str,
+        existing: list[dict[str, str]],
+        threshold: float = 0.75,
+    ) -> bool:
+        """Check if content is a Jaccard duplicate of any existing fact."""
+        wa = set(content.lower().split())
+        if len(wa) < 5:
+            return False
+        for item in existing:
+            wb = set((item.get("content") or "").lower().split())
+            if len(wb) >= 5 and _jaccard(content, item["content"]) > threshold:
+                return True
+        return False
+
     async def save_facts_batch(
         self, session_id: str, facts: list[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -719,6 +780,19 @@ class MemoryRepository:
         }
         if not facts:
             return result
+
+        # Level 2: pre-fetch existing facts for batch dedup, or fall back to per-fact FTS
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT COUNT(*) FROM memories
+               WHERE kind = 'fact' AND valid_until IS NULL"""
+        )
+        row = await cursor.fetchone()
+        fact_count = int(row[0]) if row and row[0] is not None else 0
+        use_prefetch = fact_count <= _DEDUP_PREFETCH_LIMIT
+        existing_facts: list[dict[str, str]] = []
+        if use_prefetch:
+            existing_facts = await self._get_existing_facts_for_dedup(kind="fact")
 
         seen: set[str] = set()
         for fact in facts:
@@ -732,21 +806,31 @@ class MemoryRepository:
                 continue
             seen.add(normalized)
 
-            # Level 2: against existing memory (TODO: batch FTS lookup for future optimization)
-            existing = await self.fts_search(content, kind="fact", limit=1)
-            if existing:
-                wa = set(content.lower().split())
-                wb = set(existing[0]["content"].lower().split())
-                if len(wa) >= 5 and len(wb) >= 5 and _jaccard(content, existing[0]["content"]) > 0.75:
+            # Level 2: against existing memory
+            if use_prefetch:
+                if self._is_duplicate_of_existing(content, existing_facts):
                     result["skipped_duplicates"] += 1
                     continue
+            else:
+                existing = await self.fts_search(content, kind="fact", limit=1)
+                if existing:
+                    wa = set(content.lower().split())
+                    wb = set(existing[0]["content"].lower().split())
+                    if (
+                        len(wa) >= 5
+                        and len(wb) >= 5
+                        and _jaccard(content, existing[0]["content"]) > 0.75
+                    ):
+                        result["skipped_duplicates"] += 1
+                        continue
 
             try:
+                confidence = float(fact.get("confidence", 1.0))
                 memory_id = await self.save_fact_with_sources(
                     content=content,
                     source_ids=fact.get("source_ids") or [],
                     session_id=session_id,
-                    confidence=float(fact.get("confidence", 1.0)),
+                    confidence=confidence,
                     tags=fact.get("tags"),
                 )
                 preview = f"{content[:80]}..." if len(content) > 80 else content
@@ -755,6 +839,7 @@ class MemoryRepository:
                         "id": memory_id,
                         "content_preview": preview,
                         "content": content,
+                        "confidence": confidence,
                         "duplicate": False,
                     }
                 )

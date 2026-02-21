@@ -9,6 +9,7 @@ entrypoint: main:MemoryMaintenanceExtension
 
 config:
   decay_threshold: 0.05
+  conflict_min_confidence: 0.8
 
 agent:
   integration_mode: tool
@@ -17,7 +18,7 @@ agent:
   uses_tools:
     - memory
   limits:
-    max_turns: 15
+    max_turns: 30
 
 schedules:
   - name: nightly_consolidation
