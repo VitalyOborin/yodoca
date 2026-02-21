@@ -44,7 +44,7 @@ The memory system is split into two distinct layers. **This ADR covers only long
 | **Pragmatic over academic**                 | Solve real problems for a single-user agent; avoid solving problems that do not exist. Aligns with "Minimalist SOTA" and "Incremental Knowledge Graph" approaches. |
 | **LLM off the hot path**                    | No LLM calls during event ingestion. LLM only at night (consolidation) and on explicit tool calls.                                                                 |
 | **Single table by kind**                    | One `memories` table with `kind` field instead of multiple layer-specific tables.                                                                                  |
-| **Memory = ServiceProvider + ToolProvider** | Memory does not implement `SchedulerProvider`. Memory owns `consolidate()`; `self_reflection` triggers it on schedule.                                             |
+| **Memory = ServiceProvider + ToolProvider** | Memory does not implement `SchedulerProvider`. Memory owns consolidation tools; `memory_maintenance` (SchedulerProvider) triggers it via manifest schedules. |
 | **EventBus as integration point**           | Memory subscribes to `user.message` (EventBus) and `agent_response` (MessageRouter) via `context.subscribe_event()` and `context.subscribe()`.                     |
 | **Context injection**                       | One generic kernel extension point: loader/router calls `search_memory()` before each agent invocation and prepends result to the prompt. See §10.                 |
 | **Schema-first, logic-later**               | Deploy full schema from day one; implement only critical paths initially. Enables no-migration evolution.                                                          |
@@ -175,13 +175,13 @@ extract_entities_regex() → resolve_or_create_entity() → update entity_ids
 (regex/heuristics only; no LLM)
 ```
 
-### 8. Night Consolidation (Memory owns logic; self_reflection triggers)
+### 8. Night Consolidation (Memory owns logic; memory_maintenance triggers)
 
-**Consolidation logic lives inside the Memory extension.** Memory exposes `consolidate()` (or `memory_consolidate()` as a callable method). The `self_reflection` extension implements `SchedulerProvider` and, on its cron tick (e.g. 01:00), calls `memory_ext.consolidate()`. Memory is **fully autonomous** — it contains all logic; self_reflection only triggers it on schedule.
+**Consolidation logic lives inside the Memory extension.** Memory exposes consolidation tools (e.g. `get_consolidator_tools()`). The `memory_maintenance` extension implements `SchedulerProvider` with manifest schedules (e.g. `0 3 * * *`); it calls `execute_task("execute_consolidation")` which emits `memory.session_completed` for pending sessions. The consolidator agent (invoked via EventBus) uses Memory tools. Memory is **fully autonomous** — it contains all logic; memory_maintenance only triggers it on schedule.
 
 ```
-01:00 (self_reflection.execute()) →
-  memory_ext.consolidate() →
+03:00 (memory_maintenance.execute_task) →
+  emit("memory.session_completed") → consolidator agent →
     decay()       — Ebbinghaus on all fact/preference
     extract()     — LLM: extract facts from episodes over N days
     conflict()   — LLM prompt: detect contradictions against existing facts (same entity)
@@ -191,7 +191,7 @@ extract_entities_regex() → resolve_or_create_entity() → update entity_ids
 
 **Conflict detection:** The `consolidate()` prompt explicitly instructs the LLM: *"For each new fact, find direct contradictions in existing facts (same entity, opposite claim). If found: set old fact's confidence to 0.3; add to new fact's attributes: {supersedes: old_memory_id}."* This covers common cases (user changed job, moved, changed preference) without online LLM calls — done once at night.
 
-**If self_reflection is not implemented:** Memory can expose `memory_consolidate()` as an agent tool. The user or another scheduler can trigger it manually. Alternatively, Memory could run a minimal internal consolidation (e.g. decay + prune only, no LLM) on a background timer — but the preferred design is: consolidation method in Memory, trigger from self_reflection.
+**If memory_maintenance is not loaded:** Memory can expose `memory_consolidate()` as an agent tool. The user or another scheduler can trigger it manually. Alternatively, Memory could run a minimal internal consolidation (e.g. decay + prune only, no LLM) on a background timer — but the preferred design is: consolidation tools in Memory, trigger from memory_maintenance (SchedulerProvider with manifest schedules).
 
 ### 9. Entity Extraction
 
@@ -281,13 +281,13 @@ Both handlers call `save_episode(content)` in the hot path.
 | Risk                                          | Mitigation                                                                                                                                                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Regex entity extraction misses some entities  | Phase 4 adds LLM resolution for low-confidence cases.                                                                                                                                                  |
-| self_reflection extension not yet implemented | Memory exposes `consolidate()`; self_reflection calls it when available. Until then, `memory_consolidate()` can be an agent tool for manual trigger, or a minimal internal timer (decay + prune only). |
+| memory_maintenance extension not loaded | Memory exposes consolidation tools; memory_maintenance triggers via EventBus when loaded. Until then, `memory_consolidate()` can be an agent tool for manual trigger, or a minimal internal timer (decay + prune only). |
 | Context injection requires kernel change      | One generic extension point in loader/router (§10). Documented and minimal.                                                                                                                            |
 
 
 ## Relation to Other ADRs
 
-- **ADR 002** — Memory implements `ServiceProvider` + `ToolProvider`; no `SchedulerProvider`. Memory owns `consolidate()`; self_reflection triggers it on schedule.
+- **ADR 002** — Memory implements `ServiceProvider` + `ToolProvider`; no `SchedulerProvider`. Memory owns consolidation tools; memory_maintenance (SchedulerProvider with manifest schedules) triggers it.
 - **ADR 003** — Orchestrator uses SDK Sessions for session memory; Memory extension enriches context via long-term retrieval.
 - **ADR 004** — Memory subscribes to EventBus `user.message` and MessageRouter `agent_response`. Uses existing pub/sub; no new EventBus topics.
 - **assistant3 003-memory** — Superseded by this simplified design for assistant4.

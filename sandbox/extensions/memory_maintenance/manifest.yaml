@@ -1,0 +1,38 @@
+id: memory_maintenance
+name: Memory Maintenance
+version: "1.0.0"
+description: >
+  Nightly memory maintenance: extracts semantic facts from completed sessions,
+  applies Ebbinghaus confidence decay, and prunes stale facts.
+
+entrypoint: main:MemoryMaintenanceExtension
+
+config:
+  decay_threshold: 0.05
+
+agent:
+  integration_mode: tool
+  model: gpt-5-mini
+  instructions_file: prompts/memory_maintenance.jinja2
+  uses_tools:
+    - memory
+  limits:
+    max_turns: 15
+
+schedules:
+  - name: nightly_consolidation
+    cron: "0 3 * * *"
+    task: execute_consolidation
+  - name: daily_decay
+    cron: "0 4 * * *"
+    task: execute_decay
+
+events:
+  subscribes:
+    - topic: memory.session_completed
+      handler: invoke_agent
+
+depends_on:
+  - memory
+
+enabled: true

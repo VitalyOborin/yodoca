@@ -1,6 +1,6 @@
 # EventBus → MessageRouter → Memory Flow
 
-This document describes the data flow from user input through EventBus and MessageRouter into the Memory extension, including context injection and consolidation. It aligns with [ADR 005: Simplified Memory System](adr/005-memory.md) and reflects the current implementation in `sandbox/extensions/memory` and `sandbox/extensions/memory_consolidator`.
+This document describes the data flow from user input through EventBus and MessageRouter into the Memory extension, including context injection and consolidation. It aligns with [ADR 005: Simplified Memory System](adr/005-memory.md) and reflects the current implementation in `sandbox/extensions/memory` and `sandbox/extensions/memory_maintenance`.
 
 ---
 
@@ -118,10 +118,10 @@ for session_id in pending:
 
 ### 3.2 Scheduler (nightly)
 
-`memory_consolidator` implements `SchedulerProvider` with cron `0 3 * * *` (03:00 daily). On tick:
+`memory_maintenance` implements `SchedulerProvider`. Schedules are defined in manifest.yaml; Loader calls `execute_task(task_name)` per cron trigger. At 03:00 (`0 3 * * *`):
 
 ```python
-# MemoryConsolidatorExtension.execute()
+# MemoryMaintenanceExtension.execute_task("execute_consolidation")
 pending = await mem.get_all_pending_consolidations()
 for session_id in pending:
     await self._ctx.emit("memory.session_completed", {...})
@@ -129,7 +129,7 @@ for session_id in pending:
 
 ### 3.3 EventBus → Consolidator Agent
 
-`memory_consolidator` manifest declares:
+`memory_maintenance` manifest declares:
 
 ```yaml
 events:
@@ -147,7 +147,7 @@ EventBus "memory.session_completed"
 Loader proactive_handler (invoke_agent)
     │
     ▼
-MemoryConsolidatorExtension.invoke(task, context)
+MemoryMaintenanceExtension.invoke(task, context)
     │
     ▼
 Runner.run(agent, task)  # agent uses memory consolidator tools
@@ -177,7 +177,7 @@ The consolidator agent uses tools from the Memory extension (`get_consolidator_t
 | | Memory | `fts_search` → formatted string |
 | **Consolidation** | Memory / Scheduler | `emit("memory.session_completed", {...})` → EventBus |
 | | EventBus | Dispatch → proactive handler |
-| | Loader | Invoke memory_consolidator agent |
+| | Loader | Invoke memory_maintenance agent |
 | | Consolidator | Tools → MemoryRepository (save_facts_batch, mark_session_consolidated) |
 
 ---
@@ -199,8 +199,8 @@ ADR 005 §11 states that Memory subscribes to:
 
 ### Extension dependencies
 
-- `memory_consolidator` depends on `memory` (manifest `depends_on`).
-- Consolidator gets tools via `context.get_extension("memory").get_consolidator_tools()`.
+- `memory_maintenance` depends on `memory` (manifest `depends_on`).
+- Memory maintenance gets tools via `context.get_extension("memory").get_consolidator_tools()`.
 
 ---
 

@@ -61,7 +61,8 @@ class Loader:
         self._agent_providers: dict[str, AgentProvider] = {}
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
         self._schedulers: dict[str, SchedulerProvider] = {}
-        self._scheduler_next: dict[str, float] = {}
+        # Key: "ext_id::task_name" -> next run timestamp
+        self._task_next: dict[str, float] = {}
         self._cron_task: asyncio.Task[Any] | None = None
         self._health_task: asyncio.Task[Any] | None = None
         self._shutdown_event: asyncio.Event | None = None
@@ -424,6 +425,28 @@ class Loader:
             except Exception as e:
                 logger.exception("start failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
+        now = time.time()
+        for ext_id, ext in self._schedulers.items():
+            manifest = next(m for m in self._manifests if m.id == ext_id)
+            if not manifest.schedules:
+                logger.warning(
+                    "SchedulerProvider %s has no schedules in manifest", ext_id
+                )
+                continue
+            for entry in manifest.schedules:
+                key = f"{ext_id}::{entry.task_name}"
+                try:
+                    c = croniter(entry.cron, now)
+                    self._task_next[key] = c.get_next(float)
+                except Exception as e:
+                    logger.warning(
+                        "Invalid cron '%s' for %s/%s: %s",
+                        entry.cron,
+                        ext_id,
+                        entry.task_name,
+                        e,
+                    )
+                    self._task_next[key] = now + 86400
         self._cron_task = asyncio.create_task(self._cron_loop())
         self._health_task = asyncio.create_task(self._health_check_loop())
 
@@ -498,14 +521,7 @@ class Loader:
                     await ext.stop()
 
     async def _cron_loop(self) -> None:
-        """Every minute evaluate SchedulerProvider schedules; call execute() on match."""
-        now = time.time()
-        for ext_id in self._schedulers:
-            try:
-                c = croniter(self._schedulers[ext_id].get_schedule(), now)
-                self._scheduler_next[ext_id] = c.get_next(float)
-            except Exception:
-                self._scheduler_next[ext_id] = now + 86400
+        """Every minute evaluate SchedulerProvider schedules; call execute_task on match."""
         while True:
             await asyncio.sleep(_CRON_TICK_SEC)
             if not self._router:
@@ -514,18 +530,34 @@ class Loader:
             for ext_id, ext in list(self._schedulers.items()):
                 if self._state.get(ext_id) != ExtensionState.ACTIVE:
                     continue
-                next_run = self._scheduler_next.get(ext_id, 0)
-                if now < next_run:
+                manifest = next(
+                    (m for m in self._manifests if m.id == ext_id), None
+                )
+                if not manifest or not manifest.schedules:
                     continue
-                try:
-                    result = await ext.execute()
-                    self._scheduler_next[ext_id] = croniter(
-                        ext.get_schedule(), next_run
-                    ).get_next(float)
-                    if result and isinstance(result, dict) and "text" in result:
-                        await self._router.notify_user(result["text"])
-                except Exception as e:
-                    logger.exception("scheduler execute failed for %s: %s", ext_id, e)
+                for entry in manifest.schedules:
+                    key = f"{ext_id}::{entry.task_name}"
+                    next_run = self._task_next.get(key, 0)
+                    if now < next_run:
+                        continue
+                    try:
+                        result = await ext.execute_task(entry.task_name)
+                        self._task_next[key] = croniter(
+                            entry.cron, next_run
+                        ).get_next(float)
+                        if (
+                            result
+                            and isinstance(result, dict)
+                            and "text" in result
+                        ):
+                            await self._router.notify_user(result["text"])
+                    except Exception as e:
+                        logger.exception(
+                            "Scheduled task %s/%s failed: %s",
+                            ext_id,
+                            entry.task_name,
+                            e,
+                        )
 
     async def shutdown(self) -> None:
         """Stop then destroy all extensions in reverse order."""

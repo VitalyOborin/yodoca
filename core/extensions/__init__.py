@@ -13,7 +13,7 @@ from core.extensions.contract import (
     ToolProvider,
 )
 from core.extensions.loader import Loader
-from core.extensions.manifest import ExtensionManifest, load_manifest
+from core.extensions.manifest import ExtensionManifest, ScheduleEntry, load_manifest
 from core.extensions.router import MessageRouter
 from core.extensions.context import ExtensionContext
 
@@ -26,6 +26,7 @@ __all__ = [
     "Extension",
     "ExtensionContext",
     "ExtensionManifest",
+    "ScheduleEntry",
     "Loader",
     "MessageRouter",
     "ServiceProvider",

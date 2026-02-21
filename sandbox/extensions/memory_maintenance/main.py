@@ -1,9 +1,11 @@
-"""Memory Consolidator: AgentProvider + SchedulerProvider. Extracts facts from completed sessions.
+"""Memory Maintenance: AgentProvider + SchedulerProvider.
 
-Uses structured output (output_type) per OpenAI Agents SDK:
-https://openai.github.io/openai-agents-python/agents/#output-types
+Responsibilities:
+- Consolidation: extract semantic facts from completed sessions (LLM).
+- Decay + Prune: apply Ebbinghaus decay, soft-delete stale facts (planned).
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,8 @@ from core.extensions.contract import (
     SchedulerProvider,
 )
 from core.extensions.manifest import ExtensionManifest
+
+logger = logging.getLogger(__name__)
 
 
 class ConsolidationResult(BaseModel):
@@ -40,8 +44,8 @@ class ConsolidationResult(BaseModel):
     )
 
 
-class MemoryConsolidatorExtension:
-    """AgentProvider + SchedulerProvider: LLM-based fact extraction from sessions."""
+class MemoryMaintenanceExtension:
+    """AgentProvider + SchedulerProvider: memory consolidation, decay, and pruning."""
 
     def __init__(self) -> None:
         self._agent: Agent | None = None
@@ -49,6 +53,7 @@ class MemoryConsolidatorExtension:
         self._ctx: Any = None
 
     # --- AgentProvider ---
+
     def get_agent_descriptor(self) -> AgentDescriptor:
         assert self._manifest is not None
         return AgentDescriptor(
@@ -89,12 +94,24 @@ class MemoryConsolidatorExtension:
             )
 
     # --- SchedulerProvider ---
-    def get_schedule(self) -> str:
-        return "0 3 * * *"  # 03:00 daily
 
-    async def execute(self) -> dict[str, Any] | None:
+    async def execute_task(self, task_name: str) -> dict[str, Any] | None:
+        match task_name:
+            case "execute_consolidation":
+                return await self._run_consolidation()
+            case "execute_decay":
+                return await self._run_decay_placeholder()
+            case _:
+                logger.warning("Unknown scheduled task: %s", task_name)
+                return None
+
+    # --- Scheduled task implementations ---
+
+    async def _run_consolidation(self) -> dict[str, Any] | None:
+        """Emit memory.session_completed for all pending sessions."""
         mem = self._ctx.get_extension("memory")
         if not mem:
+            logger.warning("memory extension not available for consolidation")
             return None
         pending = await mem.get_all_pending_consolidations()
         for session_id in pending:
@@ -105,9 +122,16 @@ class MemoryConsolidatorExtension:
                     "prompt": f"Consolidate session {session_id}: extract semantic facts.",
                 },
             )
+        logger.info("Consolidation triggered for %d pending sessions", len(pending))
+        return None
+
+    async def _run_decay_placeholder(self) -> dict[str, Any] | None:
+        """Placeholder for future Ebbinghaus decay and prune. Not yet implemented."""
+        logger.info("execute_decay not yet implemented")
         return None
 
     # --- Lifecycle ---
+
     async def initialize(self, context: Any) -> None:
         self._ctx = context
         ext_dir = Path(__file__).resolve().parent

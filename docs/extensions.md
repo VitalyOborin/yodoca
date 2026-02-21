@@ -116,15 +116,27 @@ async def invoke(self, task: str, context: AgentInvocationContext | None = None)
 
 ### `SchedulerProvider`
 
-Periodic task by cron. Loader runs a cron loop every 60 seconds.
+Periodic tasks by schedules from manifest.yaml. Loader reads the `schedules` section and calls `execute_task(task_name)` per cron trigger. Cron loop runs every 60 seconds.
 
 ```python
-def get_schedule(self) -> str:
-    """Cron expression, e.g. '*/5 * * * *'."""
-
-async def execute(self) -> dict[str, Any] | None:
-    """Run the task. Return {'text': '...'} to notify user."""
+async def execute_task(self, task_name: str) -> dict[str, Any] | None:
+    """Execute task by name from manifest schedules[].task (or .name if task empty).
+    Return {'text': '...'} to notify user, or None."""
 ```
+
+Manifest `schedules` section:
+
+```yaml
+schedules:
+  - name: nightly_consolidation
+    cron: "0 3 * * *"
+    task: execute_consolidation   # optional; if empty, uses name
+  - name: daily_decay
+    cron: "0 4 * * *"
+    task: execute_decay
+```
+
+Loader passes `entry.task_name` (task or name) to `execute_task()`. Extension dispatches internally (e.g. via `match task_name`).
 
 ### `ServiceProvider`
 
@@ -183,6 +195,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 | `agent_id` | str | `id` | ModelRouter agent key; defaults to extension id |
 | `agent_config` | dict | null | Per-agent model config for ModelRouter |
 | `events` | object | null | `publishes` (docs only), `subscribes` (Loader wiring) |
+| `schedules` | list | `[]` | For SchedulerProvider: `[{name, cron, task?}]`; Loader calls `execute_task(entry.task_name)` per cron |
 
 ### Agent Section (`agent`)
 

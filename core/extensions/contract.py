@@ -53,13 +53,12 @@ class ServiceProvider(Protocol):
 
 @runtime_checkable
 class SchedulerProvider(Protocol):
-    """Periodic task by cron. Can return alert to notify user."""
+    """Periodic tasks by schedules from manifest.yaml (schedules section).
+    Loader reads schedules from manifest and calls execute_task(name) per cron trigger."""
 
-    def get_schedule(self) -> str:
-        """Cron expression, e.g. '*/5 * * * *'."""
-
-    async def execute(self) -> dict[str, Any] | None:
-        """Run the task. Return {'text': '...'} to notify user."""
+    async def execute_task(self, task_name: str) -> dict[str, Any] | None:
+        """Execute task by name from manifest schedules[].task (or .name if task empty).
+        Return {'text': '...'} to notify user, or None."""
 
 
 @runtime_checkable

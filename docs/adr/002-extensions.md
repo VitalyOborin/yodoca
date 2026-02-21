@@ -67,8 +67,8 @@ Four capabilities. Each answers the question: **"what does the extension do in r
 │                     │  asyncio.Task.                                     │
 │                     │  Examples: memory store, sqlite wrapper, cache    │
 ├─────────────────────┼────────────────────────────────────────────────────┤
-│ SchedulerProvider   │  Reads get_schedule(), manages cron loop,         │
-│                     │  calls execute() on tick.                          │
+│ SchedulerProvider   │  Reads schedules from manifest, manages cron loop, │
+│                     │  calls execute_task(task_name) on tick.            │
 │                     │  Examples: reminders, price monitoring, reports   │
 └─────────────────────┴────────────────────────────────────────────────────┘
 ```

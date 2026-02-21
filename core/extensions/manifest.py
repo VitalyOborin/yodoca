@@ -39,6 +39,22 @@ class EventsConfig(BaseModel):
     subscribes: list[EventSubscribeDeclaration] = Field(default_factory=list)
 
 
+class ScheduleEntry(BaseModel):
+    """One schedule entry in manifest.yaml."""
+
+    name: str = Field(description="Unique schedule identifier")
+    cron: str = Field(description="Cron expression, e.g. '0 3 * * *'")
+    task: str = Field(
+        default="",
+        description="Task name passed to execute_task. If empty, uses name.",
+    )
+
+    @property
+    def task_name(self) -> str:
+        """Task name passed to execute_task."""
+        return self.task or self.name
+
+
 class AgentManifestConfig(BaseModel):
     """Agent section in manifest.yaml."""
 
@@ -71,6 +87,8 @@ class ExtensionManifest(BaseModel):
     agent_config: dict[str, Any] | None = None
     # Optional: events.publishes = documentation only; events.subscribes = Loader wires notify_user
     events: EventsConfig | None = None
+    # Optional: schedules for SchedulerProvider; Loader calls execute_task(entry.task_name) per cron
+    schedules: list[ScheduleEntry] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_entrypoint_or_agent(self) -> "ExtensionManifest":
