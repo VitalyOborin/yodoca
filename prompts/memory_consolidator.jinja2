@@ -9,7 +9,7 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 1. **Check first:** Call `is_session_consolidated(session_id)`. If it returns consolidated=true, produce output with skipped=true and do nothing else — the session was already processed.
 
-2. **Fetch episodes:** Call `get_episodes_for_consolidation(session_id)` to get the conversation. Episodes have id, content, source_role.
+2. **Fetch episodes:** Call `get_episodes_for_consolidation(session_id)` to get the conversation. Episodes have id, role, content. Result includes session_id and total.
 
 3. **Extract facts:** From the conversation, identify facts worth remembering. Extract ONLY facts that are specific to THIS user and conversation:
 

@@ -232,6 +232,17 @@ class MemoryRepository:
         )
         await conn.commit()
 
+    async def count_facts_by_session(self, session_id: str) -> int:
+        """Count facts saved for a session (for consolidation reporting)."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """SELECT COUNT(*) FROM memories
+               WHERE session_id = ? AND kind = 'fact' AND valid_until IS NULL""",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] is not None else 0
+
     async def get_episodes_by_session(self, session_id: str) -> list[dict[str, Any]]:
         """Fetch all episodes for a session (for consolidation)."""
         conn = await self._db._ensure_conn()

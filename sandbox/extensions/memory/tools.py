@@ -67,34 +67,44 @@ class EpisodeItem(BaseModel):
     """A single episode for consolidation."""
 
     id: str = Field(description="Episode ID")
+    role: str | None = Field(
+        default=None,
+        description="Source role: user, orchestrator, or agent_id",
+    )
     content: str = Field(description="Episode content")
-    source_role: str | None = Field(default=None, description="Source role: user or agent name")
 
 
 class GetEpisodesResult(BaseModel):
     """Episodes for a session."""
 
+    session_id: str = Field(description="Session ID")
     episodes: list[EpisodeItem] = Field(default_factory=list, description="Episodes in the session")
-    found: bool = Field(description="True if any episodes were found")
+    total: int = Field(ge=0, description="Number of episodes")
 
 
 class SaveFactWithSourcesResult(BaseModel):
     """Result of saving a fact with provenance."""
 
     memory_id: str = Field(description="ID of the saved fact")
+    content_preview: str = Field(description="Short preview of the saved content")
     success: bool = Field(description="Whether the save succeeded")
 
 
 class MarkSessionResult(BaseModel):
     """Result of marking session consolidated."""
 
-    success: bool = Field(description="Whether the operation succeeded")
     session_id: str = Field(description="Session ID that was marked")
+    success: bool = Field(description="Whether the operation succeeded")
+    facts_saved: int = Field(
+        ge=0,
+        description="Number of facts saved for this session during consolidation",
+    )
 
 
 class IsSessionConsolidatedResult(BaseModel):
     """Result of consolidation check."""
 
+    session_id: str = Field(description="Session ID that was checked")
     consolidated: bool = Field(description="True if session was already consolidated")
 
 
@@ -209,12 +219,16 @@ def build_consolidator_tools(repo: Any) -> list[Any]:
         items = [
             EpisodeItem(
                 id=e["id"],
+                role=e.get("source_role"),
                 content=e["content"],
-                source_role=e.get("source_role"),
             )
             for e in episodes
         ]
-        return GetEpisodesResult(episodes=items, found=len(items) > 0)
+        return GetEpisodesResult(
+            session_id=session_id,
+            episodes=items,
+            total=len(items),
+        )
 
     @function_tool(name_override="save_fact_with_sources")
     async def save_fact_with_sources(
@@ -233,15 +247,25 @@ def build_consolidator_tools(repo: Any) -> list[Any]:
         memory_id = await repo.save_fact_with_sources(
             content, source_ids, session_id=session_id, confidence=confidence
         )
-        return SaveFactWithSourcesResult(memory_id=memory_id, success=True)
+        preview = f"{content[:80]}..." if len(content) > 80 else content
+        return SaveFactWithSourcesResult(
+            memory_id=memory_id,
+            content_preview=preview,
+            success=True,
+        )
 
     @function_tool(name_override="mark_session_consolidated")
     async def mark_session_consolidated(
         session_id: Annotated[str, Field(description="Session ID to mark as consolidated")],
     ) -> MarkSessionResult:
         """Mark session as consolidated. Call after extraction is complete."""
+        facts_saved = await repo.count_facts_by_session(session_id)
         await repo.mark_session_consolidated(session_id)
-        return MarkSessionResult(success=True, session_id=session_id)
+        return MarkSessionResult(
+            session_id=session_id,
+            success=True,
+            facts_saved=facts_saved,
+        )
 
     @function_tool(name_override="is_session_consolidated")
     async def is_session_consolidated(
@@ -249,7 +273,7 @@ def build_consolidator_tools(repo: Any) -> list[Any]:
     ) -> IsSessionConsolidatedResult:
         """Check if session was already consolidated. Skip if true to avoid duplicates."""
         ok = await repo.is_session_consolidated(session_id)
-        return IsSessionConsolidatedResult(consolidated=ok)
+        return IsSessionConsolidatedResult(session_id=session_id, consolidated=ok)
 
     return [
         get_episodes_for_consolidation,
