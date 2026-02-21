@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ class MemoryExtension:
         """Return relevant memory context (hybrid search). Prepends to prompt."""
         if not self._repo:
             return None
+        sections: list[str] = []
         query_embedding = None
         if self._embed_fn:
             query_embedding = await self._embed_fn(prompt)
@@ -54,10 +56,13 @@ class MemoryExtension:
             limit=5,
             exclude_session_id=self._current_session_id,
         )
-        if not results:
-            return None
-        lines = "\n".join(f"- {r['content']}" for r in results)
-        return f"## Relevant memory\n{lines}"
+        if results:
+            lines = "\n".join(f"- {r['content']}" for r in results)
+            sections.append(f"## Relevant memory\n{lines}")
+        reflection = await self._repo.get_latest_reflection()
+        if reflection:
+            sections.append(f"## Weekly insight\n{reflection['content']}")
+        return "\n\n".join(sections) if sections else None
 
     # --- ToolProvider ---
     def get_tools(self) -> list[Any]:
@@ -199,3 +204,40 @@ class MemoryExtension:
                 "errors": ["repository not initialized"],
             }
         return await self._repo.apply_decay_and_prune(threshold)
+
+    async def get_recent_memories_for_reflection(
+        self, days: int = 7, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Fetch recent facts and episodes for reflection. Called by memory_maintenance."""
+        if not self._repo:
+            return []
+        since_ts = int(time.time()) - (days * 86400)
+        return await self._repo.get_recent_memories(
+            since_ts=since_ts,
+            kinds=["fact", "episode"],
+            limit=limit,
+        )
+
+    async def save_reflection(
+        self,
+        content: str,
+        source_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> str:
+        """Save a reflection. Generates embedding if available. Returns memory id."""
+        if not self._repo:
+            raise RuntimeError("memory repository not initialized")
+        memory_id = await self._repo.save_reflection(
+            content=content, source_ids=source_ids or [], tags=tags or []
+        )
+        if self._embed_fn:
+            embedding = await self._embed_fn(content)
+            if embedding:
+                await self._repo.save_embedding(memory_id, embedding)
+        return memory_id
+
+    async def get_latest_reflection_timestamp(self) -> int | None:
+        """Return created_at of the most recent reflection, or None. For idempotency."""
+        if not self._repo:
+            return None
+        return await self._repo.get_latest_reflection_timestamp()

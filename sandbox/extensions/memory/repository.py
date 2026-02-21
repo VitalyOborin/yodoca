@@ -353,6 +353,100 @@ class MemoryRepository:
         latest = row[0] if row and row[0] else None
         return {"counts": counts, "latest_created_at": latest}
 
+    async def get_recent_memories(
+        self,
+        since_ts: int,
+        kinds: list[str],
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Fetch active memories created after since_ts with kind IN kinds.
+        Returns list of dicts: id, kind, content, created_at, confidence, tags.
+        Ordered by created_at DESC.
+        """
+        if not kinds:
+            return []
+        conn = await self._db._ensure_conn()
+        placeholders = ",".join("?" * len(kinds))
+        params: list[Any] = [*kinds, since_ts, limit]
+        sql = f"""
+            SELECT id, kind, content, created_at, confidence, tags
+            FROM memories
+            WHERE kind IN ({placeholders})
+              AND valid_until IS NULL
+              AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "content": r[2] or "",
+                "created_at": r[3],
+                "confidence": float(r[4]) if r[4] is not None else 1.0,
+                "tags": json.loads(r[5]) if r[5] else [],
+            }
+            for r in rows
+        ]
+
+    async def save_reflection(
+        self,
+        content: str,
+        source_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> str:
+        """Insert reflection. Protected by default (decay_rate=0.0). Returns new memory id."""
+        conn = await self._db._ensure_conn()
+        now = int(time.time())
+        memory_id = f"ref_{uuid.uuid4().hex[:12]}"
+        source_ids_json = json.dumps(source_ids or [])
+        tags_json = json.dumps(tags or [])
+        attrs_json = json.dumps(attributes or {})
+        await conn.execute(
+            """
+            INSERT INTO memories (id, kind, content, event_time, created_at,
+                                 decay_rate, source_ids, tags, attributes)
+            VALUES (?, 'reflection', ?, ?, ?, 0.0, ?, ?, ?)
+            """,
+            (memory_id, content, now, now, source_ids_json, tags_json, attrs_json),
+        )
+        await conn.commit()
+        return memory_id
+
+    async def get_latest_reflection(self) -> dict[str, Any] | None:
+        """Return the most recent active reflection for context injection."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """
+            SELECT id, content, created_at
+            FROM memories
+            WHERE kind = 'reflection' AND valid_until IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "content": row[1] or "", "created_at": row[2]}
+
+    async def get_latest_reflection_timestamp(self) -> int | None:
+        """Return created_at of the most recent reflection, or None if none exist."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            """
+            SELECT created_at FROM memories
+            WHERE kind = 'reflection' AND valid_until IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else None
+
     # --- Entity CRUD ---
 
     async def create_or_get_entity(

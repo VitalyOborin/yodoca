@@ -27,6 +27,9 @@ schedules:
   - name: daily_decay
     cron: "0 4 * * *"
     task: execute_decay
+  - name: weekly_reflection
+    cron: "0 3 * * 0"
+    task: execute_reflection
 
 events:
   subscribes:

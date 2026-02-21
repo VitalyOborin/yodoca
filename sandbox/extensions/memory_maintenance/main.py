@@ -3,9 +3,11 @@
 Responsibilities:
 - Consolidation: extract semantic facts from completed sessions (LLM).
 - Decay + Prune: apply Ebbinghaus decay, soft-delete stale facts (planned).
+- Reflection: weekly meta-cognitive summary of recent facts/episodes (LLM).
 """
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +22,13 @@ from core.extensions.contract import (
     AgentResponse,
     SchedulerProvider,
 )
+from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
 
 logger = logging.getLogger(__name__)
+
+# Idempotency: skip reflection if one was saved within this many seconds (6 days).
+_REFLECTION_COOLDOWN_SEC = 6 * 86400
 
 
 class ConsolidationResult(BaseModel):
@@ -49,11 +55,24 @@ class ConsolidationResult(BaseModel):
     )
 
 
+class ReflectionResult(BaseModel):
+    """Structured output from weekly reflection. Required by output_type."""
+
+    success: bool = Field(description="True if a meaningful reflection was generated")
+    facts_analyzed: int = Field(ge=0, description="Count of facts in the input")
+    episodes_analyzed: int = Field(ge=0, description="Count of episodes in the input")
+    summary: str = Field(
+        default="",
+        description="Reflection text or brief reason if success=false",
+    )
+
+
 class MemoryMaintenanceExtension:
     """AgentProvider + SchedulerProvider: memory consolidation, decay, and pruning."""
 
     def __init__(self) -> None:
         self._agent: Agent | None = None
+        self._reflection_agent: Agent | None = None
         self._manifest: ExtensionManifest | None = None
         self._ctx: Any = None
 
@@ -106,6 +125,8 @@ class MemoryMaintenanceExtension:
                 return await self._run_consolidation()
             case "execute_decay":
                 return await self._run_decay_and_prune()
+            case "execute_reflection":
+                return await self._run_reflection()
             case _:
                 logger.warning("Unknown scheduled task: %s", task_name)
                 return None
@@ -152,6 +173,78 @@ class MemoryMaintenanceExtension:
 
         return None  # No user notification for background maintenance
 
+    async def _run_reflection(self) -> dict[str, Any] | None:
+        """Generate weekly meta-cognitive reflection from recent facts/episodes."""
+        mem = self._ctx.get_extension("memory")
+        if not mem:
+            logger.warning("memory extension not available for reflection")
+            return None
+
+        # Idempotency: skip if reflection was saved in the last 6 days
+        last_ts = await mem.get_latest_reflection_timestamp()
+        if last_ts and (time.time() - last_ts) < _REFLECTION_COOLDOWN_SEC:
+            logger.info("Reflection skipped: one already exists within 6 days")
+            return None
+
+        memories = await mem.get_recent_memories_for_reflection(days=7, limit=200)
+        facts = [m for m in memories if m.get("kind") == "fact"]
+        episodes = [m for m in memories if m.get("kind") == "episode"]
+
+        if len(facts) < 3:
+            logger.info(
+                "Reflection skipped: insufficient data (%d facts, %d episodes)",
+                len(facts),
+                len(episodes),
+            )
+            return None
+
+        if not self._reflection_agent:
+            logger.warning("Reflection agent not initialized")
+            return None
+
+        lines = []
+        for i, m in enumerate(memories[:100], 1):
+            lines.append(f"{i}. [{m['kind']}] {m.get('content', '')}")
+        prompt = "Reflect on these recent memories from the last 7 days:\n\n" + "\n".join(
+            lines
+        )
+
+        try:
+            result = await Runner.run(
+                self._reflection_agent,
+                prompt,
+                max_turns=1,
+            )
+            output = result.final_output
+            if not isinstance(output, ReflectionResult):
+                logger.warning("Reflection agent returned unexpected type: %s", type(output))
+                return None
+
+            if not output.success:
+                logger.info("Reflection skipped by LLM: %s", output.summary)
+                return None
+
+            source_ids = [m["id"] for m in memories[:50]]
+            reflection_id = await mem.save_reflection(
+                content=output.summary,
+                source_ids=source_ids,
+                tags=["weekly"],
+            )
+            logger.info(
+                "Reflection saved: id=%s, facts=%d, episodes=%d",
+                reflection_id,
+                output.facts_analyzed,
+                output.episodes_analyzed,
+            )
+            return {
+                "reflection_id": reflection_id,
+                "facts_analyzed": output.facts_analyzed,
+                "episodes_analyzed": output.episodes_analyzed,
+            }
+        except Exception as e:
+            logger.warning("Reflection failed: %s", e, exc_info=True)
+            return None
+
     # --- Lifecycle ---
 
     async def initialize(self, context: Any) -> None:
@@ -177,6 +270,21 @@ class MemoryMaintenanceExtension:
             output_type=ConsolidationResult,
         )
 
+        # Reflection agent: no tools, single LLM call, structured output
+        project_root = ext_dir.parent.parent.parent  # sandbox/extensions/<id> -> project root
+        reflection_instructions = resolve_instructions(
+            instructions_file="prompts/memory_reflection.jinja2",
+            extension_dir=ext_dir,
+            project_root=project_root,
+        )
+        self._reflection_agent = Agent(
+            name=f"{self._manifest.name} (reflection)",
+            instructions=reflection_instructions,
+            model=model,
+            tools=[],
+            output_type=ReflectionResult,
+        )
+
     async def start(self) -> None:
         pass
 
@@ -185,6 +293,7 @@ class MemoryMaintenanceExtension:
 
     async def destroy(self) -> None:
         self._agent = None
+        self._reflection_agent = None
         self._manifest = None
         self._ctx = None
 
