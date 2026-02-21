@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class AgentLimits(BaseModel):
@@ -49,6 +49,7 @@ class ScheduleEntry(BaseModel):
         description="Task name passed to execute_task. If empty, uses name.",
     )
 
+    @computed_field
     @property
     def task_name(self) -> str:
         """Task name passed to execute_task."""

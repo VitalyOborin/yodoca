@@ -34,7 +34,9 @@ Extract the session_id from the task (the token after "session " and before ": e
    ❌ Meta-commands and requests about the assistant itself
    ❌ Technical instructions given to the assistant
 
-   **Criterion:** If the fact can be found in Wikipedia — do not save it.
+   **Criterions:**
+   - If the fact can be found in Wikipedia — do not save it.
+   - Only save facts representing persistent user attributes or preferences—not actions or fleeting comments from this conversation.
 
 5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags. **IMPORTANT:** Save facts in the same language as the conversation.
 
