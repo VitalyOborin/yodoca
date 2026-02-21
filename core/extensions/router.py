@@ -18,6 +18,7 @@ class MessageRouter:
 
     def __init__(self) -> None:
         self._agent: Any = None
+        self._agent_id: str = "orchestrator"
         self._channels: dict[str, ChannelProvider] = {}
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
@@ -25,9 +26,10 @@ class MessageRouter:
         self._session: Any = None
         self._session_id: str | None = None
 
-    def set_agent(self, agent: Any) -> None:
+    def set_agent(self, agent: Any, agent_id: str = "orchestrator") -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
         self._agent = agent
+        self._agent_id = agent_id
 
     def register_channel(self, ext_id: str, channel: ChannelProvider) -> None:
         """Register a channel. Called by Loader during protocol wiring."""
@@ -105,6 +107,7 @@ class MessageRouter:
                 "text": response,
                 "channel": channel,
                 "session_id": self._session_id,
+                "agent_id": self._agent_id,
             },
         )
         await channel.send_to_user(user_id, response)

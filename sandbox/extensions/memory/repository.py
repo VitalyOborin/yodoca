@@ -19,19 +19,19 @@ class MemoryRepository:
         self,
         content: str,
         session_id: str | None = None,
-        source_ids: list[str] | None = None,
+        source_role: str | None = None,
     ) -> str:
-        """Insert episode; event_time=created_at. Returns new memory id."""
+        """Insert episode; event_time=created_at. source_role: 'user' or agent name."""
         conn = await self._db._ensure_conn()
         now = int(time.time())
         memory_id = f"ep_{uuid.uuid4().hex[:12]}"
-        source_ids_json = json.dumps(source_ids if source_ids is not None else [])
+        role = (source_role or "")[:255] if source_role else None
         await conn.execute(
             """
-            INSERT INTO memories (id, kind, content, session_id, event_time, created_at, source_ids)
+            INSERT INTO memories (id, kind, content, session_id, event_time, created_at, source_role)
             VALUES (?, 'episode', ?, ?, ?, ?, ?)
             """,
-            (memory_id, content, session_id, now, now, source_ids_json),
+            (memory_id, content, session_id, now, now, role),
         )
         await conn.commit()
         return memory_id
@@ -190,14 +190,14 @@ class MemoryRepository:
         """Fetch all episodes for a session (for consolidation)."""
         conn = await self._db._ensure_conn()
         cursor = await conn.execute(
-            """SELECT id, content FROM memories
+            """SELECT id, content, source_role FROM memories
                WHERE session_id = ? AND kind = 'episode'
                  AND valid_until IS NULL
                ORDER BY created_at""",
             (session_id,),
         )
         rows = await cursor.fetchall()
-        return [{"id": r[0], "content": r[1]} for r in rows]
+        return [{"id": r[0], "content": r[1], "source_role": r[2]} for r in rows]
 
 
 def _escape_fts5_query(q: str) -> str:

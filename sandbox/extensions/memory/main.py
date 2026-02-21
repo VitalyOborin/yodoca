@@ -95,9 +95,9 @@ class MemoryExtension:
         if not text:
             return
         await self._repo.save_episode(
-            f"{text}", 
+            f"{text}",
             session_id=self._current_session_id,
-            source_ids=[],
+            source_role="user",
         )
 
     async def _on_agent_response(self, data: dict[str, Any]) -> None:
@@ -107,10 +107,11 @@ class MemoryExtension:
         text = (data.get("text") or "").strip()
         if not text:
             return
+        agent_name = data.get("agent_id") or "orchestrator"
         await self._repo.save_episode(
             f"{text}",
             session_id=self._current_session_id,
-            source_ids=["orchestrator"],
+            source_role=agent_name,
         )
 
     async def _trigger_consolidation(self, current_session_id: str) -> None:

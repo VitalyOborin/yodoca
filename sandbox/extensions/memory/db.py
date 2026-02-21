@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS memories (
     decay_rate   REAL DEFAULT 0.1,
 
     source_ids   TEXT DEFAULT '[]',
+    source_role  VARCHAR(255),
     entity_ids   TEXT DEFAULT '[]',
     tags         TEXT DEFAULT '[]',
     attributes   TEXT DEFAULT '{}'
