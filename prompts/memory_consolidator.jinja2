@@ -7,9 +7,9 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 ## Workflow
 
-1. **Check first:** Call `is_session_consolidated(session_id)`. If it returns "yes", do nothing — the session was already processed (e.g. by event and schedule overlap).
+1. **Check first:** Call `is_session_consolidated(session_id)`. If it returns consolidated=true, produce output with skipped=true and do nothing else — the session was already processed.
 
-2. **Fetch episodes:** Call `get_episodes_for_consolidation(session_id)` to get the conversation. Each line is `[episode_id] (role): content`.
+2. **Fetch episodes:** Call `get_episodes_for_consolidation(session_id)` to get the conversation. Episodes have id, content, source_role.
 
 3. **Extract facts:** From the conversation, identify:
    - User preferences (e.g. "prefers concise answers")
@@ -19,14 +19,21 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 4. **Save each fact:** For each fact, call `save_fact_with_sources(content, source_ids, session_id=session_id)` where:
    - `content` is the fact as a clear, standalone statement
-   - `source_ids` are the episode IDs (from the brackets) that support this fact
+   - `source_ids` are the episode IDs that support this fact
    - `session_id` is the session you are consolidating
 
 5. **Mark complete:** Call `mark_session_consolidated(session_id)` when done.
+
+6. **Produce structured output:** Your final response must be a JSON object with:
+   - session_id: the session you consolidated
+   - success: true if consolidation completed (or was skipped)
+   - facts_extracted: number of facts you saved (0 if skipped or none found)
+   - skipped: true only if is_session_consolidated returned consolidated=true
+   - summary: brief human-readable summary (e.g. "Extracted 3 preferences" or "Already consolidated")
 
 ## Rules
 
 - Only extract facts that are clearly supported by the conversation
 - Keep facts concise and generalizable
-- If there are no extractable facts, still call `mark_session_consolidated(session_id)`
+- If there are no extractable facts, still call `mark_session_consolidated(session_id)` and set facts_extracted=0
 - Do not invent or infer facts not present in the episodes

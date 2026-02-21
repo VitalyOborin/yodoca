@@ -1,10 +1,15 @@
-"""Memory Consolidator: AgentProvider + SchedulerProvider. Extracts facts from completed sessions."""
+"""Memory Consolidator: AgentProvider + SchedulerProvider. Extracts facts from completed sessions.
+
+Uses structured output (output_type) per OpenAI Agents SDK:
+https://openai.github.io/openai-agents-python/agents/#output-types
+"""
 
 from pathlib import Path
 from typing import Any
 
 import yaml
 from agents import Agent, Runner
+from pydantic import BaseModel, Field
 
 from core.extensions.contract import (
     AgentDescriptor,
@@ -14,6 +19,25 @@ from core.extensions.contract import (
     SchedulerProvider,
 )
 from core.extensions.manifest import ExtensionManifest
+
+
+class ConsolidationResult(BaseModel):
+    """Structured output from memory consolidation. Required by output_type."""
+
+    session_id: str = Field(description="Session that was consolidated")
+    success: bool = Field(description="Whether consolidation completed successfully")
+    facts_extracted: int = Field(
+        ge=0,
+        description="Number of facts saved to memory",
+    )
+    skipped: bool = Field(
+        default=False,
+        description="True if session was already consolidated (no work done)",
+    )
+    summary: str = Field(
+        default="",
+        description="Brief human-readable summary of what was extracted or why skipped",
+    )
 
 
 class MemoryConsolidatorExtension:
@@ -48,9 +72,14 @@ class MemoryConsolidatorExtension:
                 task,
                 max_turns=self._manifest.agent.limits.max_turns,
             )
+            output = result.final_output
+            if isinstance(output, ConsolidationResult):
+                content = output.model_dump_json()
+            else:
+                content = str(output) if output else ""
             return AgentResponse(
                 status="success",
-                content=result.final_output or "",
+                content=content,
             )
         except Exception as e:
             return AgentResponse(
@@ -99,6 +128,7 @@ class MemoryConsolidatorExtension:
             instructions=context.resolved_instructions,
             model=model,
             tools=tools,
+            output_type=ConsolidationResult,
         )
 
     async def start(self) -> None:
