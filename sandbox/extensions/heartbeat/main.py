@@ -3,6 +3,7 @@
 Uses SchedulerProvider + Core Cron Loop (Loader._cron_loop). No ServiceProvider.
 """
 
+import hashlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,12 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROMPT = (
     "Check if there's anything proactive to do. If nothing urgent, acknowledge briefly."
 )
+_SCHEDULE_ID = "agent_loop"
+
+
+def _prompt_id(prompt: str) -> str:
+    """Short hash for prompt identification in logs."""
+    return hashlib.sha256(prompt.encode()).hexdigest()[:8]
 
 
 class HeartbeatExtension:
@@ -51,6 +58,12 @@ class HeartbeatExtension:
         if isinstance(prompt, str):
             prompt = prompt.strip()
 
+        logger.info(
+            "heartbeat: emit system.agent.background",
+            extra={
+                "schedule_id": _SCHEDULE_ID,
+                "prompt_id": _prompt_id(prompt),
+            },
+        )
         await ctx.request_agent_background(prompt)
-        logger.debug("Heartbeat: emitted system.agent.background")
         return None  # No user notification for background task

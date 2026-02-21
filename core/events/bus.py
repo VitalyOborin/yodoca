@@ -80,6 +80,10 @@ class EventBus:
             logger.info("EventBus: recovered %d events", count)
         return count
 
+    async def count_pending(self, exclude_topic: str | None = None) -> int:
+        """Count pending events. Optionally exclude a topic."""
+        return await self._journal.count_pending(exclude_topic)
+
     async def _dispatch_loop(self) -> None:
         """Main loop: wait for work, fetch pending, deliver to handlers."""
         while not self._stopped:

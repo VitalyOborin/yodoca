@@ -70,6 +70,21 @@ class EventJournal:
         await conn.commit()
         return cursor.lastrowid or 0
 
+    async def count_pending(self, exclude_topic: str | None = None) -> int:
+        """Count pending events. Optionally exclude a topic (e.g. system.agent.background)."""
+        conn = await self._ensure_conn()
+        if exclude_topic:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM event_journal WHERE status = 'pending' AND topic != ?",
+                (exclude_topic,),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM event_journal WHERE status = 'pending'"
+            )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
     async def fetch_pending(self, limit: int = 3) -> list[tuple[int, str, str, dict, float, str | None]]:
         """Fetch pending events by created_at. Returns list of (id, topic, source, payload, created_at, correlation_id)."""
         conn = await self._ensure_conn()

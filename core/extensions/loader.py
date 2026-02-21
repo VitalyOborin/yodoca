@@ -29,6 +29,7 @@ from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
+from core.settings import get_setting, load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +292,53 @@ class Loader:
         event_bus.subscribe(SystemTopics.AGENT_TASK, on_agent_task, "kernel.system")
 
         async def on_agent_background(event: Event) -> None:
+            import time as _time
+
             prompt = event.payload.get("prompt", "")
-            await router.invoke_agent(prompt)
+            correlation_id = event.payload.get("correlation_id") or event.correlation_id
+            started_at = _time.perf_counter()
+            settings = load_settings()
+            skip_when_no_work = get_setting(
+                settings, "agent_loop.skip_when_no_work", False
+            )
+
+            # Guard: skip when no work (saves API calls)
+            if skip_when_no_work:
+                mem = self._extensions.get("memory")
+                if mem and hasattr(mem, "get_all_pending_consolidations"):
+                    pending = await mem.get_all_pending_consolidations()
+                    if not pending:
+                        logger.info(
+                            "agent loop: no-op (no tasks)",
+                            extra={
+                                "correlation_id": correlation_id,
+                                "event_id": event.id,
+                            },
+                        )
+                        return
+
+            logger.info(
+                "agent loop: start",
+                extra={
+                    "correlation_id": correlation_id,
+                    "event_id": event.id,
+                    "prompt_len": len(prompt),
+                },
+            )
+            try:
+                await router.invoke_agent(prompt)
+                duration_ms = int((_time.perf_counter() - started_at) * 1000)
+                logger.info(
+                    "agent loop: done",
+                    extra={
+                        "correlation_id": correlation_id,
+                        "event_id": event.id,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            except Exception as e:
+                logger.exception("agent loop: failed: %s", e)
+                raise
 
         event_bus.subscribe(
             SystemTopics.AGENT_BACKGROUND, on_agent_background, "kernel.system"

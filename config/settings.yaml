@@ -42,3 +42,7 @@ event_bus:
   db_path: sandbox/data/event_journal.db   # relative to project root
   poll_interval: 5.0                       # seconds; lower = faster deferred firing
   batch_size: 3                            # pending events per dispatch iteration
+
+# Agent loop (system.agent.background from heartbeat)
+agent_loop:
+  skip_when_no_work: false  # when true, skip LLM call if no pending memory consolidations

@@ -13,7 +13,7 @@ depends_on: []
 config:
   prompt: |
     Check if there's anything proactive to do. Review pending tasks, memory,
-    or scheduled work. If nothing urgent, acknowledge briefly.
+    or scheduled work. If nothing urgent, acknowledge briefly. If there's nothing to do, return "no-op".
 
 schedules:
   - name: agent_loop
