@@ -32,6 +32,7 @@ class MemoryExtension:
         self._episodes_per_chunk: int = 30
         self._embed_fn: Any = None
         self._entity_link_fn: Any = None
+        self._accurate_ner: bool = False
         # Cache for latest reflection: changes at most once a week.
         # Invalidated on save_reflection(). Avoids an SQL query per prompt.
         self._reflection_cache: dict[str, Any] | None | object = _UNSET
@@ -110,9 +111,10 @@ class MemoryExtension:
         self._repo = MemoryRepository(self._db)
         ner_ext = context.get_extension("ner")
         if ner_ext and ner_ext.health_check():
-            self._entity_link_fn = lambda mid, content: extract_and_link(
-                ner_ext, self._repo, mid, content
+            self._entity_link_fn = lambda mid, content, strategy="fast": extract_and_link(
+                ner_ext, self._repo, mid, content, strategy=strategy
             )
+            self._accurate_ner = ner_ext.has_provider("spacy") or ner_ext.has_provider("llm")
         else:
             logger.info("ner extension unavailable, entity extraction disabled")
             self._entity_link_fn = None
@@ -133,6 +135,35 @@ class MemoryExtension:
 
     def health_check(self) -> bool:
         return self._db is not None
+
+    @property
+    def accurate_ner_available(self) -> bool:
+        """True if spaCy or LLM NER providers are loaded."""
+        return self._accurate_ner
+
+    async def get_memories_for_entity_enrichment(
+        self,
+        kinds: list[str] | None = None,
+        max_entity_count: int = 2,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Fetch memories that need entity enrichment."""
+        if not self._repo:
+            return []
+        return await self._repo.get_memories_for_entity_enrichment(
+            kinds=kinds or ["fact", "episode"],
+            max_entity_count=max_entity_count,
+            limit=limit,
+        )
+
+    async def enrich_memory_entities(self, memory_id: str, content: str) -> int:
+        """Re-extract entities with accurate NER. Returns count of new entity links."""
+        if not self._entity_link_fn:
+            return 0
+        entity_ids = await self._entity_link_fn(memory_id, content, strategy="accurate")
+        if self._repo:
+            await self._repo.mark_memory_enriched(memory_id)
+        return len(entity_ids)
 
     async def _on_user_message(self, data: dict[str, Any]) -> None:
         """MessageRouter: user_message. Save user message as episode."""

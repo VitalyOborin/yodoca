@@ -541,6 +541,63 @@ class MemoryRepository:
             )
         await conn.commit()
 
+    async def get_memories_for_entity_enrichment(
+        self,
+        kinds: list[str] | None = None,
+        max_entity_count: int = 2,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Fetch memories that need entity enrichment.
+
+        Returns memories with enriched_at IS NULL and entity_count <= max_entity_count.
+        Prioritizes recent memories. Used by nightly entity enrichment task.
+        """
+        if not kinds:
+            return []
+        conn = await self._db._ensure_conn()
+        placeholders = ",".join("?" * len(kinds))
+        params: list[Any] = [*kinds, max_entity_count, limit]
+        sql = f"""
+            SELECT m.id, m.kind, m.content, m.created_at,
+                   COUNT(me.entity_id) as entity_count
+            FROM memories m
+            LEFT JOIN memory_entities me ON me.memory_id = m.id
+            WHERE m.valid_until IS NULL
+              AND m.kind IN ({placeholders})
+              AND json_extract(m.attributes, '$.enriched_at') IS NULL
+            GROUP BY m.id
+            HAVING COUNT(me.entity_id) <= ?
+            ORDER BY m.created_at DESC
+            LIMIT ?
+        """
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "content": r[2] or "",
+                "created_at": r[3],
+                "entity_count": r[4],
+            }
+            for r in rows
+        ]
+
+    async def mark_memory_enriched(self, memory_id: str) -> None:
+        """Stamp attributes.enriched_at to prevent re-processing."""
+        conn = await self._db._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT attributes FROM memories WHERE id = ?", (memory_id,)
+        )
+        row = await cursor.fetchone()
+        attrs = json.loads(row[0]) if row and row[0] else {}
+        attrs["enriched_at"] = int(time.time())
+        await conn.execute(
+            "UPDATE memories SET attributes = ? WHERE id = ?",
+            (json.dumps(attrs), memory_id),
+        )
+        await conn.commit()
+
     async def search_entities(
         self,
         query: str,

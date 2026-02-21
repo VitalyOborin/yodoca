@@ -55,6 +55,14 @@ Before every agent invocation the kernel calls `get_context(prompt)`. The extens
 
 When a `user_message` arrives with a new `session_id`, the extension registers the session in `sessions_consolidations` and emits `memory.session_completed` for all previously open, unconsolidated sessions. This ensures that completed sessions are consolidated promptly — without waiting for the nightly schedule — the moment the user starts a new conversation.
 
+**Entity enrichment API (for memory_maintenance):**
+
+| Method / property | Description |
+|---|---|
+| `accurate_ner_available` | `True` if spaCy or LLM NER providers are loaded. Enrichment is skipped when `False`. |
+| `get_memories_for_entity_enrichment(kinds, max_entity_count, limit)` | Fetch memories with `enriched_at` unset and entity count ≤ threshold. Used to select candidates for re-extraction. |
+| `enrich_memory_entities(memory_id, content)` | Re-extract entities with `strategy="accurate"`, link them, and stamp `attributes.enriched_at`. Returns count of entity links. |
+
 ---
 
 ### `memory_maintenance`
@@ -67,6 +75,7 @@ Owns no data. Drives three scheduled maintenance tasks by calling back into the 
 
 | Cron | Task | What happens |
 |---|---|---|
+| `0 2 * * *` | `execute_entity_enrichment` | Re-extracts entities with accurate NER (spaCy/LLM) for memories with few entities |
 | `0 3 * * *` | `execute_consolidation` | Fetches all pending sessions from `memory`, emits `memory.session_completed` for each |
 | `0 4 * * *` | `execute_decay` | Calls `memory.run_decay_and_prune(threshold)` — Ebbinghaus decay on all active facts |
 | `0 3 * * 0` | `execute_reflection` | Fetches recent facts and episodes, runs the reflection LLM agent, saves a `reflection` memory |
@@ -116,6 +125,8 @@ Named Entity Recognition. Extracts named entities from text with a configurable 
 
 The `memory` extension calls `ner_ext.extract(text, strategy="fast")` after saving each episode or fact. The results are mapped by `entity_linker.py` and stored in the `entities` table with a link in `memory_entities`.
 
+The nightly `execute_entity_enrichment` task (02:00) re-processes memories with few entities using `strategy="accurate"` (regex + spaCy + LLM). This extracts person names, organizations, projects, and locations that regex alone misses. Enrichment is skipped when no spaCy or LLM provider is available.
+
 ---
 
 ## Database
@@ -147,7 +158,7 @@ CREATE TABLE memories (
     source_role   VARCHAR(255),          -- 'user' or agent name (for episodes)
     entity_ids    TEXT DEFAULT '[]',     -- JSON: [entity_id, ...] — denormalized
     tags          TEXT DEFAULT '[]',     -- JSON: ["work", "project_alpha"]
-    attributes    TEXT DEFAULT '{}'      -- extensible metadata JSON
+    attributes    TEXT DEFAULT '{}'      -- extensible metadata JSON (enriched_at for entity enrichment)
 );
 ```
 
@@ -364,6 +375,21 @@ memory_maintenance.execute_decay
             if new_conf < threshold: soft_delete + remove from vec_memories + memory_entities
             else: UPDATE confidence
 ```
+
+### Entity enrichment (daily at 02:00)
+
+```
+memory_maintenance.execute_entity_enrichment
+  → memory.accurate_ner_available?      → skip if False
+  → memory.get_memories_for_entity_enrichment(kinds=['fact','episode'], max_entity_count=2, limit=50)
+  → for each memory:
+        memory.enrich_memory_entities(memory_id, content)
+            → ner_ext.extract(content, strategy='accurate')
+            → create_or_get_entity + link_memory_to_entities
+            → mark_memory_enriched (attributes.enriched_at = now)
+```
+
+Runs before consolidation so newly linked entities are visible during fact extraction.
 
 ### Weekly reflection (every Sunday at 03:00)
 

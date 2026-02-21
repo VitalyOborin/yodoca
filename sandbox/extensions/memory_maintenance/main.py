@@ -127,6 +127,8 @@ class MemoryMaintenanceExtension:
                 return await self._run_decay_and_prune()
             case "execute_reflection":
                 return await self._run_reflection()
+            case "execute_entity_enrichment":
+                return await self._run_entity_enrichment()
             case _:
                 logger.warning("Unknown scheduled task: %s", task_name)
                 return None
@@ -244,6 +246,54 @@ class MemoryMaintenanceExtension:
         except Exception as e:
             logger.warning("Reflection failed: %s", e, exc_info=True)
             return None
+
+    async def _run_entity_enrichment(self) -> dict[str, Any] | None:
+        """Re-extract entities with accurate NER (spaCy/LLM) for memories with few entities."""
+        mem = self._ctx.get_extension("memory")
+        if not mem:
+            logger.warning("memory extension not available for entity enrichment")
+            return None
+
+        if not mem.accurate_ner_available:
+            logger.info("Entity enrichment skipped: no accurate NER providers")
+            return None
+
+        batch_size = self._ctx.get_config("entity_enrichment_batch_size", 50)
+        memories = await mem.get_memories_for_entity_enrichment(
+            kinds=["fact", "episode"],
+            max_entity_count=2,
+            limit=batch_size,
+        )
+
+        if not memories:
+            logger.info("Entity enrichment: no candidates found")
+            return None
+
+        processed = 0
+        enriched = 0
+        total_entities = 0
+        errors: list[str] = []
+
+        for memory in memories:
+            try:
+                count = await mem.enrich_memory_entities(memory["id"], memory["content"])
+                processed += 1
+                if count > 0:
+                    enriched += 1
+                    total_entities += count
+            except Exception as e:
+                errors.append(f"{memory['id']}: {e}")
+                logger.exception("Entity enrichment failed for %s", memory["id"])
+
+        logger.info(
+            "Entity enrichment: %d/%d memories enriched, %d entities added",
+            enriched,
+            processed,
+            total_entities,
+        )
+        if errors:
+            logger.warning("Entity enrichment errors: %s", errors[:5])
+        return None
 
     # --- Lifecycle ---
 

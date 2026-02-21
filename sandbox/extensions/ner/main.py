@@ -177,3 +177,7 @@ class NerExtension:
     def health_check(self) -> bool:
         """True if at least one provider is available."""
         return any(p.is_available() for p in self._providers.values())
+
+    def has_provider(self, name: str) -> bool:
+        """Check if a named provider is loaded and available."""
+        return name in self._providers and self._providers[name].is_available()

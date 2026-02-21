@@ -10,6 +10,7 @@ entrypoint: main:MemoryMaintenanceExtension
 config:
   decay_threshold: 0.05
   conflict_min_confidence: 0.8
+  entity_enrichment_batch_size: 50
 
 agent:
   integration_mode: tool
@@ -21,6 +22,10 @@ agent:
     max_turns: 30
 
 schedules:
+  - name: entity_enrichment
+    cron: "0 2 * * *"
+    task: execute_entity_enrichment
+    description: "Re-extract entities with accurate NER (spaCy/LLM)"
   - name: nightly_consolidation
     cron: "0 3 * * *"
     task: execute_consolidation

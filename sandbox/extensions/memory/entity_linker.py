@@ -40,9 +40,11 @@ async def extract_and_link(
     repo: Any,
     memory_id: str,
     content: str,
+    *,
+    strategy: str = "fast",
 ) -> list[str]:
     """Extract entities via NER, map to memory types, create/get + link. Returns entity_ids."""
-    ner_entities = await ner_ext.extract(content, strategy="fast")
+    ner_entities = await ner_ext.extract(content, strategy=strategy)
     if not ner_entities:
         return []
     entity_ids: list[str] = []
