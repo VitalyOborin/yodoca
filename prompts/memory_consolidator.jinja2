@@ -11,11 +11,26 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 2. **Fetch episodes:** Call `get_episodes_for_consolidation(session_id)` to get the conversation. Episodes have id, content, source_role.
 
-3. **Extract facts:** From the conversation, identify:
-   - User preferences (e.g. "prefers concise answers")
-   - Decisions or commitments
-   - Named entities (people, projects, concepts)
-   - Key information worth remembering long-term
+3. **Extract facts:** From the conversation, identify facts worth remembering. Extract ONLY facts that are specific to THIS user and conversation:
+
+   ✅ User preferences, decisions, personal data
+   ✅ Project-specific information
+   ✅ Things the user told you about themselves, other persons, other organizations, other projects, etc.
+   ✅ Non-obvious conclusions from the conversation
+
+   ❌ General world knowledge (for example: 
+      "Paris is the capital of France",
+      "Water freezes at 0°C",
+      "Humans have 206 bones in their body",
+      "World War II ended in 1945",
+      "Photosynthesis occurs in plants",
+      "Gravity causes objects to fall to the ground",
+      "Money is used as a medium of exchange"
+   )
+   ❌ Facts any LLM already knows
+   ❌ Encyclopedic information not specific to this user
+
+   **Criterion:** If the fact can be found in Wikipedia — do not save it.
 
 4. **Save each fact:** For each fact, call `save_fact_with_sources(content, source_ids, session_id=session_id)` where:
    - `content` is the fact as a clear, standalone statement
@@ -35,5 +50,6 @@ Extract the session_id from the task (the token after "session " and before ": e
 
 - Only extract facts that are clearly supported by the conversation
 - Keep facts concise and generalizable
-- If there are no extractable facts, still call `mark_session_consolidated(session_id)` and set facts_extracted=0
+- If there are no user-specific facts — save nothing and set facts_extracted=0. That is correct behavior.
+- Still call `mark_session_consolidated(session_id)` even when facts_extracted=0
 - Do not invent or infer facts not present in the episodes
