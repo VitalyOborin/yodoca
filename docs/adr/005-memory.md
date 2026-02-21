@@ -8,14 +8,16 @@ Proposed
 
 The predecessor project (assistant3) implemented a cognitive memory system, that design synthesized ideas from 10+ SOTA systems (MAGMA, Zep/Graphiti, Hindsight/TEMPR, MemoryOS, FadeMem, A-MEM, Mem0, ES-Mem, Synapse, Better-Memory-MCP) and produced an academically rigorous architecture. However, expert review and practical use revealed significant over-engineering for a single-user, locally-running AI agent:
 
-| Aspect in 003-memory | Why it was excessive |
-|---------------------|----------------------|
-| 5 cognitive layers | **Session memory** (conversation context within one discussion) is handled by [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) (SQLAlchemySession). Procedural and Opinion are `fact` with different tags. |
-| Edges table (6 relation types) | Graph traversal is needed at thousands of entities with multi-dimensional links. A personal agent never reaches that scale. |
-| Bi-temporal model (4 time fields) | Enterprise data warehouse pattern, not a personal assistant. |
-| Causal inference + Event Segmentation in hot path | LLM on every event = expensive, slow, unstable. |
-| 13 agent tools | Clutters system prompt; agent gets confused. |
-| Community detection (label propagation) | Useful at >100k nodes in enterprise graphs. |
+
+| Aspect in 003-memory                              | Why it was excessive                                                                                                                                                                                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 5 cognitive layers                                | **Session memory** (conversation context within one discussion) is handled by [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) (SQLAlchemySession). Procedural and Opinion are `fact` with different tags. |
+| Edges table (6 relation types)                    | Graph traversal is needed at thousands of entities with multi-dimensional links. A personal agent never reaches that scale.                                                                                                                                        |
+| Bi-temporal model (4 time fields)                 | Enterprise data warehouse pattern, not a personal assistant.                                                                                                                                                                                                       |
+| Causal inference + Event Segmentation in hot path | LLM on every event = expensive, slow, unstable.                                                                                                                                                                                                                    |
+| 13 agent tools                                    | Clutters system prompt; agent gets confused.                                                                                                                                                                                                                       |
+| Community detection (label propagation)           | Useful at >100k nodes in enterprise graphs.                                                                                                                                                                                                                        |
+
 
 Expert feedback and code analysis converged on a simpler, pragmatic design that preserves the valuable ideas while eliminating unnecessary complexity.
 
@@ -25,41 +27,47 @@ Expert feedback and code analysis converged on a simpler, pragmatic design that 
 
 The memory system is split into two distinct layers. **This ADR covers only long-term memory.** Session memory is out of scope.
 
-| Layer | Responsibility | Implementation |
-|-------|----------------|-----------------|
-| **Session memory** | Conversation context within a single user–agent discussion. Retrieves history before each turn, stores new messages after. Enables multi-turn coherence ("What state is it in?" → "California"). | [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) — `SQLAlchemySession` or `SQLiteSession`. Passed to `Runner.run(agent, prompt, session=session)`. |
-| **Long-term memory** | Cross-session persistence: episodes, facts, preferences, entities. Survives restarts. Enables "What did we discuss about Project Alpha last week?" | Memory extension (this ADR) — `memories` + `entities` tables, EventBus subscriptions, hybrid search. |
+
+| Layer                | Responsibility                                                                                                                                                                                   | Implementation                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Session memory**   | Conversation context within a single user–agent discussion. Retrieves history before each turn, stores new messages after. Enables multi-turn coherence ("What state is it in?" → "California"). | [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) — `SQLAlchemySession` or `SQLiteSession`. Passed to `Runner.run(agent, prompt, session=session)`. |
+| **Long-term memory** | Cross-session persistence: episodes, facts, preferences, entities. Survives restarts. Enables "What did we discuss about Project Alpha last week?"                                               | Memory extension (this ADR) — `memories` + `entities` tables, EventBus subscriptions, hybrid search.                                                                                                       |
+
 
 **Integration:** The Orchestrator uses SDK Sessions for in-conversation context. The Memory extension injects retrieved long-term context into the system prompt before each agent invocation. The two layers are complementary: Sessions = working context; Memory = durable knowledge.
 
 ### 2. Design Principles
 
-| Principle | Rationale |
-|-----------|-----------|
-| **Pragmatic over academic** | Solve real problems for a single-user agent; avoid solving problems that do not exist. Aligns with "Minimalist SOTA" and "Incremental Knowledge Graph" approaches. |
-| **LLM off the hot path** | No LLM calls during event ingestion. LLM only at night (consolidation) and on explicit tool calls. |
-| **Single table by kind** | One `memories` table with `kind` field instead of multiple layer-specific tables. |
-| **Memory = ServiceProvider + ToolProvider** | Memory does not implement `SchedulerProvider`. Memory owns `consolidate()`; `self_reflection` triggers it on schedule. |
-| **EventBus as integration point** | Memory subscribes to `user.message` (EventBus) and `agent_response` (MessageRouter) via `context.subscribe_event()` and `context.subscribe()`. |
-| **Context injection** | One generic kernel extension point: loader/router calls `search_memory()` before each agent invocation and prepends result to the prompt. See §10. |
-| **Schema-first, logic-later** | Deploy full schema from day one; implement only critical paths initially. Enables no-migration evolution. |
+
+| Principle                                   | Rationale                                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Pragmatic over academic**                 | Solve real problems for a single-user agent; avoid solving problems that do not exist. Aligns with "Minimalist SOTA" and "Incremental Knowledge Graph" approaches. |
+| **LLM off the hot path**                    | No LLM calls during event ingestion. LLM only at night (consolidation) and on explicit tool calls.                                                                 |
+| **Single table by kind**                    | One `memories` table with `kind` field instead of multiple layer-specific tables.                                                                                  |
+| **Memory = ServiceProvider + ToolProvider** | Memory does not implement `SchedulerProvider`. Memory owns `consolidate()`; `self_reflection` triggers it on schedule.                                             |
+| **EventBus as integration point**           | Memory subscribes to `user.message` (EventBus) and `agent_response` (MessageRouter) via `context.subscribe_event()` and `context.subscribe()`.                     |
+| **Context injection**                       | One generic kernel extension point: loader/router calls `search_memory()` before each agent invocation and prepends result to the prompt. See §10.                 |
+| **Schema-first, logic-later**               | Deploy full schema from day one; implement only critical paths initially. Enables no-migration evolution.                                                          |
+
 
 ### 3. What to Keep from 003-memory
 
-| Idea | Why it works |
-|------|--------------|
-| **SQLite + FTS5 + sqlite-vec** | All in one file, no external dependencies. |
-| **Entity Anchors** | Without them, "Vitya", "Vitaly", "my boss" are three different people in memory. |
-| **Decay (Ebbinghaus)** | Formula `confidence × exp(−0.1 × days^0.8)` is elegant and empirically grounded. |
-| **Night consolidation** | LLM only at night; no impact on UX. |
-| **Soft-delete** | `valid_until = now` instead of physical delete; history preserved. |
-| **Hybrid search: FTS5 + vector + RRF** | Objectively better than any single method. |
+
+| Idea                                   | Why it works                                                                     |
+| -------------------------------------- | -------------------------------------------------------------------------------- |
+| **SQLite + FTS5 + sqlite-vec**         | All in one file, no external dependencies.                                       |
+| **Entity Anchors**                     | Without them, "Vitya", "Vitaly", "my boss" are three different people in memory. |
+| **Decay (Ebbinghaus)**                 | Formula `confidence × exp(−0.1 × days^0.8)` is elegant and empirically grounded. |
+| **Night consolidation**                | LLM only at night; no impact on UX.                                              |
+| **Soft-delete**                        | `valid_until = now` instead of physical delete; history preserved.               |
+| **Hybrid search: FTS5 + vector + RRF** | Objectively better than any single method.                                       |
+
 
 ### 4. Data Schema
 
 **Single `memories` table** — `kind` determines type. No separate `reflections` table; reflections are `memories (kind='reflection')`. JSON arrays for graph links (no separate `edges` table).
 
-**`event_time` vs `created_at`:** We include `event_time` in the schema for future bi-temporal support (e.g., importing historical emails). In Phase 1 implementation, set `event_time = created_at` — for a personal agent, user writes → we record immediately.
+`**event_time` vs `created_at`:** We include `event_time` in the schema for future bi-temporal support (e.g., importing historical emails). In Phase 1 implementation, set `event_time = created_at` — for a personal agent, user writes → we record immediately.
 
 ```sql
 CREATE TABLE memories (
@@ -104,6 +112,7 @@ CREATE VIRTUAL TABLE vec_memories USING vec0(memory_id TEXT PRIMARY KEY, embeddi
 **Decay rate rule:** By default, `decay_rate` is not customized per-node — it is either 0.1 (default) or 0.0 (when entity has `protected=1`). Per-node custom rates are reserved for Phase 4+; avoid tuning in Phase 1–3.
 
 **No `edges` table.** Relationships expressed via:
+
 - `source_ids` — JSON array of source memory IDs. A fact can be extracted from multiple episodes during consolidation; `source_ids` stores all provenance. Example:
   ```sql
   -- Fact "Vitaly prefers concise answers" extracted from 3 episodes:
@@ -180,7 +189,7 @@ extract_entities_regex() → resolve_or_create_entity() → update entity_ids
     prune()       — soft-delete confidence < 0.05
 ```
 
-**Conflict detection:** The `consolidate()` prompt explicitly instructs the LLM: *"For each new fact, find direct contradictions in existing facts (same entity, opposite claim). If found: set old fact's confidence to 0.3; add to new fact's attributes: {\"supersedes\": \"old_memory_id\"}."* This covers common cases (user changed job, moved, changed preference) without online LLM calls — done once at night.
+**Conflict detection:** The `consolidate()` prompt explicitly instructs the LLM: *"For each new fact, find direct contradictions in existing facts (same entity, opposite claim). If found: set old fact's confidence to 0.3; add to new fact's attributes: {supersedes: old_memory_id}."* This covers common cases (user changed job, moved, changed preference) without online LLM calls — done once at night.
 
 **If self_reflection is not implemented:** Memory can expose `memory_consolidate()` as an agent tool. The user or another scheduler can trigger it manually. Alternatively, Memory could run a minimal internal consolidation (e.g. decay + prune only, no LLM) on a background timer — but the preferred design is: consolidation method in Memory, trigger from self_reflection.
 
@@ -215,10 +224,12 @@ The Memory extension only exposes `search_memory(query, limit=5)`. It does not k
 
 Memory uses **two different subscription mechanisms** (different APIs, different backends):
 
-| Event | API | Backend | Purpose |
-|-------|-----|---------|---------|
-| `user.message` | `context.subscribe_event("user.message", handler)` | **EventBus** (durable journal) | User messages from channels |
-| `agent_response` | `context.subscribe("agent_response", handler)` | **MessageRouter** (in-memory `_emit`) | Agent responses |
+
+| Event            | API                                                | Backend                               | Purpose                     |
+| ---------------- | -------------------------------------------------- | ------------------------------------- | --------------------------- |
+| `user.message`   | `context.subscribe_event("user.message", handler)` | **EventBus** (durable journal)        | User messages from channels |
+| `agent_response` | `context.subscribe("agent_response", handler)`     | **MessageRouter** (in-memory `_emit`) | Agent responses             |
+
 
 **Important:** `agent_response` is **not** an EventBus topic. It is a MessageRouter callback — `router.subscribe("agent_response", ...)`. The `subscribe_event()` method goes to EventBus; `subscribe()` goes to MessageRouter. Both are available on `ExtensionContext` (see `context.py`).
 
@@ -226,12 +237,14 @@ Both handlers call `save_episode(content)` in the hot path.
 
 ## Implementation Phases
 
-| Phase | Scope | Outcome |
-|-------|-------|---------|
-| **1 (1 day)** | Schema, EventBus/MessageRouter subscriptions, FTS5 search | Agent remembers conversations across sessions |
+
+| Phase            | Scope                                                                                                                                   | Outcome                                                             |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **1 (1 day)**    | Schema, EventBus/MessageRouter subscriptions, FTS5 search                                                                               | Agent remembers conversations across sessions                       |
 | **2 (2–3 days)** | sqlite-vec embeddings, hybrid search with RRF, regex entity extraction; add `memory_entities` junction table when `memories` > 10k rows | Semantic search; entities not duplicated; fast entity-based queries |
-| **3 (1–2 days)** | Decay formula, soft-delete, consolidate() (self_reflection triggers) | Memory self-organizes; night reflection works |
-| **4 (optional)** | LLM entity resolution when confidence < 0.7 | Higher-quality entity anchors |
+| **3 (1–2 days)** | Decay formula, soft-delete, consolidate() (self_reflection triggers)                                                                    | Memory self-organizes; night reflection works                       |
+| **4 (optional)** | LLM entity resolution when confidence < 0.7                                                                                             | Higher-quality entity anchors                                       |
+
 
 **Phase 1 approach:** Deploy full schema from day one (no-migration evolution, as in 003-memory). Initially use only `content`, `kind`, `event_time`, `created_at` (with `event_time = created_at`). Fill remaining columns as phases progress.
 
@@ -241,16 +254,18 @@ Both handlers call `save_episode(content)` in the hot path.
 
 ### Comparison with 003-memory
 
-| Aspect | 003-memory | 005-memory |
-|--------|------------|------------|
-| Session memory | Part of 5-layer model | Delegated to [OpenAI SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) |
-| Tables | 6 (nodes, edges, entities, FTS, vec×2) | 3 (memories, entities, FTS/vec virtual) |
-| Memory layers | 5 | 1 (kind field) for long-term only |
-| LLM in hot path | Yes (slow path per event) | No |
-| Agent tools | 13 | 5 core + 2 optional |
-| Graph edges | 6 types, separate table | source_ids + entity_ids JSON |
-| Reflections | Separate table | kind='reflection' in memories |
-| Implementation size | ~20 Python files | ~6–7 files |
+
+| Aspect              | 003-memory                             | 005-memory                                                                                                     |
+| ------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Session memory      | Part of 5-layer model                  | Delegated to [OpenAI SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) |
+| Tables              | 6 (nodes, edges, entities, FTS, vec×2) | 3 (memories, entities, FTS/vec virtual)                                                                        |
+| Memory layers       | 5                                      | 1 (kind field) for long-term only                                                                              |
+| LLM in hot path     | Yes (slow path per event)              | No                                                                                                             |
+| Agent tools         | 13                                     | 5 core + 2 optional                                                                                            |
+| Graph edges         | 6 types, separate table                | source_ids + entity_ids JSON                                                                                   |
+| Reflections         | Separate table                         | kind='reflection' in memories                                                                                  |
+| Implementation size | ~20 Python files                       | ~6–7 files                                                                                                     |
+
 
 ### Benefits
 
@@ -262,11 +277,13 @@ Both handlers call `save_episode(content)` in the hot path.
 
 ### Risks and Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Regex entity extraction misses some entities | Phase 4 adds LLM resolution for low-confidence cases. |
+
+| Risk                                          | Mitigation                                                                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Regex entity extraction misses some entities  | Phase 4 adds LLM resolution for low-confidence cases.                                                                                                                                                  |
 | self_reflection extension not yet implemented | Memory exposes `consolidate()`; self_reflection calls it when available. Until then, `memory_consolidate()` can be an agent tool for manual trigger, or a minimal internal timer (decay + prune only). |
-| Context injection requires kernel change | One generic extension point in loader/router (§10). Documented and minimal. |
+| Context injection requires kernel change      | One generic extension point in loader/router (§10). Documented and minimal.                                                                                                                            |
+
 
 ## Relation to Other ADRs
 
@@ -281,3 +298,4 @@ Both handlers call `save_episode(content)` in the hot path.
 - [event_bus.md](../event_bus.md) — EventBus topics and API
 - [extensions.md](../extensions.md) — Extension protocols and context
 - Minimalist SOTA / Incremental Knowledge Graph — schema-first, JSON for graph links, LLM off hot path
+
