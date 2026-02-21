@@ -5,7 +5,7 @@ See: https://openai.github.io/openai-agents-python/tools/
 """
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Awaitable, Callable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
@@ -131,9 +131,11 @@ class IsSessionConsolidatedResult(BaseModel):
 
 # --- Tool builders ---
 
+EmbedFn = Callable[[str], Awaitable[list[float] | None]] | None
 
-def build_tools(repo: Any) -> list[Any]:
-    """Build the 5 memory tools bound to the given repository."""
+
+def build_tools(repo: Any, embed_fn: EmbedFn = None) -> list[Any]:
+    """Build the 5 memory tools bound to the given repository and optional embed_fn."""
 
     @function_tool(name_override="search_memory")
     async def search_memory(
@@ -148,11 +150,18 @@ def build_tools(repo: Any) -> list[Any]:
         ] = None,
         limit: Annotated[int, Field(default=10, ge=1, le=50, description="Max results")] = 10,
     ) -> SearchMemoryResult:
-        """Search long-term memory by full-text. Returns relevant memories.
+        """Search long-term memory (hybrid FTS5 + semantic). Returns relevant memories.
 
         Use to find past conversations, facts, preferences before answering.
         """
-        results = await repo.fts_search(query, kind=kind, tag=tag, limit=limit)
+        query_embedding = await embed_fn(query) if embed_fn else None
+        results = await repo.hybrid_search(
+            query,
+            query_embedding=query_embedding,
+            kind=kind,
+            tag=tag,
+            limit=limit,
+        )
         memories = [
             MemoryItem(id=r["id"], kind=r["kind"], content=r["content"])
             for r in results
@@ -169,6 +178,10 @@ def build_tools(repo: Any) -> list[Any]:
     ) -> RememberFactResult:
         """Explicitly save an important fact to long-term memory."""
         memory_id = await repo.save_fact(content, confidence=confidence)
+        if embed_fn:
+            embedding = await embed_fn(content)
+            if embedding:
+                await repo.save_embedding(memory_id, embedding)
         preview = f"{content[:80]}..." if len(content) > 80 else content
         return RememberFactResult(
             memory_id=memory_id,
@@ -190,6 +203,10 @@ def build_tools(repo: Any) -> list[Any]:
                 message=f"Memory {memory_id} not found or already superseded.",
             )
         new_id = await repo.save_fact(new_content)
+        if embed_fn:
+            embedding = await embed_fn(new_content)
+            if embedding:
+                await repo.save_embedding(new_id, embedding)
         return CorrectFactResult(
             success=True,
             new_memory_id=new_id,
@@ -228,7 +245,9 @@ def build_tools(repo: Any) -> list[Any]:
     return [search_memory, remember_fact, correct_fact, confirm_fact, memory_stats]
 
 
-def build_consolidator_tools(repo: Any, episodes_per_chunk: int = 30) -> list[Any]:
+def build_consolidator_tools(
+    repo: Any, episodes_per_chunk: int = 30, embed_fn: EmbedFn = None
+) -> list[Any]:
     """Build consolidator-only tools. Not exposed to Orchestrator."""
 
     @function_tool(name_override="get_episodes_for_consolidation")
@@ -271,6 +290,13 @@ def build_consolidator_tools(repo: Any, episodes_per_chunk: int = 30) -> list[An
         """Save multiple facts in one call. Use after extracting from all episode chunks."""
         batch = [f.model_dump() for f in facts]
         result = await repo.save_facts_batch(session_id, batch)
+        if embed_fn:
+            for s in result["saved"]:
+                content = s.get("content")
+                if content:
+                    embedding = await embed_fn(content)
+                    if embedding:
+                        await repo.save_embedding(s["id"], embedding)
         saved_items = [
             SavedFactItem(
                 id=s["id"],

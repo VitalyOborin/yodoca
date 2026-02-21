@@ -1,4 +1,4 @@
-"""MemoryRepository: CRUD and FTS5 search. No business logic."""
+"""MemoryRepository: CRUD, FTS5 search, vector search, hybrid RRF. No business logic."""
 
 import json
 import logging
@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any
 
+import sqlite_vec
 from db import MemoryDatabase  # noqa: I001 - db loaded from ext dir via sys.path
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,115 @@ class MemoryRepository:
             }
             for r in rows
         ]
+
+    async def save_embedding(self, memory_id: str, embedding: list[float]) -> None:
+        """Store embedding in vec_memories. Overwrites if memory_id exists."""
+        conn = await self._db._ensure_conn()
+        blob = sqlite_vec.serialize_float32(embedding)
+        await conn.execute(
+            "INSERT OR REPLACE INTO vec_memories (memory_id, embedding) VALUES (?, ?)",
+            (memory_id, blob),
+        )
+        await conn.commit()
+
+    async def vector_search(
+        self,
+        query_embedding: list[float],
+        kind: str | None = None,
+        tag: str | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Vector KNN search via vec0 MATCH. Returns same shape as fts_search (with distance)."""
+        conn = await self._db._ensure_conn()
+        blob = sqlite_vec.serialize_float32(query_embedding)
+        buffer = limit * 3  # request extra to compensate for post-filter
+        params: list[Any] = [blob, buffer]
+        kind_filter = " AND m.kind = ?" if kind else ""
+        tag_filter = " AND m.tags LIKE ?" if tag else ""
+        session_filter = ""
+        if kind:
+            params.append(kind)
+        if tag:
+            params.append(f'%"{tag}"%')
+        if exclude_session_id:
+            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
+            params.append(exclude_session_id)
+        sql = f"""
+            SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
+                   m.confidence, m.tags, v.distance
+            FROM vec_memories v
+            INNER JOIN memories m ON m.id = v.memory_id
+            WHERE v.embedding MATCH ? AND v.k = ?
+              AND m.valid_until IS NULL
+            {kind_filter}
+            {tag_filter}
+            {session_filter}
+            ORDER BY v.distance
+            LIMIT ?
+        """
+        params.append(limit)
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "kind": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "tags": json.loads(r[6]) if r[6] else [],
+                "distance": r[7],
+            }
+            for r in rows
+        ]
+
+    def _rrf_merge(
+        self,
+        fts_results: list[dict[str, Any]],
+        vec_results: list[dict[str, Any]],
+        k: int = 60,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Reciprocal Rank Fusion: score = sum(1/(k+rank)). Returns top limit by fused score."""
+        scores: dict[str, float] = {}
+        all_items: dict[str, dict[str, Any]] = {}
+        for rank, item in enumerate(fts_results, start=1):
+            mid = item["id"]
+            scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
+            all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
+        for rank, item in enumerate(vec_results, start=1):
+            mid = item["id"]
+            scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
+            if mid not in all_items:
+                all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+        return [all_items[mid] for mid, _ in ranked]
+
+    async def hybrid_search(
+        self,
+        query: str,
+        query_embedding: list[float] | None = None,
+        kind: str | None = None,
+        tag: str | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Hybrid FTS5 + vector with RRF. If query_embedding is None, FTS5-only."""
+        fts_results = await self.fts_search(
+            query, kind=kind, tag=tag, limit=limit * 2, exclude_session_id=exclude_session_id
+        )
+        if not query_embedding:
+            return fts_results[:limit]
+        vec_results = await self.vector_search(
+            query_embedding,
+            kind=kind,
+            tag=tag,
+            limit=limit * 2,
+            exclude_session_id=exclude_session_id,
+        )
+        return self._rrf_merge(fts_results, vec_results, k=60, limit=limit)
 
     async def get_stats(self) -> dict[str, Any]:
         """Counts by kind, latest created_at."""
@@ -380,7 +490,12 @@ class MemoryRepository:
                 )
                 preview = f"{content[:80]}..." if len(content) > 80 else content
                 result["saved"].append(
-                    {"id": memory_id, "content_preview": preview, "duplicate": False}
+                    {
+                        "id": memory_id,
+                        "content_preview": preview,
+                        "content": content,
+                        "duplicate": False,
+                    }
                 )
             except Exception as e:
                 result["errors"].append(f"{content[:50]}...: {e}")

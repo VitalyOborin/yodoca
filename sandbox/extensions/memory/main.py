@@ -11,6 +11,7 @@ if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
 from db import MemoryDatabase
+from embeddings import EmbeddingService
 from repository import MemoryRepository
 from tools import build_consolidator_tools, build_tools
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryExtension:
-    """Extension + ToolProvider + ContextProvider: long-term memory with FTS5 search."""
+    """Extension + ToolProvider + ContextProvider: long-term memory with hybrid FTS5 + vector search."""
 
     def __init__(self) -> None:
         self._db: MemoryDatabase | None = None
@@ -26,6 +27,8 @@ class MemoryExtension:
         self._ctx: Any = None
         self._current_session_id: str | None = None
         self._episodes_per_chunk: int = 30
+        self._embedding: EmbeddingService | None = None
+        self._embed_fn: Any = None
 
     # --- ContextProvider ---
     @property
@@ -38,11 +41,16 @@ class MemoryExtension:
         *,
         agent_id: str | None = None,
     ) -> str | None:
-        """Return relevant memory context to prepend to prompt."""
+        """Return relevant memory context (hybrid search). Prepends to prompt."""
         if not self._repo:
             return None
-        results = await self._repo.fts_search(
+        query_embedding = None
+        if self._embedding:
+            query_embedding = await self._embedding.generate(prompt)
+        results = await self._repo.hybrid_search(
             prompt,
+            query_embedding=query_embedding,
+            kind="fact",
             limit=5,
             exclude_session_id=self._current_session_id,
         )
@@ -55,18 +63,26 @@ class MemoryExtension:
     def get_tools(self) -> list[Any]:
         if not self._repo:
             return []
-        return build_tools(self._repo)
+        return build_tools(self._repo, self._embed_fn)
 
     def get_consolidator_tools(self) -> list[Any]:
         """Tools for consolidator agent only. Not exposed to Orchestrator."""
         if not self._repo:
             return []
-        return build_consolidator_tools(self._repo, self._episodes_per_chunk)
+        return build_consolidator_tools(
+            self._repo, self._episodes_per_chunk, self._embed_fn
+        )
 
     # --- Lifecycle ---
     async def initialize(self, context: Any) -> None:
         self._ctx = context
         self._episodes_per_chunk = context.get_config("episodes_per_chunk", 30)
+        api_key = context.get_secret("OPENAI_API_KEY")
+        if api_key:
+            self._embedding = EmbeddingService(api_key)
+            self._embed_fn = self._embedding.generate
+        else:
+            logger.warning("OPENAI_API_KEY not set, embeddings disabled (FTS5-only)")
         db_path = context.data_dir / "memory.db"
         self._db = MemoryDatabase(db_path)
         await self._db.initialize()

@@ -1,9 +1,10 @@
-"""Memory database: SQLite with memories, entities, FTS5. Triggers sync FTS5 on insert/update."""
+"""Memory database: SQLite with memories, entities, FTS5, vec_memories. Triggers sync FTS5 on insert/update."""
 
 import logging
 from pathlib import Path
 
 import aiosqlite
+import sqlite_vec
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,19 @@ class MemoryDatabase:
         if self._conn is not None:
             return
         self._conn = await aiosqlite.connect(str(self._db_path))
+        # Load sqlite-vec in connection thread (aiosqlite async API)
+        await self._conn.enable_load_extension(True)
+        await self._conn.load_extension(sqlite_vec.loadable_path())
+        await self._conn.enable_load_extension(False)
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.executescript(_SCHEMA)
+        await self._conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                memory_id TEXT PRIMARY KEY,
+                embedding float[256]
+            )
+        """)
         await self._conn.commit()
         await self._migrate_schema()
 
