@@ -13,6 +13,7 @@ from core.agents.orchestrator import create_orchestrator_agent
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter
+from core.logging_config import setup_logging
 from core.settings import load_settings
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,8 @@ set_tracing_disabled(True)
 async def main_async() -> None:
     """Bootstrap: discover -> load -> init -> wire -> create agent -> start -> wait for shutdown."""
     settings = load_settings()
+    setup_logging(_PROJECT_ROOT, settings)
+
     model_router = ModelRouter(
         settings=settings,
         secrets_getter=os.environ.get,

@@ -46,3 +46,10 @@ event_bus:
 # Agent loop (system.agent.background from heartbeat)
 agent_loop:
   skip_when_no_work: false  # when true, skip LLM call if no pending memory consolidations
+
+logging:
+  file: sandbox/logs/app.log
+  level: INFO
+  log_to_console: false
+  max_bytes: 10485760   # 10 MB
+  backup_count: 3

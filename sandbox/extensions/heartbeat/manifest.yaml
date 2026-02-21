@@ -21,4 +21,4 @@ schedules:
     task: emit_heartbeat
     description: "Wake Orchestrator for proactive background work every 2 minutes"
 
-enabled: true
+enabled: false

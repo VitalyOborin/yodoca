@@ -23,6 +23,13 @@ _DEFAULTS: dict[str, Any] = {
         "poll_interval": 5.0,
         "batch_size": 3,
     },
+    "logging": {
+        "file": "sandbox/logs/app.log",
+        "level": "INFO",
+        "log_to_console": False,
+        "max_bytes": 10485760,  # 10 MB
+        "backup_count": 3,
+    },
 }
 
 _cached: dict[str, Any] | None = None

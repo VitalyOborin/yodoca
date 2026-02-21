@@ -25,7 +25,7 @@ config:
     regex:
       enabled: true
     spacy:
-      enabled: true
+      enabled: false
       model: xx_ent_wiki_sm
     llm:
       enabled: true
