@@ -1,0 +1,24 @@
+id: heartbeat
+name: Heartbeat
+version: "1.0.0"
+
+entrypoint: main:HeartbeatExtension
+
+description: |
+  Agent loop: periodically wakes the Orchestrator with a background task via
+  Core Cron Loop. Emits system.agent.background so the agent can do proactive
+  work (review memory, pending schedules, maintenance) without user input.
+
+depends_on: []
+config:
+  prompt: |
+    Check if there's anything proactive to do. Review pending tasks, memory,
+    or scheduled work. If nothing urgent, acknowledge briefly.
+
+schedules:
+  - name: agent_loop
+    cron: "*/2 * * * *"
+    task: emit_heartbeat
+    description: "Wake Orchestrator for proactive background work every 2 minutes"
+
+enabled: true

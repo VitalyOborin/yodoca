@@ -13,19 +13,49 @@ Your working directory is the sandbox root. All file paths (for the `file` tool 
 - Do NOT include a "type" field in manifest.yaml. Capabilities are detected via isinstance(ext, Protocol).
 - Use context.get_secret() for secrets (never hardcode).
 - Use context.subscribe_event(topic, handler) for Event Bus durable events; use context.subscribe(event, handler) for internal MessageRouter events (user_message, agent_response).
-- You cannot call start(), initialize(), or any lifecycle method — only write files and then call context.request_restart(). Activation happens on next kernel start.
+- You cannot call start(), initialize(), or any lifecycle method — only write files and then call request_restart. Activation happens on next kernel start.
 - Use context for all kernel interaction; do not import from core/.
 
 ## Contract (protocols)
 
-Base (required for all): id, name, version; async initialize(context), start(), stop(), destroy(); health_check() -> bool.
+Base (required for all): async initialize(context), start(), stop(), destroy(); health_check() -> bool. Identity (id, name, version) comes from manifest, not from the class.
 
 ToolProvider: get_tools() -> list of @function_tool objects.
+
 ChannelProvider: async send_to_user(user_id, message). On incoming message: await context.emit("user.message", {"text": text, "user_id": user_id, "channel_id": self.extension_id}) or await context.on_user_message(text, user_id, self).
-ServiceProvider: async run_background(). Loader wraps it in asyncio.Task after start().
-SchedulerProvider: get_schedule() -> cron string; async execute() -> dict with "text" to notify user, or None.
+
+ServiceProvider: async run_background(). Must handle CancelledError. Loader wraps it in asyncio.Task after start().
+
+SchedulerProvider: async execute_task(task_name: str) -> dict | None. Loader reads the `schedules` section from manifest.yaml; on each cron trigger it calls execute_task(name). Return {"text": "..."} to notify user, or None.
+
+ContextProvider: context_priority (property, int, default 100, lower = earlier); async get_context(prompt, *, agent_id) -> str | None. Enriches agent prompt before each invocation. Multiple ContextProviders coexist; kernel calls them in priority order.
+
 SetupProvider: get_setup_schema(), async apply_config(name, value), async on_setup_complete() -> (bool, str).
-AgentProvider: Declarative agents need no main.py — manifest agent block + prompt file. Programmatic agents implement get_agent_descriptor() and async invoke(task, context).
+
+AgentProvider: Declarative agents need no main.py — manifest agent block + prompt file. Programmatic agents implement get_agent_descriptor() -> AgentDescriptor and async invoke(task, context: AgentInvocationContext | None) -> AgentResponse.
+
+## ExtensionContext API
+
+Extensions interact with the kernel exclusively through `context` (ExtensionContext). Key methods:
+
+- context.emit(topic, payload, correlation_id=None) — publish to EventBus (durable).
+- context.subscribe_event(topic, handler) — subscribe to EventBus events; handler receives Event with .payload.
+- context.subscribe(event, handler) — subscribe to MessageRouter (user_message, agent_response).
+- context.unsubscribe(event, handler) — remove MessageRouter subscription.
+- context.notify_user(text, channel_id=None) — send notification to user via system.user.notify.
+- context.request_agent_task(prompt, channel_id=None) — ask Orchestrator to handle a task; response goes to user.
+- context.request_agent_background(prompt, correlation_id=None) — invoke Orchestrator silently; no user response.
+- context.invoke_agent(prompt) -> str — ask agent to process a prompt and return a response.
+- context.get_secret(name) -> str | None — read secret from .env.
+- context.get_config(key, default=None) -> Any — read value from manifest config block.
+- context.get_extension(extension_id) -> Any — access another extension (only from depends_on).
+- context.data_dir -> Path — private data folder: sandbox/data/<extension_id>/ (auto-created).
+- context.request_restart() — write sandbox/.restart_requested so Supervisor restarts the kernel.
+- context.request_shutdown() — shut down the application.
+- context.resolved_tools — list of tools wired by Loader from uses_tools.
+- context.resolved_instructions — resolved prompt text (Jinja2 rendered).
+- context.agent_model — model string from ModelRouter.
+- context.model_router — ModelRouter for get_model(agent_id).
 
 ## Event Bus
 
@@ -34,13 +64,18 @@ Extensions use the Event Bus via ExtensionContext for durable events, deferred s
 - await context.emit(topic, payload) — publish event immediately (durable).
 - context.subscribe_event(topic, handler) — subscribe to durable events; handler receives Event with .payload.
 
-Built-in topics: user.message, reminder.due, task.received, checkin.started.
+System topics (always have kernel handlers):
+- system.user.notify — deliver a message to the user (payload: text, channel_id).
+- system.agent.task — invoke Orchestrator, response goes to user (payload: prompt, channel_id, correlation_id).
+- system.agent.background — invoke Orchestrator silently (payload: prompt, correlation_id).
 
-For reminder/timer extensions: use the Scheduler extension's schedule_once tool (topic="reminder.due", payload_json=json.dumps({"text": message}), delay_seconds=delay); create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
+Custom topics (used by extensions): user.message, reminder.due, memory.session_completed, etc.
+
+For reminder/timer extensions: use the Scheduler extension's schedule_once tool (topic, payload_json, delay_seconds or at_iso) to schedule a one-shot event; create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
 
 ## Manifest (no type field)
 
-Base: id, name, version, entrypoint (module:ClassName; optional for declarative agents), description, setup_instructions (optional), depends_on (list), secrets (list), config (dict), enabled: true.
+Base: id, name, version, entrypoint (module:ClassName; omit for declarative agents), description, depends_on (list), secrets (list), config (dict), enabled: true.
 
 ### Agent section (for agent extensions)
 
@@ -49,10 +84,20 @@ agent:
   model: gpt-5.2-codex
   instructions_file: prompts/<id>.jinja2   # or instructions: "inline text"
   uses_tools:
-    - core_tools    # built-in: file, apply_patch, request_restart; shell, web_search if provider supports
-    - kv            # or other extension IDs
+    - core_tools    # built-in: file, apply_patch, request_restart (always); shell, web_search (if provider supports hosted tools)
+    - kv            # or other extension IDs providing ToolProvider
   limits:
     max_turns: 20
+
+### Schedules section (for SchedulerProvider)
+
+Loader reads this section and fires execute_task(task) per cron trigger:
+
+schedules:
+  - name: nightly_job
+    cron: "0 3 * * *"
+    task: execute_nightly     # method name passed to execute_task()
+    description: "Runs at 3 AM"
 
 ### Manifest-driven events (events.subscribes)
 
@@ -69,6 +114,13 @@ events:
     - topic: reminder.due
       handler: invoke_agent
 
+Events publishes section is documentation only (no runtime effect):
+
+events:
+  publishes:
+    - topic: user.message
+      description: "Fires when the user types a message"
+
 ## Channel flow
 
 Two ways to pass user input to the kernel:
@@ -80,17 +132,22 @@ The kernel invokes the agent and calls back channel.send_to_user(user_id, respon
 ## Declarative agents
 
 Agent extensions without custom logic need NO main.py. Generate:
-- manifest.yaml with agent block (model, instructions_file, uses_tools, limits)
-- prompts/<id>.jinja2
+- manifest.yaml with agent block (model, instructions_file or instructions, uses_tools, limits)
+- prompts/<id>.jinja2 (if using instructions_file)
 
 The Loader creates the agent from manifest. See builder_agent and simple_agent.
 
 ## After writing files
 
-Call context.request_restart() so the supervisor restarts the kernel and the Loader picks up the new extension.
+Call request_restart so the supervisor restarts the kernel and the Loader picks up the new extension.
 
-## Reference
+## Reference extensions
 
-- extensions/cli_channel/ — minimal ChannelProvider: manifest.yaml and main.py with emit("user.message", ...) and send_to_user.
+- extensions/cli_channel/ — ChannelProvider: manifest.yaml + main.py; emits user.message, implements send_to_user.
+- extensions/kv/ — ToolProvider: persistent key-value store (kv_set, kv_get).
+- extensions/scheduler/ — ToolProvider + ServiceProvider: time-aware EventBus bridge (schedule_once, schedule_recurring, list_schedules, cancel_schedule, update_recurring_schedule).
+- extensions/memory/ — ToolProvider + ContextProvider: long-term memory with FTS5 + vector search. Depends on embedding.
+- extensions/memory_maintenance/ — AgentProvider + SchedulerProvider: nightly consolidation, decay, reflection. Uses manifest schedules + events.subscribes.
+- extensions/embedding/ — ServiceProvider: embedding generation via LLM providers (OpenAI-compatible).
+- extensions/ner/ — ToolProvider: multi-provider NER with strategy pipelines (regex, spaCy, LLM).
 - extensions/builder_agent/ and simple_agent/ — declarative agents (manifest + prompt only, no main.py).
-- docs/EVENT_BUS.md — Event Bus architecture and API.

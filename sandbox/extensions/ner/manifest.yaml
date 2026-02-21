@@ -3,7 +3,7 @@ name: Named Entity Recognition
 version: "1.0.0"
 description: >
   Multi-provider NER with configurable strategy pipelines.
-  Providers: regex (always-on), spaCy (local ML), LLM (cloud, high accuracy).
+  Providers: regex (always-on), spaCy (local ML), LLM (cloud, high accuracy). 
 entrypoint: main:NerExtension
 depends_on: []
 config:
@@ -25,10 +25,10 @@ config:
     regex:
       enabled: true
     spacy:
-      enabled: false
+      enabled: true
       model: xx_ent_wiki_sm
     llm:
-      enabled: false
+      enabled: true
       provider: null
       model: null
 enabled: true
