@@ -38,7 +38,9 @@ Extract the session_id from the task (the token after "session " and before ": e
    - If the fact can be found in Wikipedia — do not save it.
    - Only save facts representing persistent user attributes or preferences—not actions or fleeting comments from this conversation.
 
-5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags. **IMPORTANT:** Save facts in the same language as the conversation.
+5. **Save facts (single batch call):** Call `save_facts_batch(session_id, facts=[...])` with all extracted facts. 
+   Each fact: content, source_ids (episode IDs supporting it), optional confidence and tags. 
+   **IMPORTANT:** Save facts in the same language as the conversation, tags should be in english.
 
 5.5. **Detect and resolve conflicts:** For each saved fact with confidence >= 0.8 (from save_facts_batch result), call `detect_conflicts(new_fact_id, content)`. Skip facts with confidence < 0.8 — they are tentative and not worth checking. If save_facts_batch returned 0 saved facts, skip this step entirely.
 

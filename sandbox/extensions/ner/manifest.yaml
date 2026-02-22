@@ -29,6 +29,6 @@ config:
       model: xx_ent_wiki_sm
     llm:
       enabled: true
-      provider: null
-      model: null
+      provider: openai
+      model: gpt-5-mini
 enabled: true

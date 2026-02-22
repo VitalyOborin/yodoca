@@ -20,7 +20,7 @@ _TYPE_MAP = {
 
 
 def _to_memory_entity(ner_entity: Any) -> dict[str, Any]:
-    """Map NER Entity to memory entity params (canonical_name, type, aliases)."""
+    """Map NER Entity to memory entity params (canonical_name, entity_type, aliases)."""
     raw = ner_entity.text
     canonical = ner_entity.canonical or raw
     etype = _TYPE_MAP.get(ner_entity.type, ner_entity.type)
@@ -28,11 +28,11 @@ def _to_memory_entity(ner_entity: Any) -> dict[str, Any]:
     # Strip @ / # prefixes for canonical_name, keep original as alias
     if ner_entity.type == "mention":
         clean = (canonical or raw).lstrip("@")
-        return {"canonical_name": clean, "type": etype, "aliases": [raw]}
+        return {"canonical_name": clean, "entity_type": etype, "aliases": [raw]}
     if ner_entity.type == "hashtag":
         clean = (canonical or raw).lstrip("#")
-        return {"canonical_name": clean, "type": etype, "aliases": [raw]}
-    return {"canonical_name": canonical or raw, "type": etype, "aliases": []}
+        return {"canonical_name": clean, "entity_type": etype, "aliases": [raw]}
+    return {"canonical_name": canonical or raw, "entity_type": etype, "aliases": []}
 
 
 async def extract_and_link(

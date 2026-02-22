@@ -5,6 +5,7 @@ description: "Long-term memory across sessions: episodes, facts, FTS5 search."
 entrypoint: main:MemoryExtension
 depends_on:
   - embedding
+  - ner
 config:
   episodes_per_chunk: 30
   conflict_min_confidence: 0.8
