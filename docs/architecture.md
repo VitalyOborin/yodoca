@@ -102,7 +102,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
 |----------|-----------|---------|
 | `Extension` (base) | `initialize`, `start`, `stop`, `destroy`, `health_check` | Lifecycle |
 | `ToolProvider` | `get_tools()` | Provides `@function_tool` objects for the agent |
-| `ChannelProvider` | `send_to_user(user_id, message)` | User communication channel |
+| `ChannelProvider` | `send_to_user(user_id, message)`, `send_message(text)` | User communication channel |
 | `AgentProvider` | `get_agent_descriptor()`, `invoke(task, context)` | Specialized AI agent |
 | `SchedulerProvider` | `execute_task(task_name)` | Cron-driven periodic tasks |
 | `ServiceProvider` | `run_background()` | Long-running background service |
@@ -133,7 +133,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 
 - **Location:** `core/tools/`
 - **Role:** Built-in tools available to the Orchestrator and declarative agents via `CoreToolsProvider`.
-- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `shell_tool` (shell execution; hosted-only), `WebSearchTool` (web search; hosted-only).
+- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `list_channels` / `send_to_channel` (channel selection; see [channels.md](channels.md)), `shell_tool` (shell execution; hosted-only), `WebSearchTool` (web search; hosted-only).
 - **Hosted-only gating:** `shell_tool` and `WebSearchTool` are included only when the agent's provider supports OpenAI hosted tools (`supports_hosted_tools` in provider config).
 
 ### Orchestrator

@@ -37,6 +37,8 @@ Documentation for the assistant4 AI agent platform.
 | [003](adr/003-agent-as-extension.md) | Agent as Extension |
 | [004](adr/004-event-bus.md) | Event Bus |
 | [005](adr/005-memory.md) | Simplified Memory System |
+| [006](adr/006-mcp-extension.md) | MCP Extension |
+| [007](adr/007-user-channel-selector.md) | Agent-Driven Channel Selection |
 
 ---
 

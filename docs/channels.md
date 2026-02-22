@@ -21,10 +21,14 @@ Channels are mutually compatible: multiple can be enabled. Each emits `user.mess
 @runtime_checkable
 class ChannelProvider(Protocol):
     async def send_to_user(self, user_id: str, message: str) -> None:
-        """Deliver message to user through this channel."""
+        """Reactive: reply to a specific user who sent a message."""
+
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to the channel's default recipient.
+        All addressing (user_id, chat_id, etc.) is internal to the channel."""
 ```
 
-Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and registers channels in MessageRouter. When the kernel handles `user.message`, it resolves `channel_id` → ChannelProvider, invokes the agent, and calls `channel.send_to_user(user_id, response)` on the originating channel.
+Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and registers channels in MessageRouter. When the kernel handles `user.message`, it resolves `channel_id` → ChannelProvider, invokes the agent, and calls `channel.send_to_user(user_id, response)` on the originating channel. For proactive delivery (e.g. heartbeat escalation, scheduled reminders), the kernel calls `channel.send_message(text)` — the channel handles addressing internally.
 
 ---
 
@@ -86,6 +90,35 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 
 ---
 
+## Agent Channel Tools
+
+The Orchestrator has two tools for agent-driven channel selection (see [ADR 007](adr/007-user-channel-selector.md)):
+
+| Tool | Purpose |
+|------|---------|
+| `list_channels` | List available channels with IDs and descriptions |
+| `send_to_channel(channel_id, text)` | Send a message to the user via a specific channel |
+
+**`list_channels`** returns a JSON array:
+
+```json
+[
+  {"channel_id": "cli_channel", "description": "CLI Channel"},
+  {"channel_id": "telegram_channel", "description": "Telegram Channel"}
+]
+```
+
+Empty when no channels are registered: `[]`.
+
+**`send_to_channel`** returns typed JSON:
+
+- Success: `{"success": true}`
+- Error: `{"success": false, "error": "Channel 'x' not found. Use list_channels to see available channels."}`
+
+This enables the agent to reliably detect delivery status and choose channels (e.g. "send to Telegram") based on user preference or escalation context.
+
+---
+
 ## Message Flow
 
 ```
@@ -104,7 +137,7 @@ User types in CLI or sends Telegram message
 ## Adding a New Channel
 
 1. Create `sandbox/extensions/my_channel/` with `manifest.yaml` and `main.py`
-2. Implement `ChannelProvider.send_to_user`
+2. Implement `ChannelProvider`: both `send_to_user` (reactive replies) and `send_message` (proactive delivery)
 3. In `start()` or `run_background()`, receive user input and emit:
 
    ```python
@@ -123,3 +156,4 @@ User types in CLI or sends Telegram message
 
 - [extensions.md](extensions.md) — Extension architecture
 - [event_bus.md](event_bus.md) — Event Bus and `user.message` topic
+- [ADR 007](adr/007-user-channel-selector.md) — Agent-driven channel selection
