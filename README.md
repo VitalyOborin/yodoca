@@ -4,7 +4,7 @@
   <p><strong>Self-Evolving AI Agent Platform with proactive memory and extensible architecture</strong></p>
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" /></a>
-    <img src="https://img.shields.io/badge/python-3.11+-blue.svg" />
+    <img src="https://img.shields.io/badge/python-3.12+-blue.svg" />
     <img src="https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic%20%7C%20Local-green.svg" />
     <img src="https://img.shields.io/badge/storage-SQLite%20only-lightgrey.svg" />
   </p>
@@ -70,7 +70,7 @@ The kernel intentionally does very little:
 
 - discovers and loads extensions
 - wires them via a small `ExtensionContext`
-- routes messages (reactive path)
+- routes messages (reactive and proactive paths)
 - runs a durable event dispatch loop (event-driven path)
 
 ### 3) Extensions-first architecture
@@ -79,9 +79,10 @@ All functionality lives in extensions under `sandbox/extensions/<extension_id>/`
 
 Extensions are "typed" by the protocols they implement (capabilities are detected at runtime):
 
-- `ChannelProvider` — receive user messages and send responses (CLI, Telegram, Web UI)
+- `ChannelProvider` — receive user messages and send responses (reactive + proactive); CLI, Telegram
 - `ToolProvider` — expose tools/functions to the orchestrator
-- `ServiceProvider` — background loops (caches, inbox watchers, memory store)
+- `AgentProvider` — specialized agents invoked as tools (Builder, declarative agents)
+- `ServiceProvider` — background loops (caches, inbox watchers, MCP servers)
 - `SchedulerProvider` — cron-like tasks (reminders, periodic monitors)
 - `SetupProvider` — guided configuration (tokens, secrets, credentials)
 
@@ -129,10 +130,12 @@ Long-term memory is implemented as an extension, with:
 
 - Always-on runtime via Supervisor-managed core process
 - Extension system with a minimal, generation-friendly contract (`manifest.yaml` + `main.py`)
-- Channels: CLI + (optional) Telegram (and more via extensions)
+- Channels: CLI + (optional) Telegram; agent can choose channel via `list_channels` / `send_to_channel` tools
 - Durable event bus (SQLite WAL) for asynchronous flows + observability
-- Scheduler extensions for cron-like automation
-- Memory extension for long-term context (search + consolidation)
+- Scheduler extensions for cron-like automation (one-shot and recurring)
+- Memory extension for long-term context (hybrid search, consolidation, decay)
+- Heartbeat loop: Scout → Orchestrator escalation every 2 min
+- Agent-as-extension: Builder agent, declarative agents (manifest-only)
 - Safe restarts initiated by extensions (e.g., after generating new code)
 
 ---
@@ -142,13 +145,14 @@ Long-term memory is implemented as an extension, with:
 ### Prerequisites
 
 - Python 3.12+
+- uv
 - Works best on a local machine (Windows/Linux/macOS)
 
 ### Run
 
 ```bash
 # 1) Clone
-git clone <your-repo-url>
+git clone https://github.com/VitalyOborin/yodoca
 cd yodoca
 
 # 2) Create venv and install deps (uv recommended)
@@ -168,38 +172,41 @@ uv run python -m supervisor
 
 ## Configuration
 
-LLM providers and models are configured in `**config/settings.yaml**`:
+LLM providers and models are configured in `config/settings.yaml`:
 
-- `**agents**` — per-agent: `provider`, `model`, optional `instructions`, `temperature`, `max_tokens`
-- `**providers**` — API definitions: `type` (openai_compatible / anthropic), `base_url`, `api_key_secret` or `api_key_literal`
+- `agents` — per-agent: `provider`, `model`, optional `instructions`, `temperature`, `max_tokens`
+- `providers` — API definitions: `type` (openai_compatible / anthropic), `base_url`, `api_key_secret` or `api_key_literal`
 
-Secrets live in `.env`; never store API keys in YAML. See `config/settings.yaml` for examples.
+Secrets live in `.env`; never store API keys in YAML. See [docs/configuration.md](docs/configuration.md) and `config/settings.yaml` for examples.
 
 ---
 
 ## Repository layout (conceptual)
 
 ```
-supervisor/              # process watcher
+supervisor/              # process watcher (spawn, monitor, restart)
   __main__.py
   runner.py
 
 core/                    # nano-kernel
   __main__.py
-  agents/                # orchestrator, builder
-  extensions/            # extension contracts, loader, context, router
+  runner.py              # bootstrap: Loader, EventBus, MessageRouter, Orchestrator
+  agents/                # orchestrator, agent factory
+  extensions/            # contracts, loader, context, router
   events/                # SQLite journal-backed EventBus
+  tools/                 # core tools (file, channel, restart, etc.)
+  llm/                   # ModelRouter, providers
 
 sandbox/
   extensions/            # all extensions live here
-    cli_channel/
-      manifest.yaml
-      main.py
-    telegram_channel/
-      manifest.yaml
-      main.py
-    memory/
-    kv/
+    cli_channel/         # stdin/stdout REPL
+    telegram_channel/     # Telegram Bot API (aiogram)
+    memory/              # long-term episodic + semantic memory
+    scheduler/           # one-shot and recurring events
+    heartbeat/           # Scout → Orchestrator escalation
+    kv/                  # key-value store (secrets, config)
+    builder_agent/        # code-generation agent
+    ...
   data/                  # per-extension private data (SQLite, caches, etc.)
 ```
 
@@ -285,7 +292,19 @@ This is a **single-user local** system.
 - Web UI channel
 - Event retries / dead-letter support
 - Memory: embeddings + retrieval policies (opt-in)
-- Agent-as-extension: specialized agents with constrained toolsets
+- MCP extension: bridge to Model Context Protocol servers (web search, filesystem, etc.)
+
+---
+
+## Documentation
+
+Detailed docs live in [`docs/`](docs/):
+
+- [Architecture](docs/architecture.md) — bootstrap flow, components, protocols
+- [Extensions](docs/extensions.md) — manifest, protocols, creating extensions
+- [Channels](docs/channels.md) — CLI, Telegram, agent channel tools
+- [Memory](docs/memory.md), [Heartbeat](docs/heartbeat.md), [Scheduler](docs/scheduler.md)
+- [ADRs](docs/README.md#architecture-decision-records-adr) — architecture decisions
 
 ---
 
@@ -296,7 +315,7 @@ Contributions are welcome:
 - new extensions (channels, tools, integrations)
 - docs and examples
 - bug reports and reproducible test cases
-- architecture proposals as ADRs
+- architecture proposals as ADRs (see `docs/adr/`)
 
 Open a PR and include:
 
