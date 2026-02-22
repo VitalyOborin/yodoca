@@ -29,7 +29,6 @@ from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
-from core.settings import get_setting, load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -297,25 +296,6 @@ class Loader:
             prompt = event.payload.get("prompt", "")
             correlation_id = event.payload.get("correlation_id") or event.correlation_id
             started_at = _time.perf_counter()
-            settings = load_settings()
-            skip_when_no_work = get_setting(
-                settings, "agent_loop.skip_when_no_work", False
-            )
-
-            # Guard: skip when no work (saves API calls)
-            if skip_when_no_work:
-                mem = self._extensions.get("memory")
-                if mem and hasattr(mem, "get_all_pending_consolidations"):
-                    pending = await mem.get_all_pending_consolidations()
-                    if not pending:
-                        logger.info(
-                            "agent loop: no-op (no tasks)",
-                            extra={
-                                "correlation_id": correlation_id,
-                                "event_id": event.id,
-                            },
-                        )
-                        return
 
             logger.info(
                 "agent loop: start",

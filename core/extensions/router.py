@@ -91,6 +91,12 @@ class MessageRouter:
                 logger.exception("Agent invocation failed: %s", e)
                 return f"(Error: {e})"
 
+    async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
+        """Apply ContextProvider middleware to prompt without invoking agent."""
+        if self._invoke_middleware:
+            return await self._invoke_middleware(prompt.strip(), agent_id)
+        return prompt
+
     async def handle_user_message(
         self, text: str, user_id: str, channel: ChannelProvider
     ) -> None:

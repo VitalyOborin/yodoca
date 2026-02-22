@@ -10,7 +10,7 @@ description: |
 
 agent:
   integration_mode: tool
-  model: gpt-5.2-codex # mistralai/codestral-22b-v0.1
+  model: gpt-5.2-codex # mistralai/codestral-22b-v0.1 # gpt-5.2-codex
   instructions_file: prompts/builder.jinja2
   uses_tools:
     - core_tools

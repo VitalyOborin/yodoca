@@ -1,11 +1,13 @@
-"""Heartbeat extension: periodically wakes the Orchestrator for proactive work.
+"""Heartbeat extension: SchedulerProvider with lightweight Scout agent and escalation."""
 
-Uses SchedulerProvider + Core Cron Loop (Loader._cron_loop). No ServiceProvider.
-"""
-
-import hashlib
 import logging
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
+
+from agents import Agent, Runner
+from pydantic import BaseModel, Field
+
+from core.extensions.instructions import resolve_instructions
 
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
@@ -13,24 +15,53 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PROMPT = (
-    "Check if there's anything proactive to do. If nothing urgent, acknowledge briefly."
+    "Review the memory context above. Are there any pending user requests, "
+    "unfinished tasks, reminders, or follow-ups that need attention right now?"
 )
-_SCHEDULE_ID = "agent_loop"
 
 
-def _prompt_id(prompt: str) -> str:
-    """Short hash for prompt identification in logs."""
-    return hashlib.sha256(prompt.encode()).hexdigest()[:8]
+class HeartbeatDecision(BaseModel):
+    """Structured output from Scout. Required by output_type."""
+
+    action: Literal["noop", "done", "escalate"] = Field(
+        description="noop: nothing to do. done: task handled. escalate: needs orchestrator."
+    )
+    reason: str = Field(
+        default="",
+        description="Brief explanation. For escalate: task description for orchestrator.",
+    )
 
 
 class HeartbeatExtension:
-    """SchedulerProvider: emits system.agent.background via Core Cron Loop."""
+    """SchedulerProvider: Scout agent checks memory, escalates to Orchestrator when needed."""
 
     def __init__(self) -> None:
         self._ctx: "ExtensionContext | None" = None
+        self._scout: Agent | None = None
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
+        ext_dir = Path(__file__).resolve().parent
+        project_root = ext_dir.parent.parent.parent
+        instructions = resolve_instructions(
+            instructions_file="prompt.jinja2",
+            extension_dir=ext_dir,
+            project_root=project_root,
+        )
+        model = (
+            context.model_router.get_model("heartbeat_scout")
+            if context.model_router
+            else None
+        )
+        if not model:
+            raise RuntimeError("heartbeat: model_router or heartbeat_scout config required")
+        self._scout = Agent(
+            name="HeartbeatScout",
+            instructions=instructions or "You are a lightweight background scout.",
+            model=model,
+            tools=[],
+            output_type=HeartbeatDecision,
+        )
 
     async def start(self) -> None:
         pass
@@ -40,30 +71,37 @@ class HeartbeatExtension:
 
     async def destroy(self) -> None:
         self._ctx = None
+        self._scout = None
 
     def health_check(self) -> bool:
-        return self._ctx is not None
+        return self._scout is not None
 
     async def execute_task(self, task_name: str) -> dict[str, Any] | None:
-        """Called by Loader._cron_loop when schedule fires. Emits system.agent.background."""
-        if task_name != "emit_heartbeat":
-            logger.warning("Unknown heartbeat task: %s", task_name)
+        """Called by Loader._cron_loop when schedule fires."""
+        if task_name != "emit_heartbeat" or not self._ctx or not self._scout:
             return None
 
-        ctx = self._ctx
-        if not ctx:
+        base_prompt = str(self._ctx.get_config("prompt", _DEFAULT_PROMPT)).strip()
+        enriched = await self._ctx.enrich_prompt(base_prompt, agent_id="heartbeat_scout")
+
+        try:
+            result = await Runner.run(self._scout, enriched, max_turns=1)
+            decision: HeartbeatDecision = result.final_output
+        except Exception as e:
+            logger.warning("heartbeat scout failed: %s", e)
             return None
 
-        prompt = ctx.get_config("prompt", _DEFAULT_PROMPT)
-        if isinstance(prompt, str):
-            prompt = prompt.strip()
+        if not isinstance(decision, HeartbeatDecision):
+            logger.warning("heartbeat: unexpected output type %s", type(decision))
+            return None
 
-        logger.info(
-            "heartbeat: emit system.agent.background",
-            extra={
-                "schedule_id": _SCHEDULE_ID,
-                "prompt_id": _prompt_id(prompt),
-            },
-        )
-        await ctx.request_agent_background(prompt)
-        return None  # No user notification for background task
+        match decision.action:
+            case "noop":
+                logger.debug("heartbeat: noop")
+            case "done":
+                logger.info("heartbeat: done — %s", (decision.reason or "")[:120])
+            case "escalate":
+                logger.info("heartbeat: escalate → %s", (decision.reason or "")[:120])
+                await self._ctx.request_agent_task(decision.reason)
+
+        return None

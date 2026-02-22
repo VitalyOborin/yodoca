@@ -70,6 +70,10 @@ class ExtensionContext:
         """Ask the agent to process a prompt and return a response."""
         return await self._router.invoke_agent(prompt)
 
+    async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
+        """Apply full ContextProvider chain (memory, etc.) without running the agent."""
+        return await self._router.enrich_prompt(prompt, agent_id)
+
     def subscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Subscribe to an internal event (e.g. user_message, agent_response)."""
         self._router.subscribe(event, handler)

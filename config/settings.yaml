@@ -7,10 +7,10 @@ supervisor:
 
 agents:
   default:
-    provider: openai
-    model: gpt-5-mini
+    provider: openai # openai # lm_studio
+    model: gpt-5-mini # gpt-5-mini # mistralai/codestral-22b-v0.1
   orchestrator:
-    provider: openai # lm_studio
+    provider: openai # openai # lm_studio
     model: gpt-5.2 # gpt-5.2 # mistralai/codestral-22b-v0.1
     instructions: prompts/orchestrator.jinja2
 
@@ -42,10 +42,6 @@ event_bus:
   db_path: sandbox/data/event_journal.db   # relative to project root
   poll_interval: 5.0                       # seconds; lower = faster deferred firing
   batch_size: 3                            # pending events per dispatch iteration
-
-# Agent loop (system.agent.background from heartbeat)
-agent_loop:
-  skip_when_no_work: false  # when true, skip LLM call if no pending memory consolidations
 
 logging:
   file: sandbox/logs/app.log

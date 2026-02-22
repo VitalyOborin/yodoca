@@ -1,40 +1,29 @@
 id: heartbeat
 name: Heartbeat
-version: "1.0.0"
+version: "2.0.0"
 
 entrypoint: main:HeartbeatExtension
 
 description: |
-  Agent loop: periodically wakes the Orchestrator with a background task via
-  Core Cron Loop. Emits system.agent.background so the agent can do proactive
-  work (review memory, pending schedules, maintenance) without user input.
+  Periodic scout: checks memory for actionable items, escalates to Orchestrator
+  when needed. Uses lightweight model for cost efficiency.
 
 depends_on: []
+
+agent_config:
+  heartbeat_scout:
+    provider: openai
+    model: gpt-5-mini
+
 config:
   prompt: |
-    You are the background Agent Loop for this assistant.
-
-    Goals (in order):
-    1) Keep the system healthy: detect if scheduling/heartbeat seems broken and record a concise status.
-    2) Process actionable work if it exists (pending schedules/tasks/inbox).
-    3) Run lightweight maintenance only when due.
-    4) Otherwise return exactly "no-op".
-
-    Checklist:
-    - Check current schedules (active/scheduled). If none exist, note that in the response only if this is unexpected.
-    - Check memory maintenance due status (if available). Run it only if due, otherwise skip.
-    - Check KV/inbox for pending items (if available).
-    - If there is actionable work, create at most ONE next action (small, safe) and execute it; then summarize.
-
-    Output contract:
-    - If nothing to do: output exactly "no-op".
-    - If something done or needs attention: output a short bullet list (max 6 lines) with: finding → action → result/next step.
-    Do not notify the user unless explicitly required.
+    Review the memory context above. Are there any pending user requests,
+    unfinished tasks, reminders, or follow-ups that need attention right now?
 
 schedules:
   - name: agent_loop
     cron: "*/2 * * * *"
     task: emit_heartbeat
-    description: "Wake Orchestrator for proactive background work every 2 minutes"
+    description: "Wake Scout for proactive background check every 2 minutes"
 
 enabled: true
