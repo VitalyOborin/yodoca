@@ -185,16 +185,22 @@ class Loader:
         return tools
 
     def _resolve_agent_instructions(self, manifest: ExtensionManifest, ext_id: str) -> str:
-        """Resolve instructions from agent.instructions and agent.instructions_file (kernel helper)."""
+        """Resolve instructions from extension-local prompt.jinja2 and/or agent.instructions.
+
+        Agent extensions may have prompt.jinja2 in extension/<id>/. If present, it is used.
+        Manifest instructions (optional) are merged: file content first, then inline instructions.
+        Only extension dir is searched; project prompts/ is system-only and not used.
+        """
         if not manifest.agent:
             return ""
         extension_dir = self._extensions_dir / ext_id
-        project_root = self._extensions_dir.parent.parent
+        instructions_file = ""
+        if (extension_dir / "prompt.jinja2").exists():
+            instructions_file = "prompt.jinja2"
         return resolve_instructions(
             instructions=manifest.agent.instructions,
-            instructions_file=manifest.agent.instructions_file,
+            instructions_file=instructions_file,
             extension_dir=extension_dir,
-            project_root=project_root,
             template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
         )
 

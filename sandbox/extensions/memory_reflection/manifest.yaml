@@ -1,0 +1,24 @@
+id: memory_reflection
+name: Memory Reflection
+version: "1.0.0"
+
+entrypoint: main:MemoryReflectionExtension
+
+description: |
+  Weekly meta-cognitive reflection: analyzes recent facts and episodes,
+  produces higher-order summaries for the assistant. Runs on schedule.
+
+depends_on:
+  - memory
+
+agent_config:
+  memory_reflection:
+    model: gpt-5-mini
+
+schedules:
+  - name: weekly_reflection
+    cron: "0 3 * * 0"
+    task: execute_reflection
+    description: "Weekly meta-cognitive summary of recent memories"
+
+enabled: true

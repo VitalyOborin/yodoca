@@ -42,11 +42,9 @@ class HeartbeatExtension:
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
         ext_dir = Path(__file__).resolve().parent
-        project_root = ext_dir.parent.parent.parent
         instructions = resolve_instructions(
             instructions_file="prompt.jinja2",
             extension_dir=ext_dir,
-            project_root=project_root,
         )
         model = (
             context.model_router.get_model("heartbeat_scout")

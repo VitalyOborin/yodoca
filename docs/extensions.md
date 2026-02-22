@@ -203,9 +203,10 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 |-------|------|---------|-------------|
 | `integration_mode` | `"tool"` \| `"handoff"` | `"tool"` | How Orchestrator uses the agent |
 | `model` | str | — | LLM model identifier |
-| `instructions` | str | `""` | Inline system prompt |
-| `instructions_file` | str | `""` | Path relative to extension dir or project root; supports `.jinja2` |
+| `instructions` | str | `""` | Inline system prompt (optional). Merged with `prompt.jinja2` if both exist. |
 | `parameters` | dict | `{}` | Extra agent params |
+
+**Prompt resolution:** Agent extensions may have `prompt.jinja2` in `extensions/<id>/`. The Loader auto-detects it at startup (no manifest field). If present, file content is used first; then `instructions` from manifest is appended. Only extension dir is searched; project `prompts/` is system-only.
 | `uses_tools` | list[str] | `[]` | Extension IDs or `core_tools` for tools |
 | `limits` | object | — | `max_turns`, `max_tokens_per_invocation`, `time_budget_ms` |
 
@@ -276,7 +277,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | Member | Description |
 |--------|-------------|
 | `resolved_tools` | Tools from `uses_tools` (ToolProvider extensions + `core_tools`) |
-| `resolved_instructions` | Combined from `instructions` + `instructions_file` |
+| `resolved_instructions` | Combined from `prompt.jinja2` (if present in extension dir) + `instructions` |
 | `agent_model` | Model from manifest |
 | `model_router` | `ModelRouter` for `get_model(agent_id)` |
 | `agent_id` | Agent id for model resolution |
@@ -482,4 +483,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [event_bus.md](event_bus.md) — Event Bus architecture and topics
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Example extensions: `kv`, `scheduler`, `cli_channel`, `simple_agent`, `builder_agent`
+- `sandbox/extensions/` — Example extensions: `kv`, `scheduler`, `cli_channel`, `memory_maintenance`, `memory_reflection`, `simple_agent`, `builder_agent`

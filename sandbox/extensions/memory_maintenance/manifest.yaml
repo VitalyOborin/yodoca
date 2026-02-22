@@ -15,7 +15,6 @@ config:
 agent:
   integration_mode: tool
   model: gpt-5-mini
-  instructions_file: prompts/memory_maintenance.jinja2
   uses_tools:
     - memory
   limits:
@@ -32,9 +31,6 @@ schedules:
   - name: daily_decay
     cron: "0 4 * * *"
     task: execute_decay
-  - name: weekly_reflection
-    cron: "0 3 * * 0"
-    task: execute_reflection
 
 events:
   subscribes:

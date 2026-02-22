@@ -78,7 +78,6 @@ Owns no data. Drives three scheduled maintenance tasks by calling back into the 
 | `0 2 * * *` | `execute_entity_enrichment` | Re-extracts entities with accurate NER (spaCy/LLM) for memories with few entities |
 | `0 3 * * *` | `execute_consolidation` | Fetches all pending sessions from `memory`, emits `memory.session_completed` for each |
 | `0 4 * * *` | `execute_decay` | Calls `memory.run_decay_and_prune(threshold)` — Ebbinghaus decay on all active facts |
-| `0 3 * * 0` | `execute_reflection` | Fetches recent facts and episodes, runs the reflection LLM agent, saves a `reflection` memory |
 
 **Consolidator agent:**
 
@@ -90,9 +89,21 @@ An `Agent` built at initialization with the consolidator tools from `memory.get_
 4. For each saved fact: `detect_conflicts` → `resolve_conflict` (if needed).
 5. `mark_session_consolidated` — records completion.
 
-**Reflection agent:**
+---
 
-A separate `Agent` with no tools and `output_type=ReflectionResult`. Runs at most once per 6 days (idempotency check on last reflection timestamp). Requires at least 3 facts in the past 7 days to proceed. Produces a `reflection` memory tagged `weekly`.
+### `memory_reflection`
+
+**Roles:** `SchedulerProvider`
+
+Weekly meta-cognitive reflection. Owns no data. Fetches recent facts and episodes from `memory`, runs an internal LLM agent, saves a `reflection` memory. Located at `sandbox/extensions/memory_reflection/`.
+
+**Scheduled tasks:**
+
+| Cron | Task | What happens |
+|---|---|---|
+| `0 3 * * 0` | `execute_reflection` | Fetches recent facts and episodes, runs reflection LLM agent, saves `reflection` memory |
+
+Runs at most once per 6 days (idempotency check on last reflection timestamp). Requires at least 3 facts in the past 7 days to proceed. Produces a `reflection` memory tagged `weekly`.
 
 ---
 
@@ -168,7 +179,7 @@ CREATE TABLE memories (
 |---|---|---|
 | `episode` | `memory` extension, on every `user_message` and `agent_response` | Raw dialogue turn. Full conversation history. |
 | `fact` | Consolidator agent (`save_facts_batch`) or Orchestrator (`remember_fact` tool) | Semantic fact extracted from dialogue or explicitly remembered. Subject to Ebbinghaus decay. |
-| `reflection` | `memory_maintenance` weekly reflection task | Meta-cognitive weekly summary. `decay_rate = 0.0`; never decays. |
+| `reflection` | `memory_reflection` weekly task | Meta-cognitive weekly summary. `decay_rate = 0.0`; never decays. |
 
 **Soft deletion:** records are never physically removed. `valid_until = now()` marks a record as inactive. All queries include `WHERE valid_until IS NULL`.
 
@@ -394,11 +405,11 @@ Runs before consolidation so newly linked entities are visible during fact extra
 ### Weekly reflection (every Sunday at 03:00)
 
 ```
-memory_maintenance.execute_reflection
+memory_reflection.execute_reflection
   → get_latest_reflection_timestamp()    → skip if < 6 days ago
   → get_recent_memories_for_reflection(days=7, limit=200)
   → skip if facts < 3
-  → [LLM] reflection_agent.run(prompt with recent facts+episodes)
+  → [LLM] reflection agent.run(prompt with recent facts+episodes)
   → memory.save_reflection(content, source_ids, tags=['weekly'])
       → INSERT INTO memories (kind='reflection', decay_rate=0.0)
       → generate and store embedding
