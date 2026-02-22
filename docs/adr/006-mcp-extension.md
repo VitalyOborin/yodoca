@@ -6,42 +6,100 @@ Proposed
 
 ## Context
 
-The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is an open standard that allows applications to connect to MCP servers exposing three primitives: **Tools**, **Resources**, and **Prompts**. MCP servers can be external processes (stdio), HTTP endpoints (SSE, Streamable HTTP), or embedded. The ecosystem includes hundreds of servers: web search, GitHub, filesystem, databases, browser automation, documentation search, and more.
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is an open standard that allows applications to connect to MCP servers exposing three primitives: **Tools**, **Resources**, and **Prompts**. MCP servers can be external processes (stdio), HTTP endpoints (SSE, Streamable HTTP), or hosted by OpenAI. The ecosystem includes hundreds of servers: web search, GitHub, filesystem, databases, browser automation, documentation search, and more.
 
-Currently, assistant4 enriches the agent via extensions that implement `ToolProvider`. Each tool extension is hand-written. To leverage the growing MCP ecosystem — and enable users to connect **any** MCP server without writing custom code — we need a bridge extension that:
+The [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/mcp/) supports MCP natively: agents accept an `mcp_servers` parameter, and the SDK automatically calls `list_tools()` before each `Runner.run()`, converts MCP tool schemas, and invokes tools. Manual wrapping of MCP tools as `@function_tool` would reimplement this and lose SDK features (caching, filtering, approval, reconnection, tracing).
 
-1. Connects to one or more MCP servers
-2. Exposes their tools as agent tools (via `ToolProvider`)
-3. Optionally exposes resources and prompts (Phase 2)
+To leverage the MCP ecosystem in assistant4 we need a **bridge extension** that:
 
-This aligns with the nano-kernel principle: **all functionality in extensions**. The MCP extension is a standard extension, not kernel code. It uses the official [MCP Python SDK](https://modelcontextprotocol.github.io/python-sdk/) for client connectivity.
+1. Connects to one or more MCP servers from config
+2. Exposes SDK server instances to the Orchestrator via **native `Agent(mcp_servers=[...])`**
+3. Optionally exposes MCP Prompts as context (Phase 2)
+
+This aligns with the nano-kernel principle: **all functionality in extensions**. The MCP extension is a standard extension; the kernel gains only a small duck-typed integration point (`get_mcp_servers()`).
 
 ### Problems solved
 
 | Problem | Solution |
 |---------|----------|
 | **Tool explosion per MCP** | One extension manages N servers; no new extension per server |
-| **Heterogeneous transports** | Support stdio, SSE, Streamable HTTP via SDK |
-| **Tool naming collisions** | Prefix tools with server alias: `mcp_<alias>_<tool_name>` |
-| **Dynamic tool discovery** | Tools fetched at runtime from each server; no code generation |
-| **Security** | stdio servers run as subprocess; HTTP servers use configured URLs |
+| **Heterogeneous transports** | Support stdio, Streamable HTTP (recommended), SSE (legacy), Hosted MCP via SDK classes |
+| **Schema conversion, caching, approval** | Use SDK built-in: `convert_schemas_to_strict`, `cache_tools_list`, `require_approval` |
+| **Reconnection and resilience** | Use SDK `MCPServerManager` with `reconnect(failed_only=True)`, `drop_failed_servers` |
+| **Security** | stdio servers run as subprocess; HTTP servers use configured URLs; approval flow for dangerous tools |
 
 ## Decision
 
-### 1. Extension Identity and Role
+### 1. Native SDK passthrough (no ToolProvider wrapping)
+
+The extension **does not** implement `ToolProvider`. It creates SDK server objects (`MCPServerStdio`, `MCPServerStreamableHttp`, etc.) from manifest config and exposes them so the Orchestrator passes them to `Agent(mcp_servers=[...])`. The SDK then:
+
+- Lists tools automatically before each run
+- Converts MCP schemas to strict JSON Schema when requested
+- Handles tool invocation, retries, and error formatting
+- Supports tool filtering, approval policies, and caching
+
+Manual wrapping would lose all of this and create a brittle reimplementation.
+
+### 2. Extension identity and role
 
 | Field | Value |
 |-------|-------|
 | **id** | `mcp` |
 | **Location** | `sandbox/extensions/mcp/` |
-| **Protocols** | `ToolProvider` (Phase 1), optionally `ContextProvider` (Phase 2 for Resources) |
+| **Protocols** | `ServiceProvider` (manages MCP server lifecycle) |
+| **Integration** | Duck-typed `get_mcp_servers() -> list`; no new protocol in contract.py |
 | **Dependencies** | None — standalone bridge |
 
-The extension implements `ToolProvider`: `get_tools()` returns a list of `@function_tool` objects. Each tool is a wrapper that forwards the call to the corresponding MCP server via the SDK client.
+The extension implements `ServiceProvider`: it uses `run_background()` only to satisfy the protocol; the real work is in `start()` (enter `MCPServerManager`) and `stop()` (exit manager). It also exposes `get_mcp_servers()` so the Loader can collect servers and pass them to the Orchestrator.
 
-### 2. Manifest: `config.servers`
+### 3. Four transports (SDK)
 
-MCP servers are configured in the manifest `config` block. No new manifest schema — we use the existing `config` dict.
+| Transport | SDK class | When to use |
+|-----------|-----------|-------------|
+| **Streamable HTTP** | `MCPServerStreamableHttp` | **Recommended** for local or remote HTTP servers under your control |
+| **stdio** | `MCPServerStdio` | Local subprocess (npx, python, uv) |
+| **SSE** | `MCPServerSse` | Legacy; only for servers that do not support Streamable HTTP |
+| **Hosted MCP** | `HostedMCPTool` (in `tools`, not `mcp_servers`) | Publicly reachable server; calls go through OpenAI Responses API |
+
+For a local standalone app, stdio and Streamable HTTP are the most relevant.
+
+### 4. Kernel integration (minimal)
+
+**No new protocol.** The Loader uses duck-typing: after `start_all()`, it calls `get_mcp_servers()` on any extension that has this method and aggregates the lists.
+
+- **[core/extensions/loader.py](core/extensions/loader.py):** Add `get_mcp_servers() -> list[Any]` that scans active extensions for `get_mcp_servers` and concatenates results.
+- **[core/agents/orchestrator.py](core/agents/orchestrator.py):** Add parameter `mcp_servers: list[Any] | None = None` to `create_orchestrator_agent()`; pass to `Agent(..., mcp_servers=mcp_servers or [], mcp_config={"convert_schemas_to_strict": True})`.
+- **[core/runner.py](core/runner.py):** Call `loader.get_mcp_servers()` and pass to `create_orchestrator_agent(mcp_servers=...)`.
+
+Agent creation happens **after** `start_all()`, so MCP servers are already connected when the Orchestrator is built.
+
+### 5. Extension lifecycle: MCPServerManager
+
+MCP server instances in the SDK are async context managers. The extension uses `MCPServerManager` to connect multiple servers and expose only the successful ones:
+
+```python
+async def start(self) -> None:
+    # Build list of MCPServerStdio / MCPServerStreamableHttp from config.servers
+    self._manager = MCPServerManager(
+        self._servers,
+        drop_failed_servers=True,
+        connect_timeout_seconds=10,
+    )
+    await self._manager.__aenter__()
+
+def get_mcp_servers(self) -> list:
+    return self._manager.active_servers
+
+async def stop(self) -> None:
+    await self._manager.__aexit__(None, None, None)
+```
+
+`run_background()` can be a no-op or a loop that periodically calls `manager.reconnect(failed_only=True)` for Phase 2 resilience.
+
+### 6. Manifest: `config.servers`
+
+Servers are configured under the existing `config` block. No new top-level manifest keys.
 
 ```yaml
 # sandbox/extensions/mcp/manifest.yaml
@@ -50,8 +108,8 @@ id: mcp
 name: MCP Bridge
 version: "1.0.0"
 description: >
-  Connects to MCP servers and exposes their tools to the agent.
-  Supports stdio, SSE, and Streamable HTTP transports.
+  Connects to external MCP servers and exposes their tools to the agent.
+  Supports stdio, Streamable HTTP, and SSE transports.
 
 entrypoint: main:McpBridgeExtension
 
@@ -59,20 +117,26 @@ depends_on: []
 
 config:
   servers:
-    - alias: web_search
-      transport: streamable-http
-      url: http://localhost:8000/mcp
-
     - alias: filesystem
       transport: stdio
       command: npx
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+      cache_tools: true
+      tool_filter: ["read_file", "list_directory"]
+
+    - alias: web_search
+      transport: streamable-http
+      url: http://localhost:8000/mcp
+      cache_tools: true
 
     - alias: github
-      transport: sse
-      url: https://api.example.com/mcp
+      transport: streamable-http
+      url: http://localhost:3000/mcp
       headers:
-        Authorization: "Bearer ${GITHUB_TOKEN}"  # resolved from secrets
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+      cache_tools: true
+      require_approval:
+        always: ["delete_repository"]
 
 enabled: true
 ```
@@ -81,93 +145,78 @@ enabled: true
 
 | Field | Required | Description |
 |-------|----------|--------------|
-| `alias` | Yes | Short identifier for tool prefix and logs. Must be unique per extension instance. |
-| `transport` | Yes | `stdio` \| `sse` \| `streamable-http` |
+| `alias` | Yes | Display name for logs and SDK server `name`. Unique per extension. |
+| `transport` | Yes | `stdio` \| `streamable-http` \| `sse` |
 | `command` | For stdio | Executable (e.g. `npx`, `uv`, `python`) |
-| `args` | For stdio | List of arguments (e.g. `["-y", "@modelcontextprotocol/server-filesystem", "/path"]`) |
-| `url` | For sse/streamable-http | Endpoint URL |
-| `headers` | No | HTTP headers; values like `${SECRET_NAME}` resolved via `context.get_secret()` |
-| `env` | No | Environment variables for stdio subprocess; `${SECRET_NAME}` resolved |
+| `args` | For stdio | List of arguments |
+| `url` | For HTTP | Endpoint URL |
+| `headers` | No | HTTP headers; `${SECRET_NAME}` resolved via `context.get_secret()` |
+| `env` | No | Environment for stdio subprocess; `${SECRET_NAME}` resolved |
+| `cache_tools` | No | If true, set SDK `cache_tools_list=True` to avoid repeated `list_tools()` per run |
+| `tool_filter` | No | List of allowed tool names; maps to SDK `create_static_tool_filter(allowed_tool_names=[...])` |
+| `require_approval` | No | Map `always` / `never` to tool name lists; maps to SDK `require_approval` |
 
-**Secret resolution:** Any value containing `${NAME}` is replaced with `context.get_secret("NAME")`. If the secret is missing, the server is skipped at startup (logged as warning).
+**Secret resolution:** Values containing `${NAME}` are replaced with `context.get_secret("NAME")`. If missing, that server is skipped at startup (log warning).
 
-### 3. Architecture
+### 7. Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         MCP Bridge Extension                             │
 │                                                                          │
-│  initialize()                                                            │
-│    ├── For each server in config.servers:                                │
-│    │     ├── Resolve secrets in url/headers/env                         │
-│    │     ├── Create MCP client (stdio | sse | streamable-http)           │
-│    │     └── Connect, list tools via SDK                                │
-│    └── Build wrapper tools: mcp_<alias>_<tool_name>                     │
-│                                                                          │
-│  get_tools()  ──►  [mcp_web_search_search, mcp_filesystem_read_file, …]  │
-│                                                                          │
-│  start()  ──►  Keep connections alive (or lazy connect on first call)   │
-│  stop()   ──►  Disconnect all clients                                   │
+│  initialize()  ──►  Parse config.servers, resolve secrets               │
+│  start()       ──►  MCPServerManager.__aenter__()  →  active_servers      │
+│  get_mcp_servers()  ──►  return manager.active_servers                  │
+│  stop()        ──►  MCPServerManager.__aexit__()                          │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
-                              │ MCP protocol (JSON-RPC over transport)
+                              │ SDK server instances
                               ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  MCP Server A     │  │  MCP Server B     │  │  MCP Server C     │
-│  (stdio)          │  │  (SSE)            │  │  (Streamable HTTP) │
-│  filesystem       │  │  web search       │  │  custom API       │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Loader.get_mcp_servers()  ──►  create_orchestrator_agent(mcp_servers=…) │
+│  Agent(mcp_servers=[...], mcp_config={...})                              │
+│  Runner.run(agent, prompt)  ──►  SDK calls list_tools() / call_tool()    │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              │ MCP protocol (JSON-RPC)
+                              ▼
+┌──────────────────┐  ┌──────────────────┐
+│  MCP Server       │  │  MCP Server      │
+│  (stdio)          │  │  (Streamable HTTP)│
+└──────────────────┘  └──────────────────┘
 ```
 
-### 4. Tool Wrapping Strategy
+### 8. SDK features used (no custom reimplementation)
 
-MCP tools have a `name` and `inputSchema` (JSON Schema). The OpenAI Agents SDK expects `@function_tool` with a function that accepts kwargs. We need to:
+| Feature | SDK support |
+|---------|-------------|
+| Tool list caching | `cache_tools_list=True`; invalidate with `server.invalidate_tools_cache()` |
+| Tool filtering | `tool_filter=create_static_tool_filter(allowed_tool_names=[...])` or dynamic callable |
+| Approval flow | `require_approval={"always": {"tool_names": ["delete_file"]}}`; optional `on_approval_request` callback |
+| Schema conversion | `mcp_config={"convert_schemas_to_strict": True}` |
+| Graceful degradation | `MCPServerManager(drop_failed_servers=True)`; agent sees only `active_servers` |
+| Reconnection | `manager.reconnect(failed_only=True)` (e.g. in health loop) |
+| MCP Prompts | `server.get_prompt(name, args)` — usable from ContextProvider in Phase 2 |
 
-1. **Fetch tool list** from each server at `initialize()` via `client.list_tools()`
-2. **Build dynamic tools** — one `@function_tool` per MCP tool
-3. **Naming:** `mcp_<alias>_<tool_name>` — e.g. `mcp_web_search_search`, `mcp_filesystem_read_file`
-4. **Invocation:** On agent call, `client.call_tool(tool_name, arguments)` and return the result
-
-The MCP SDK provides `ClientSession` with `list_tools()` and `call_tool()`. We wrap each in an async function and use `agents.function_tool` (or equivalent) with a dynamic schema derived from `inputSchema`.
-
-**Lazy vs eager connection:** Phase 1 uses **eager** — connect at `start()`, fail fast if a server is unreachable. Alternative: lazy connect on first tool call (deferred to implementation).
-
-### 5. Connection Lifecycle
-
-| Phase | Action |
-|-------|--------|
-| `initialize()` | Parse config, resolve secrets, validate server entries. Do **not** connect yet — `get_tools()` may be called before `start()`. |
-| `start()` | For each server: create client, connect, fetch tool list. Build wrapper tools. If a server fails, log error, skip it; other servers still work. |
-| `get_tools()` | Return cached wrapper tools (built in `start()`). If called before `start()`, return empty list (Loader calls `get_tools()` after `start()` in current flow; verify). |
-| `stop()` | Disconnect all clients, cancel in-flight calls. |
-| `health_check()` | Ping each connected server (e.g. `list_tools` or a lightweight RPC). Return `False` if any server is down. |
-
-**Reconnection:** If a server disconnects mid-session, the next tool call will fail. Phase 1 does not auto-reconnect; the user restarts the app. Phase 2 could add exponential backoff reconnect.
-
-### 6. Error Handling
+### 9. Error handling
 
 | Scenario | Behavior |
 |----------|----------|
-| Server unreachable at `start()` | Log warning, exclude that server's tools. Extension stays healthy with remaining servers. |
-| Tool call fails (timeout, connection lost) | Return error to agent as tool result; agent can retry or report to user. |
-| Invalid config (missing alias, unknown transport) | Fail `initialize()` with clear error; extension does not load. |
+| Server unreachable at `start()` | Manager marks it failed; `active_servers` excludes it. Extension stays healthy. |
+| Tool call fails at runtime | SDK returns error to model (or raises if `failure_error_function` set); agent can retry or report. |
+| Invalid config | Fail `initialize()` with clear error; extension does not load. |
 | Secret missing | Skip that server at `start()`, log which secret is missing. |
 
-### 7. Security Considerations
+### 10. Security
 
 | Concern | Mitigation |
 |---------|------------|
-| **stdio subprocess** | Server runs with same privileges as the kernel. User configures `command`/`args`; sandbox convention applies. Document that stdio servers are trusted. |
-| **HTTP servers** | Only connect to configured URLs. No automatic discovery. |
-| **Secrets in config** | Never log resolved secrets. Use `context.get_secret()`; store in `.env`. |
-| **Tool argument injection** | MCP SDK handles JSON-RPC encoding. We pass agent-provided arguments as-is; server validates. |
+| stdio subprocess | Runs with same privileges as kernel. User controls `command`/`args`. Document trust. |
+| HTTP | Only configured URLs; no automatic discovery. |
+| Secrets | Resolve via `context.get_secret()`; never log resolved values. |
+| Dangerous tools | Use `require_approval`; approval callback can publish to EventBus for user confirmation (Phase 2). |
 
-### 8. Dependencies
-
-- **Python package:** `mcp` (official SDK) — add to project `pyproject.toml` or `requirements.txt`
-- **No kernel changes** — extension is self-contained; Loader detects `ToolProvider` as usual
-
-### 9. Manifest Example (Full)
+### 11. Full manifest example
 
 ```yaml
 id: mcp
@@ -175,8 +224,7 @@ name: MCP Bridge
 version: "1.0.0"
 description: >
   Connects to MCP servers and exposes their tools to the agent.
-  Use when you need: web search, file access, GitHub, databases, etc.
-  Configure servers in config.servers.
+  Configure servers in config.servers. Use stdio or streamable-http.
 
 entrypoint: main:McpBridgeExtension
 
@@ -186,103 +234,88 @@ config:
   servers: []
 
 setup_instructions: |
-  Add MCP servers to config.servers in manifest.yaml.
-  Example (stdio): alias, transport: stdio, command, args.
-  Example (HTTP): alias, transport: streamable-http, url.
-  Use ${SECRET_NAME} in url/headers/env to inject secrets.
+  Add entries to config.servers: alias, transport (stdio | streamable-http),
+  and for stdio: command, args; for HTTP: url. Optional: cache_tools,
+  tool_filter, require_approval. Use ${SECRET_NAME} in url/headers/env.
 
 enabled: true
 ```
 
-### 10. Orchestrator Integration
-
-The Orchestrator receives tools from `loader.get_all_tools()`, which includes the MCP extension's tools. No special handling. The capabilities summary will list tools like `mcp_web_search_search`, `mcp_filesystem_read_file` with descriptions from the MCP server.
-
-**Tool description:** MCP tools include a `description` field. We pass it to the agent. Optionally prefix: `[MCP: web_search] <original description>` for clarity.
-
 ## Implementation Plan
 
-### Phase 1: Tools Only (MVP)
+### Phase 1: MVP
 
-1. Create `sandbox/extensions/mcp/` with `manifest.yaml` and `main.py`
-2. Implement `McpBridgeExtension`: Extension + ToolProvider
-3. Parse `config.servers`, support `stdio` and `streamable-http` (most common)
-4. Use MCP SDK `ClientSession` with appropriate transport
-5. At `start()`: connect, `list_tools()`, build wrapper `@function_tool` for each
-6. Implement `get_tools()` returning the wrappers
-7. Tool invocation: `call_tool(name, arguments)` → format result for agent
-8. Add `mcp` to project dependencies
-9. Document in `docs/extensions.md` and add example server configs
+1. **Kernel:** Add `get_mcp_servers()` to Loader (duck-typed). Add `mcp_servers` (and `mcp_config`) to `create_orchestrator_agent()`. In runner, pass `loader.get_mcp_servers()` into `create_orchestrator_agent()`. Ensure agent is created after `start_all()` so MCP servers are connected.
+2. **Extension:** Create `sandbox/extensions/mcp/` with `manifest.yaml` and `main.py`. Implement `McpBridgeExtension`: Extension + ServiceProvider; in `start()` build SDK server list from `config.servers`, enter `MCPServerManager`, implement `get_mcp_servers()` returning `manager.active_servers`. Support `stdio` and `streamable-http`; resolve secrets; map `cache_tools`, `tool_filter`, `require_approval` to SDK params.
+3. **Dependencies:** Add OpenAI Agents SDK dependency if not already present (MCP classes live in `agents.mcp`).
+4. **Docs:** Update `docs/extensions.md` with MCP extension and example server configs.
 
-### Phase 2: Resources and Prompts
+### Phase 2: Prompts and approval
 
-1. **Resources:** Implement `ContextProvider`. Before each agent invocation, optionally fetch relevant resources (e.g. `file://` or custom URI) and inject into context. Requires mapping "which resources to fetch" — could be manifest-driven or agent-triggered.
-2. **Prompts:** Expose MCP prompts as tools (e.g. `mcp_<alias>_get_prompt_<name>`) that return a prompt string for the agent to use, or as a dedicated mechanism. TBD based on MCP prompt semantics.
-3. **SSE transport:** Add support if needed for specific servers.
+1. **MCP Prompts:** Implement `ContextProvider` in the MCP extension (or a separate one) that calls `server.get_prompt(name, args)` and injects result into agent context.
+2. **Approval flow:** Wire `require_approval` + `on_approval_request` to EventBus or channel so user can confirm dangerous tools.
+3. **Health and reconnect:** In `run_background()` or health_check, call `manager.reconnect(failed_only=True)` and optionally emit events for observability.
 
-### Phase 3: Resilience and UX
+### Phase 3: Observability and agent-extensions
 
-1. **Reconnection:** Auto-reconnect on connection loss with backoff
-2. **Health check:** Implement `health_check()` pinging each server
-3. **Observability:** Emit `mcp.tool_called`, `mcp.tool_failed` events to EventBus for debugging
-4. **Config validation:** Pydantic model for server config; clear errors on invalid YAML
+1. **Observability:** Emit EventBus events for MCP tool calls (e.g. `mcp.tool_called`, `mcp.tool_failed`).
+2. **Agent-extensions:** If needed, allow agent-extensions to declare `uses_mcp` so sub-agents get a subset of MCP servers (design TBD).
+3. **Hosted MCP:** Document or support `HostedMCPTool` for publicly reachable servers (added to `tools`, not `mcp_servers`).
 
 ## Consequences
 
 ### Benefits
 
-- **Extensibility without code:** Users add new capabilities by editing manifest YAML
-- **Ecosystem leverage:** Hundreds of MCP servers become available instantly
-- **Consistent with architecture:** Extension, not kernel; protocol detection via `isinstance(ToolProvider)`
-- **Transport flexibility:** stdio for local servers, HTTP for remote
+- **Native SDK path:** No reimplementation of listing, invocation, schema conversion, caching, or approval.
+- **Extensibility without code:** Users add MCP servers by editing manifest YAML.
+- **Minimal kernel surface:** No new protocol; one duck-typed method and three call sites.
+- **Resilience and UX from SDK:** Reconnection, tool filter, approval, and tracing come from the SDK.
 
 ### Trade-offs
 
 | Trade-off | Impact |
 |-----------|--------|
-| **External dependency** | MCP SDK adds ~1 package; acceptable |
-| **Connection state** | Extension holds connections; must handle disconnect gracefully |
-| **Tool count** | Many servers → many tools; Orchestrator prompt grows. Mitigation: allow `config.enabled_servers` to filter which servers to load, or `config.tool_allowlist` per server |
-| **Latency** | Each tool call is a round-trip to MCP server; may add 50–200ms. Acceptable for MVP |
+| **Kernel awareness of MCP** | Orchestrator and runner must pass `mcp_servers`; loader must expose `get_mcp_servers()`. Small, localized change. |
+| **Tool count** | Many servers → many tools in one agent. Mitigate with `tool_filter` per server. |
+| **Creation order** | Agent must be created after `start_all()` so MCP servers are connected. Current runner already does this. |
 
 ### Risks
 
 | Risk | Severity | Mitigation |
-|------|----------|-------------|
-| **MCP server crash** | Medium | Catch errors, return structured error to agent; `health_check` marks extension unhealthy |
-| **Schema mismatch** | Low | MCP `inputSchema` → OpenAI tool schema conversion; SDK may have helpers; fallback to generic `**kwargs` |
-| **Tool name collision** | Low | Prefix `mcp_<alias>_` ensures uniqueness within extension; alias must be unique in config |
+|------|----------|------------|
+| **SDK API drift** | Low | Pin SDK version; follow OpenAI Agents SDK MCP docs. |
+| **Manager lifecycle** | Low | Ensure `stop()` always calls `__aexit__` so connections close on shutdown. |
 
 ## Alternatives Considered
 
+### ToolProvider + manual wrapping (original ADR)
+
+**Rejected.** Would reimplement what the SDK already does: `list_tools()` before each run, schema conversion, tool invocation, retries. Would also lose `cache_tools_list`, `tool_filter`, `require_approval`, `MCPServerManager.reconnect()`, and tracing. Manual wrappers would be brittle and incomplete.
+
+### New protocol `MCPProvider` in contract.py
+
+**Rejected.** Only one extension is expected to provide MCP servers. Adding a 7th protocol for a single implementation violates YAGNI. Duck-typing in Loader is sufficient; a protocol can be introduced later if multiple extensions begin providing servers.
+
+### MCP config in manifest root (`mcp_servers:`)
+
+**Rejected.** Keeps manifest schema consistent: all extension-specific config lives under `config`. Server list stays in `config.servers`.
+
 ### One extension per MCP server
 
-**Rejected.** Would require generating a new extension for each server (e.g. `mcp_web_search`, `mcp_filesystem`). Config-driven list in one extension is simpler; user edits YAML, no code.
-
-### MCP in kernel
-
-**Rejected.** Violates "all functionality in extensions." Kernel stays minimal.
-
-### Resources as tools only
-
-**Alternative for Phase 2.** Instead of `ContextProvider`, expose `mcp_<alias>_read_resource` tool that fetches a resource by URI. Agent calls it when needed. Simpler but less automatic than context injection.
-
-### Declarative MCP (no entrypoint)
-
-**Deferred.** A future `DeclarativeMcpAdapter` could create the extension from manifest only (like `DeclarativeAgentAdapter`). For now, programmatic extension is clearer and allows custom logic (reconnect, filtering).
+**Rejected.** Config-driven list in one extension is simpler; user edits YAML, no new extension per server.
 
 ## Relation to Other ADRs
 
-- **ADR 002** — MCP extension implements `ToolProvider`; Loader wires it like any other. No new protocols.
-- **ADR 003** — Agent-extensions can list `mcp` in `uses_tools` to get MCP tools. Tool isolation works as designed.
-- **ADR 004** — Phase 3 observability can emit events to EventBus.
-- **ADR 005** — Memory is unrelated; MCP could provide a "memory" MCP server as alternative backend (out of scope).
+- **ADR 002** — MCP extension implements `ServiceProvider`; Loader wires it. Tools reach the agent via `mcp_servers`, not `get_tools()`.
+- **ADR 003** — Orchestrator receives MCP tools natively. Future: agent-extensions could receive a subset via `uses_mcp` (Phase 3).
+- **ADR 004** — Phase 2/3 approval and observability can use EventBus.
+- **ADR 005** — Memory is unrelated; MCP could provide an alternative memory backend (out of scope).
 
 ## References
 
-- [Model Context Protocol — Specification](https://modelcontextprotocol.io/)
-- [MCP Python SDK](https://modelcontextprotocol.github.io/python-sdk/)
-- [MCP Python SDK — GitHub](https://github.com/modelcontextprotocol/python-sdk)
-- [OpenAI Agents SDK — MCP](https://openai.github.io/openai-agents-python/mcp/) — OpenAI's MCP integration patterns
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [OpenAI Agents SDK — MCP](https://openai.github.io/openai-agents-python/mcp/)
+- [OpenAI Agents SDK — MCP Server Reference](https://openai.github.io/openai-agents-python/ref/mcp/server/)
+- [MCP Python SDK](https://modelcontextprotocol.github.io/python-sdk/) (client/transport layer; SDK server classes used here are from OpenAI Agents SDK)
 - ADR 002: Nano-Kernel + Extensions
 - ADR 003: Agent-as-Extension
