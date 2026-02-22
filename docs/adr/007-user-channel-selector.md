@@ -150,6 +150,7 @@ Two new `@function_tool` tools, created as core tools (not an extension) because
 ```python
 # core/tools/channel.py
 
+import json
 from agents import function_tool
 from core.extensions.router import MessageRouter
 
@@ -160,40 +161,39 @@ def make_channel_tools(router: MessageRouter) -> list:
     @function_tool
     async def list_channels() -> str:
         """List all available communication channels.
-        Returns channel IDs the agent can use with send_to_channel."""
+        Returns JSON array of {channel_id, description} objects for use with send_to_channel."""
         ids = router.get_channel_ids()
         if not ids:
-            return "No channels registered."
+            return json.dumps([], ensure_ascii=False)
         descriptions = router.get_channel_descriptions()
-        parts = []
-        for cid in ids:
-            label = descriptions.get(cid)
-            parts.append(f"{cid} ({label})" if label else cid)
-        return ", ".join(parts)
+        channels = [
+            {"channel_id": cid, "description": descriptions.get(cid) or ""}
+            for cid in ids
+        ]
+        return json.dumps(channels, ensure_ascii=False)
 
     @function_tool
     async def send_to_channel(channel_id: str, text: str) -> str:
         """Send a message to the user via a specific channel.
-
-        Use when the user explicitly asks to communicate through a particular channel
-        (e.g. "send to Telegram", "напиши мне в Slack").
-
-        Args:
-            channel_id: Channel ID from list_channels (e.g. "telegram_channel").
-            text: Message to deliver.
-        """
+        Returns JSON: {"success": true} or {"success": false, "error": "..."}."""
         if channel_id not in router.get_channel_ids():
-            return f"Error: channel '{channel_id}' not found. Use list_channels to see available channels."
-        await router.notify_user(text, channel_id)
-        return f"Message sent to {channel_id}."
+            return json.dumps(
+                {"success": False, "error": f"Channel '{channel_id}' not found. Use list_channels to see available channels."},
+                ensure_ascii=False,
+            )
+        try:
+            await router.notify_user(text, channel_id)
+            return json.dumps({"success": True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
     return [list_channels, send_to_channel]
 ```
 
 Design notes:
-- `send_to_channel` validates the `channel_id` up front and returns a clear error if the channel is not registered, instead of silently falling back to the default channel.
+- `send_to_channel` validates the `channel_id` up front and returns typed JSON: `{"success": true}` on success, or `{"success": false, "error": "..."}` on failure. This enables the agent to reliably detect delivery status.
 - It delegates to `router.notify_user(text, channel_id)` which calls `ch.send_message(text)` — the channel handles all addressing internally.
-- `list_channels` returns human-readable output like `"cli_channel (CLI Channel), telegram_channel (Telegram Channel)"` — the labels come from manifest `name` fields, injected via `router.set_channel_descriptions()` during bootstrap. This helps the LLM map natural language ("Telegram") to the correct `channel_id` without requiring exact ID knowledge.
+- `list_channels` returns a JSON array of `{channel_id, description}` objects — clear separation for programmatic use. Descriptions come from manifest `name` fields, injected via `router.set_channel_descriptions()` during bootstrap. This helps the LLM map natural language ("Telegram") to the correct `channel_id` without requiring exact ID knowledge.
 
 ### 6. Inject channel tools into Orchestrator
 
@@ -263,7 +263,7 @@ CLI → user.message{text, user_id="cli_user", channel_id="cli_channel"}
          → telegram_channel.send_message("Привет")
            (internally: bot.send_message(chat_id=self._chat_id, text="Привет"))
          → Telegram delivers "Привет"
-         → tool returns: "Message sent to telegram_channel."
+         → tool returns: {"success": true}
       2. Orchestrator returns: "Хорошо, передал привет в Telegram"
   → cli_channel.send_to_user("cli_user", "Хорошо, передал привет в Telegram")
 ```
