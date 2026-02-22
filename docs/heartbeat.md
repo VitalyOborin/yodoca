@@ -66,10 +66,10 @@ The Scout is an `Agent` built at initialization:
 
 - **Model:** `heartbeat_scout` from `agent_config` in manifest (e.g. `gpt-5-mini`)
 - **Instructions:** From `prompt.jinja2` in the extension directory
-- **Tools:** None — Scout only reasons
+- **Tools:** Resolved from manifest `agent.uses_tools` — currently `memory` and `kv` (ToolProvider extensions). Tools from `memory_maintenance` and `memory_reflection` are listed in `uses_tools` but not included since they are not ToolProviders.
 - **Output:** `HeartbeatDecision` (Pydantic) with `action` and `reason`
 
-`Runner.run(scout, enriched, max_turns=1)` — single LLM call, no tool use, structured output.
+`Runner.run(scout, enriched, max_turns=1)` — single turn with structured output. The Scout can technically use tools (e.g. `search_memory`, `kv_get`) within its single turn, but the `output_type=HeartbeatDecision` constraint and `max_turns=1` mean it typically produces a decision directly from the enriched prompt.
 
 ### 4. Decision dispatch
 
@@ -110,9 +110,9 @@ The Scout is an `Agent` built at initialization:
 
 ## Limitations
 
-### 1. Scout has no tools
+### 1. Scout tools are limited by max_turns=1
 
-The Scout agent has `tools=[]`. It can only reason over the enriched prompt. It cannot call `list_schedules`, read KV, or run maintenance. For "done" it can only produce a summary; for "escalate" it must describe the task for the Orchestrator.
+The Scout agent receives tools from `memory` and `kv` via `context.resolved_tools` (resolved from manifest `agent.uses_tools`). However, with `max_turns=1` and `output_type=HeartbeatDecision`, the Scout typically produces a structured decision directly rather than making tool calls. If tool use is needed, the single turn limits it to one round of calls before the final output.
 
 ### 2. Memory context quality depends on prompt
 
@@ -138,6 +138,8 @@ The Scout runs without `session` — it does not accumulate conversation history
 
 | Section       | Key              | Description                                                                 |
 | ------------- | ---------------- | --------------------------------------------------------------------------- |
+| `depends_on`  |                  | `memory`, `memory_maintenance`, `memory_reflection`, `kv`                   |
+| `agent`       | `uses_tools`     | `memory`, `memory_maintenance`, `memory_reflection`, `kv` — resolved to `context.resolved_tools` |
 | `agent_config` | `heartbeat_scout` | Model config for Scout: `provider`, `model`. Registered in ModelRouter.   |
 | `config`      | `prompt`         | Base prompt for the Scout. Should be memory-friendly (concrete nouns).      |
 | `schedules`   | `agent_loop`     | Cron and task: `cron: "*/2 * * * *"`, `task: emit_heartbeat`.               |
@@ -167,9 +169,9 @@ async def execute_task(self, task_name: str) -> dict[str, Any] | None:
 
 A separate extension could implement `ServiceProvider` and subscribe to `user_message` to track last activity. When idle for N minutes, it could emit `system.agent.background` or call a custom topic. This would complement the cron-based Heartbeat.
 
-### 3. Scout tools (advanced)
+### 3. Expanding Scout tool access
 
-Giving the Scout limited tools (e.g. read-only `list_schedules`, `get_kv`) would allow "done" to reflect actual system state. This increases complexity and cost; the current design favours simplicity and escalation.
+The Scout already has `memory` and `kv` tools. Adding more (e.g. `scheduler` for `list_schedules`) requires adding the extension to both `depends_on` and `agent.uses_tools` in the manifest. Increasing `max_turns` would allow multi-step reasoning with tool calls, but increases cost and latency per heartbeat.
 
 ### 4. Custom ContextProvider for Heartbeat
 
@@ -204,7 +206,7 @@ The manifest's `agent_config` supports a single `heartbeat_scout`. To use differ
 | Decision                    | Rationale                                                                    |
 | --------------------------- | -----------------------------------------------------------------------------|
 | SchedulerProvider only      | Uses Core Cron Loop; no ServiceProvider, no duplicate scheduling logic       |
-| Scout without AgentProvider | Scout is internal; Orchestrator does not need it as a tool                   |
+| Scout without AgentProvider | Scout is internal; Orchestrator does not need it as a tool. Tools from `uses_tools` are passed via `resolved_tools`. |
 | Structured output           | Pydantic `HeartbeatDecision` avoids brittle text parsing                     |
 | enrich_prompt in core       | Public API allows any extension to get memory context without invoking agent |
 | agent_config in manifest    | Scout model lives with the extension; no global settings coupling            |

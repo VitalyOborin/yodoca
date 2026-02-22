@@ -52,15 +52,19 @@ The Event Bus provides:
 
 | Column         | Type | Description                                       |
 | -------------- | ---- | ------------------------------------------------- |
-| id             | int  | Primary key                                       |
+| id             | int  | Primary key (AUTOINCREMENT)                       |
+| correlation_id | text | Optional correlation for tracing                  |
 | topic          | text | Event topic (e.g. `reminder.due`, `user.message`) |
 | source         | text | Extension ID that published                       |
 | payload        | text | JSON-serialized payload                           |
-| correlation_id | text | Optional correlation for tracing                  |
-| status         | text | `pending` → `processing` → `done` | `failed`      |
+| status         | text | `pending` → `processing` → `done` \| `failed`    |
 | created_at     | real | Unix timestamp                                    |
 | processed_at   | real | Set when done/failed                              |
 | error          | text | Error message if failed                           |
+
+**Indexes:** `(topic, status)`, `(status, created_at)`, `(correlation_id)`.
+
+**Pragmas:** `journal_mode=WAL`, `synchronous=NORMAL`.
 
 ---
 
@@ -97,7 +101,7 @@ Trigger the Orchestrator silently; no user response. Emits `system.agent.backgro
 
 ### `subscribe_event(topic, handler)`
 
-Register an async handler for a topic. Called from `initialize()`. Handler receives an `Event` (or equivalent dict-like object).
+Register an async handler for a topic. Called from `initialize()`. Handler receives a frozen `Event` dataclass (see Event Model below).
 
 ```python
 async def initialize(self, context):
@@ -130,7 +134,7 @@ Use via `ctx.notify_user()`, `ctx.request_agent_task()`, `ctx.request_agent_back
 
 ## Manifest-Driven Subscriptions
 
-The Loader wires handlers from `manifest.yaml` **before** extensions are initialized. Two built-in handlers:
+The Loader wires handlers from `manifest.yaml` in `wire_event_subscriptions()` — called **after** `initialize_all` and `detect_and_wire_all`. Two built-in handlers:
 
 ### `handler: notify_user`
 
@@ -145,7 +149,7 @@ events:
 
 ### `handler: invoke_agent`
 
-Invokes an `AgentProvider` extension with the event as context; sends the agent response to the user. Used for proactive agent flows (e.g. reminders, task processing).
+Requires the extension to implement `AgentProvider`. Builds a prompt from `event.payload["prompt"]` (falls back to formatted event data), calls `agent.invoke(task, context)` with an `AgentInvocationContext`, and sends the agent response to the user via `notify_user`. Used for proactive agent flows (e.g. reminders, task processing).
 
 ```yaml
 agent:
@@ -179,7 +183,7 @@ class Event:
     payload: dict
     created_at: float # Unix timestamp
     correlation_id: str | None = None
-    status: str       # "processing" during delivery
+    status: str = "pending"  # handlers always receive "processing"
 ```
 
 ---
@@ -192,7 +196,7 @@ The Event Bus runs a single `_dispatch_loop`:
 2. **Fetch** pending events from journal (limit 3 per iteration)
 3. **Deliver** to all subscribers; mark `processing` → `done` or `failed`
 
-Handlers run sequentially per event. If any handler raises, the event is marked `failed` with the error message; other handlers for that topic still run.
+Handlers run sequentially per event. If any handler raises, the event is marked `failed` with the error message (joined by "; " for multiple failures); other handlers for that topic still run. `failed` is a terminal state — failed events are **not** retried. Only events left in `processing` (crash during delivery) are recovered to `pending` on restart.
 
 ---
 
@@ -207,15 +211,17 @@ The dispatch loop then processes recovered events normally.
 
 ---
 
-## Built-in Topics
+## Common Topics
 
 
-| Topic             | Source      | Payload                         | Purpose                   |
-| ----------------- | ----------- | ------------------------------- | ------------------------- |
-| `user.message`    | cli_channel | `text`, `user_id`, `channel_id` | User input → agent        |
-| `reminder.due`    | extensions  | `text`, optional `channel_id`   | Deferred reminders        |
-| `checkin.started` | extensions  | `step`, `total`                 | Multi-step workflows      |
-| `task.received`   | extensions  | `text`                          | Proactive task processing |
+| Topic             | Source            | Payload                         | Purpose                   |
+| ----------------- | ----------------- | ------------------------------- | ------------------------- |
+| `user.message`    | channels          | `text`, `user_id`, `channel_id` | User input → agent (kernel-handled) |
+| `reminder.due`    | scheduler / extensions | `text`, optional `channel_id`   | Deferred reminders        |
+| `checkin.started` | extensions        | `step`, `total`                 | Multi-step workflows      |
+| `task.received`   | extensions        | `text`                          | Proactive task processing |
+
+> `user.message` has a kernel-registered handler (wired in `loader.wire_event_subscriptions()`). The other topics are extension conventions — any extension can publish or subscribe to them.
 
 
 ---

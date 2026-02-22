@@ -1,0 +1,10 @@
+id: telegram_channel
+name: Telegram Channel
+version: "0.2.0"
+description: "Telegram Bot API channel via aiogram long-polling. Receives user messages, delivers agent responses."
+entrypoint: main:TelegramChannelExtension
+depends_on:
+  - kv
+config:
+  polling_timeout: 30        # long-polling timeout in seconds
+enabled: true

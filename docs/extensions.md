@@ -6,7 +6,7 @@ This document describes the extension architecture in the assistant4 system: how
 
 ## Overview
 
-Extensions are **pluggable modules** that extend the system with tools, channels, agents, schedulers, and services. They live in `sandbox/extensions/<id>/` and are discovered, loaded, and wired by the **Loader** at startup. Capabilities are detected via **protocols** (duck typing), not via manifest fields.
+Extensions are **pluggable modules** that extend the system with tools, channels, agents, schedulers, and services. They live in `sandbox/extensions/<id>/` and are discovered, loaded, and wired by the **Loader** at startup. Capabilities are detected via **`@runtime_checkable` Protocol classes** (`core/extensions/contract.py`), not via manifest fields.
 
 **Key principle:** Extensions interact with the system **only** through `ExtensionContext` — no direct imports of core modules.
 
@@ -19,21 +19,22 @@ Extensions are **pluggable modules** that extend the system with tools, channels
 │                              Runner (bootstrap)                                         │
 │  discover → load_all → initialize_all → detect_and_wire_all → wire_event_subscriptions  │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
-                                        │
-          ┌─────────────────────────────┼─────────────────────────────┐
-          ▼                             ▼                             ▼
+                                       │
+          ┌────────────────────────────┼─────────────────────────────┐
+          ▼                            ▼                             ▼
 ┌──────────────────┐         ┌──────────────────┐         ┌─────────────────────┐
 │     Loader       │         │  MessageRouter   │         │    EventBus         │
 │  - manifests     │         │  - channels      │         │  - durable pub/sub  │
 │  - extensions    │         │  - agent ref     │         │  - system topics    │
 │  - protocol      │         │  - notify_user   │         │  - recovery         │
 │    detection     │         │  - invoke_agent  │         │                     │
-└────────┬─────────┘         └────────┬─────────┘         └────────┬────────────┘
-         │                            │                            │
-         ▼                            ▼                            ▼
+└────────┬─────────┘         └─────────┬────────┘         └──────────┬──────────┘
+         │                             │                             │
+         ▼                             ▼                             ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                         Extensions (sandbox/extensions/<id>/)                          │
-│  ToolProvider │ ChannelProvider │ AgentProvider │ SchedulerProvider │ ServiceProvider  │
+│                    ToolProvider │ ChannelProvider │ AgentProvider                      │
+│                SchedulerProvider │ ServiceProvider │ ContextProvider                   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -54,10 +55,12 @@ The startup sequence in `core/runner.py`:
 3. **initialize_all** — Create `ExtensionContext` per extension; call `initialize(ctx)`
 4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
 5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
-6. **create_orchestrator_agent** — Merge `get_all_tools()` + `get_agent_tools()` + capabilities summary
-7. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron loop)
+6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + `get_agent_tools()` + capabilities summary
+7. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
+8. **SQLiteSession** → `router.set_session()` (conversation history)
+9. **wire_context_providers** — Collect `ContextProvider` extensions, chain into router middleware
 
-Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: `stop()` → `destroy()`).
+Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: cancel service/cron/health tasks → `stop()` → `destroy()`).
 
 ---
 
@@ -149,6 +152,23 @@ async def run_background(self) -> None:
 
 Loader wraps it in `asyncio.create_task()` and cancels on shutdown.
 
+### `ContextProvider`
+
+Enriches the agent prompt before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
+
+```python
+@property
+def context_priority(self) -> int:
+    """Lower value = earlier in chain. Default: 100."""
+
+async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str | None:
+    """Return context string to prepend, or None to skip."""
+```
+
+Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and prepends them to the user prompt before `Runner.run()`.
+
+**Example:** The `memory` extension implements ContextProvider to inject relevant episodic/semantic context via hybrid search.
+
 ### `SetupProvider`
 
 Extension that needs configuration (secrets, settings).
@@ -205,10 +225,12 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 | `model` | str | — | LLM model identifier |
 | `instructions` | str | `""` | Inline system prompt (optional). Merged with `prompt.jinja2` if both exist. |
 | `parameters` | dict | `{}` | Extra agent params |
+| `uses_tools` | list[str] | `[]` | Extension IDs or `core_tools` for tools |
+| `limits` | object | defaults below | `max_turns`, `max_tokens_per_invocation`, `time_budget_ms` |
+
+**Limits defaults:** `max_turns=10`, `max_tokens_per_invocation=50000`, `time_budget_ms=120000`.
 
 **Prompt resolution:** Agent extensions may have `prompt.jinja2` in `extensions/<id>/`. The Loader auto-detects it at startup (no manifest field). If present, file content is used first; then `instructions` from manifest is appended. Only extension dir is searched; project `prompts/` is system-only.
-| `uses_tools` | list[str] | `[]` | Extension IDs or `core_tools` for tools |
-| `limits` | object | — | `max_turns`, `max_tokens_per_invocation`, `time_budget_ms` |
 
 ### Events Section (`events`)
 
@@ -258,12 +280,13 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `request_agent_task(prompt, channel_id)` | Ask Orchestrator; response to user |
 | `request_agent_background(prompt, correlation_id)` | Ask Orchestrator silently |
 
-### Router (Legacy / Fallback)
+### Agent Invocation
 
 | Method | Description |
 |--------|-------------|
-| `on_user_message` | Alias for `router.handle_user_message` |
-| `invoke_agent(prompt)` | Run Orchestrator, return response |
+| `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
+| `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain without invoking agent |
+| `on_user_message` | Alias for `router.handle_user_message` (full message cycle) |
 
 ### System Control
 
@@ -314,7 +337,7 @@ See [event_bus.md](event_bus.md) for full details.
 
 The **Orchestrator** is the main agent that coordinates user requests.
 
-- **Tools:** `loader.get_all_tools()` (ToolProvider) + `loader.get_agent_tools()` (AgentProvider with `integration_mode: "tool"`)
+- **Tools:** Core tools (`core/tools/`) + `loader.get_all_tools()` (ToolProvider) + `loader.get_agent_tools()` (AgentProvider with `integration_mode: "tool"`)
 - **Instructions:** Include `loader.get_capabilities_summary()` — natural-language list of tools and agents
 - **Routing:** Orchestrator chooses which tool or agent to call based on the user message and capabilities
 
@@ -480,7 +503,10 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 
 ## References
 
+- [architecture.md](architecture.md) — System overview and bootstrap
 - [event_bus.md](event_bus.md) — Event Bus architecture and topics
+- [channels.md](channels.md) — Channel providers (CLI, Telegram)
+- [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Example extensions: `kv`, `scheduler`, `cli_channel`, `memory_maintenance`, `memory_reflection`, `simple_agent`, `builder_agent`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `memory_maintenance`, `memory_reflection`, `kv`, `scheduler`, `heartbeat`, `embedding`, `ner`, `builder_agent`, `simple_agent`

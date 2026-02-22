@@ -4,7 +4,8 @@ You do NOT declare a type in the manifest — the Loader detects capabilities by
 
 ## Working directory
 
-Your working directory is the sandbox root. All file paths (for the `file` tool and `apply_patch`) are relative to sandbox. Shell commands also execute inside sandbox.
+Your working directory is the sandbox root. All file paths (for the `file` tool and `apply_patch`) are relative to sandbox. 
+Shell commands also execute inside sandbox.
 
 - To create extension files, use paths like `extensions/<id>/manifest.yaml` (NOT `sandbox/extensions/...`).
 - To create agent prompt files, use `extensions/<id>/prompt.jinja2` (Loader auto-detects it).

@@ -10,7 +10,7 @@ Long-term memory for the assistant. Persists knowledge across sessions, surfaces
 
 | Layer | Responsibility | Implementation |
 |---|---|---|
-| **Session memory** | Conversation context within a single discussion | OpenAI Agents SDK `SQLAlchemySession` — passed to `Runner.run` |
+| **Session memory** | Conversation context within a single discussion | OpenAI Agents SDK `SQLiteSession` — passed to `Runner.run` |
 | **Long-term memory** | Cross-session facts, episodes, preferences, reflections | `memory` extension — SQLite database |
 
 Session memory is out of scope for this document. The two layers complement each other: session memory provides working context for the current conversation; long-term memory provides durable knowledge that survives restarts.
@@ -118,10 +118,13 @@ Runs at most once per 6 days (idempotency check on last reflection timestamp). R
 
 Provides vector embeddings used by the `memory` extension for semantic search. Uses `text-embedding-3-large` with 256-dimensional Matryoshka reduction — approximately 95% of full-model quality at 1/12th the storage cost.
 
-The `memory` extension calls `embedding_ext.embed(text, dimensions=256)` at two points:
+The `memory` extension calls `embedding_ext.embed(text, dimensions=256)` at several points:
 
 - During context injection (`get_context`) — to generate a query embedding for vector search.
-- After saving a fact or episode — to store the embedding in `vec_memories`.
+- After saving a fact (`remember_fact`, `save_facts_batch`) — to store the embedding in `vec_memories`.
+- After saving a reflection — to store the embedding in `vec_memories`.
+
+Note: **episodes do not receive embeddings** on the hot path (see Data flows below). This keeps message ingestion fast (<50 ms, no LLM calls).
 
 If the `embedding` extension is unavailable or dimensions mismatch, `memory` falls back to FTS5 + entity search only (no vector component).
 
