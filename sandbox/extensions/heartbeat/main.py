@@ -55,9 +55,9 @@ class HeartbeatExtension:
             raise RuntimeError("heartbeat: model_router or heartbeat_scout config required")
         self._scout = Agent(
             name="HeartbeatScout",
-            instructions=instructions or "You are a lightweight background scout.",
+            instructions=instructions,
             model=model,
-            tools=[],
+            tools=context.resolved_tools,
             output_type=HeartbeatDecision,
         )
 

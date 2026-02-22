@@ -8,7 +8,19 @@ description: |
   Periodic scout: checks memory for actionable items, escalates to Orchestrator
   when needed. Uses lightweight model for cost efficiency.
 
-depends_on: []
+depends_on:
+  - memory
+  - memory_maintenance
+  - memory_reflection
+  - kv
+
+agent:
+  model: gpt-5-mini
+  uses_tools:
+    - memory
+    - memory_maintenance
+    - memory_reflection
+    - kv
 
 agent_config:
   heartbeat_scout:
