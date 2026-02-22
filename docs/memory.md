@@ -31,9 +31,16 @@ The core extension. Owns the database, all read/write operations, context inject
 |---|---|
 | `main.py` | `MemoryExtension` — lifecycle, event subscriptions, `ContextProvider`, public API |
 | `db.py` | `MemoryDatabase` — SQLite connection, schema deployment, `sqlite-vec` integration |
-| `repository.py` | `MemoryRepository` — all CRUD, FTS5/vector/hybrid search, decay, session management |
+| `repository.py` | `MemoryCrudRepository` (CRUD, sessions, stats) + `MemoryRepository` facade (delegates to services) |
+| `search_filter.py` | `SearchFilter` — shared filter builder (kind, tag, time range, session exclusion) |
+| `search.py` | `MemorySearchService` — FTS5, vector, entity search, hybrid RRF merge |
+| `entities.py` | `EntityRepository` — entity CRUD, linking, search, enrichment |
+| `decay.py` | `DecayService` — Ebbinghaus decay and pruning |
+| `dedup.py` | `DedupService` — batch fact save with two-level deduplication |
 | `tools.py` | Agent tools for the Orchestrator and for the consolidator agent (two separate sets) |
 | `entity_linker.py` | Bridges the NER extension output to `MemoryRepository` entity operations |
+
+**Architecture:** `MemoryRepository` is a facade that delegates to domain services (`MemorySearchService`, `EntityRepository`, `DecayService`, `DedupService`, `MemoryCrudRepository`). Consumers (`main.py`, `tools.py`, `entity_linker.py`) use the facade unchanged. `SearchFilter` centralises filter logic (kind, tag, time range, session exclusion) shared by all search methods.
 
 **Initialization flow:**
 
@@ -301,6 +308,8 @@ The `memory` extension implements three search strategies, combined via Reciproc
 
 **RRF merge:** `score(memory) = Σ 1 / (60 + rank_i)` across all lists in which the memory appears. Top-N by fused score are returned. This consistently outperforms any single method.
 
+**Time-based filtering:** All search methods accept optional `after_ts` and `before_ts` (Unix timestamps). Filtering is applied on `created_at` in SQL. The `search_memory` tool exposes this via `after` and `before` string parameters that accept ISO dates (`2026-02-20`), datetimes (`2026-02-20T14:30:00`), relative expressions (`2 days ago`, `1 week ago`), and named anchors (`yesterday`, `last week`, `last month`).
+
 Context injection calls `hybrid_search(prompt, kind="fact", limit=5, exclude_session_id=current)` — only facts from previous sessions are injected.
 
 ---
@@ -311,7 +320,7 @@ Context injection calls `hybrid_search(prompt, kind="fact", limit=5, exclude_ses
 
 | Tool | Description |
 |---|---|
-| `search_memory` | Hybrid search. Main retrieval tool. |
+| `search_memory` | Hybrid search. Main retrieval tool. Supports time filtering via `after` and `before` (ISO date, relative like `2 days ago`, or named like `yesterday`). |
 | `remember_fact` | Explicitly save a fact. Generates embedding and links entities. |
 | `correct_fact` | Soft-delete old fact, create replacement. |
 | `confirm_fact` | Set `decay_rate=0.0, confidence=1.0` — permanently protected. |

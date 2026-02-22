@@ -1,24 +1,22 @@
-"""MemoryRepository: CRUD, FTS5 search, vector search, hybrid RRF. No business logic."""
+"""Memory CRUD + facade. MemoryRepository delegates to domain services."""
 
 import json
-import logging
-import math
-import re
 import time
 import uuid
 from typing import Any
 
 import sqlite_vec
+
 from db import MemoryDatabase  # noqa: I001 - db loaded from ext dir via sys.path
+from decay import DecayService
+from dedup import DedupService
+from entities import EntityRepository
+from search import MemorySearchService
+from search_filter import SearchFilter
 
-logger = logging.getLogger(__name__)
 
-# If fact count exceeds this, fall back to per-fact FTS for Level 2 dedup (memory footprint).
-_DEDUP_PREFETCH_LIMIT = 20_000
-
-
-class MemoryRepository:
-    """Database operations for memories. FTS5 sync is handled by DB triggers."""
+class MemoryCrudRepository:
+    """CRUD for memories, sessions, stats. No search, entities, decay, or dedup."""
 
     def __init__(self, db: MemoryDatabase) -> None:
         self._db = db
@@ -153,60 +151,6 @@ class MemoryRepository:
         row = await cursor.fetchone()
         return row[0] if row and row[0] else None
 
-    async def fts_search(
-        self,
-        query: str,
-        kind: str | None = None,
-        tag: str | None = None,
-        limit: int = 10,
-        exclude_session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """FTS5 search. Returns list of memory dicts. Empty query returns []."""
-        if not query or not query.strip():
-            return []
-        conn = await self._db._ensure_conn()
-        fts_query = _escape_fts5_query(query.strip())
-        params: list[Any] = [fts_query, limit]
-        kind_filter = " AND m.kind = ?" if kind else ""
-        tag_filter = " AND m.tags LIKE ?" if tag else ""
-        session_filter = ""
-        if kind:
-            params.append(kind)
-        if tag:
-            params.append(f'%"{tag}"%')
-        if exclude_session_id:
-            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
-            params.append(exclude_session_id)
-        sql = f"""
-            SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
-                   m.confidence, m.tags
-            FROM memories m
-            INNER JOIN (
-                SELECT rowid FROM memories_fts
-                WHERE memories_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            ) f ON m.rowid = f.rowid
-            WHERE m.valid_until IS NULL
-            {kind_filter}
-            {tag_filter}
-            {session_filter}
-        """
-        cursor = await conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "tags": json.loads(r[6]) if r[6] else [],
-            }
-            for r in rows
-        ]
-
     async def save_embedding(self, memory_id: str, embedding: list[float]) -> None:
         """Store embedding in vec_memories. Overwrites if memory_id exists."""
         conn = await self._db._ensure_conn()
@@ -216,123 +160,6 @@ class MemoryRepository:
             (memory_id, blob),
         )
         await conn.commit()
-
-    async def vector_search(
-        self,
-        query_embedding: list[float],
-        kind: str | None = None,
-        tag: str | None = None,
-        limit: int = 10,
-        exclude_session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Vector KNN search via vec0 MATCH. Returns same shape as fts_search (with distance)."""
-        conn = await self._db._ensure_conn()
-        blob = sqlite_vec.serialize_float32(query_embedding)
-        buffer = limit * 3  # request extra to compensate for post-filter
-        params: list[Any] = [blob, buffer]
-        kind_filter = " AND m.kind = ?" if kind else ""
-        tag_filter = " AND m.tags LIKE ?" if tag else ""
-        session_filter = ""
-        if kind:
-            params.append(kind)
-        if tag:
-            params.append(f'%"{tag}"%')
-        if exclude_session_id:
-            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
-            params.append(exclude_session_id)
-        sql = f"""
-            SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
-                   m.confidence, m.tags, v.distance
-            FROM vec_memories v
-            INNER JOIN memories m ON m.id = v.memory_id
-            WHERE v.embedding MATCH ? AND v.k = ?
-              AND m.valid_until IS NULL
-            {kind_filter}
-            {tag_filter}
-            {session_filter}
-            ORDER BY v.distance
-            LIMIT ?
-        """
-        params.append(limit)
-        cursor = await conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "tags": json.loads(r[6]) if r[6] else [],
-                "distance": r[7],
-            }
-            for r in rows
-        ]
-
-    def _rrf_merge(
-        self,
-        fts_results: list[dict[str, Any]],
-        vec_results: list[dict[str, Any]],
-        entity_results: list[dict[str, Any]] | None = None,
-        k: int = 60,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Reciprocal Rank Fusion: score = sum(1/(k+rank)). Returns top limit by fused score."""
-        scores: dict[str, float] = {}
-        all_items: dict[str, dict[str, Any]] = {}
-        for rank, item in enumerate(fts_results, start=1):
-            mid = item["id"]
-            scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
-            all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
-        for rank, item in enumerate(vec_results, start=1):
-            mid = item["id"]
-            scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
-            if mid not in all_items:
-                all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
-        if entity_results:
-            for rank, item in enumerate(entity_results, start=1):
-                mid = item["id"]
-                scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
-                if mid not in all_items:
-                    all_items[mid] = {k: v for k, v in item.items() if k != "distance"}
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
-        return [all_items[mid] for mid, _ in ranked]
-
-    async def hybrid_search(
-        self,
-        query: str,
-        query_embedding: list[float] | None = None,
-        kind: str | None = None,
-        tag: str | None = None,
-        limit: int = 10,
-        exclude_session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Hybrid FTS5 + vector + entity with RRF. If query_embedding is None, FTS5 + entity."""
-        fts_results = await self.fts_search(
-            query, kind=kind, tag=tag, limit=limit * 2, exclude_session_id=exclude_session_id
-        )
-        entity_results = await self.entity_search_for_rrf(
-            query,
-            kind=kind,
-            tag=tag,
-            limit=limit * 2,
-            exclude_session_id=exclude_session_id,
-        )
-        if not query_embedding:
-            return self._rrf_merge(
-                fts_results, [], entity_results=entity_results, k=60, limit=limit
-            )
-        vec_results = await self.vector_search(
-            query_embedding,
-            kind=kind,
-            tag=tag,
-            limit=limit * 2,
-            exclude_session_id=exclude_session_id,
-        )
-        return self._rrf_merge(
-            fts_results, vec_results, entity_results=entity_results, k=60, limit=limit
-        )
 
     async def get_stats(self) -> dict[str, Any]:
         """Counts by kind, latest created_at."""
@@ -359,10 +186,7 @@ class MemoryRepository:
         kinds: list[str],
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Fetch active memories created after since_ts with kind IN kinds.
-        Returns list of dicts: id, kind, content, created_at, confidence, tags.
-        Ordered by created_at DESC.
-        """
+        """Fetch active memories created after since_ts with kind IN kinds."""
         if not kinds:
             return []
         conn = await self._db._ensure_conn()
@@ -446,290 +270,6 @@ class MemoryRepository:
         )
         row = await cursor.fetchone()
         return row[0] if row and row[0] else None
-
-    # --- Entity CRUD ---
-
-    async def create_or_get_entity(
-        self,
-        canonical_name: str,
-        entity_type: str,
-        aliases: list[str] | None = None,
-    ) -> str:
-        """Create entity or return existing ID. Increment mention_count on match, merge aliases."""
-        conn = await self._db._ensure_conn()
-        canonical_lower = canonical_name.lower().strip()
-        if not canonical_lower:
-            raise ValueError("canonical_name cannot be empty")
-
-        # Lookup by canonical_name + type
-        cursor = await conn.execute(
-            "SELECT id FROM entities WHERE LOWER(canonical_name) = ? AND type = ?",
-            (canonical_lower, entity_type),
-        )
-        row = await cursor.fetchone()
-        if row:
-            entity_id = row[0]
-            await conn.execute(
-                "UPDATE entities SET mention_count = mention_count + 1 WHERE id = ?",
-                (entity_id,),
-            )
-            if aliases:
-                await self._merge_aliases(conn, entity_id, aliases)
-            await conn.commit()
-            return entity_id
-
-        # Lookup by alias match (aliases JSON contains quoted strings)
-        alias_pattern = f'%"{canonical_lower}"%'
-        cursor = await conn.execute(
-            """SELECT id FROM entities
-               WHERE type = ? AND (LOWER(aliases) LIKE ? OR LOWER(canonical_name) LIKE ?)
-               LIMIT 1""",
-            (entity_type, alias_pattern, f"%{canonical_lower}%"),
-        )
-        row = await cursor.fetchone()
-        if row:
-            entity_id = row[0]
-            await conn.execute(
-                "UPDATE entities SET mention_count = mention_count + 1 WHERE id = ?",
-                (entity_id,),
-            )
-            if aliases:
-                await self._merge_aliases(conn, entity_id, aliases)
-            await conn.commit()
-            return entity_id
-
-        # Create new entity
-        entity_id = f"ent_{uuid.uuid4().hex[:12]}"
-        aliases_json = json.dumps(aliases or [])
-        await conn.execute(
-            """INSERT INTO entities (id, canonical_name, type, aliases, mention_count)
-               VALUES (?, ?, ?, ?, 1)""",
-            (entity_id, canonical_name.strip(), entity_type, aliases_json),
-        )
-        await conn.commit()
-        return entity_id
-
-    async def _merge_aliases(
-        self, conn: Any, entity_id: str, new_aliases: list[str]
-    ) -> None:
-        """Add new aliases to entity (no duplicates)."""
-        cursor = await conn.execute(
-            "SELECT aliases FROM entities WHERE id = ?", (entity_id,)
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return
-        existing = set(json.loads(row[0]) if row[0] else [])
-        merged = list(existing | set(a.strip() for a in new_aliases if a.strip()))
-        await conn.execute(
-            "UPDATE entities SET aliases = ? WHERE id = ?",
-            (json.dumps(merged), entity_id),
-        )
-
-    async def link_memory_to_entities(
-        self, memory_id: str, entity_ids: list[str]
-    ) -> None:
-        """Create memory_entities links. Idempotent (INSERT OR IGNORE)."""
-        if not entity_ids:
-            return
-        conn = await self._db._ensure_conn()
-        for entity_id in entity_ids:
-            await conn.execute(
-                """INSERT OR IGNORE INTO memory_entities (memory_id, entity_id)
-                   VALUES (?, ?)""",
-                (memory_id, entity_id),
-            )
-        await conn.commit()
-
-    async def get_memories_for_entity_enrichment(
-        self,
-        kinds: list[str] | None = None,
-        max_entity_count: int = 2,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Fetch memories that need entity enrichment.
-
-        Returns memories with enriched_at IS NULL and entity_count <= max_entity_count.
-        Prioritizes recent memories. Used by nightly entity enrichment task.
-        """
-        if not kinds:
-            return []
-        conn = await self._db._ensure_conn()
-        placeholders = ",".join("?" * len(kinds))
-        params: list[Any] = [*kinds, max_entity_count, limit]
-        sql = f"""
-            SELECT m.id, m.kind, m.content, m.created_at,
-                   COUNT(me.entity_id) as entity_count
-            FROM memories m
-            LEFT JOIN memory_entities me ON me.memory_id = m.id
-            WHERE m.valid_until IS NULL
-              AND m.kind IN ({placeholders})
-              AND json_extract(m.attributes, '$.enriched_at') IS NULL
-            GROUP BY m.id
-            HAVING COUNT(me.entity_id) <= ?
-            ORDER BY m.created_at DESC
-            LIMIT ?
-        """
-        cursor = await conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "content": r[2] or "",
-                "created_at": r[3],
-                "entity_count": r[4],
-            }
-            for r in rows
-        ]
-
-    async def mark_memory_enriched(self, memory_id: str) -> None:
-        """Stamp attributes.enriched_at to prevent re-processing."""
-        conn = await self._db._ensure_conn()
-        cursor = await conn.execute(
-            "SELECT attributes FROM memories WHERE id = ?", (memory_id,)
-        )
-        row = await cursor.fetchone()
-        attrs = json.loads(row[0]) if row and row[0] else {}
-        attrs["enriched_at"] = int(time.time())
-        await conn.execute(
-            "UPDATE memories SET attributes = ? WHERE id = ?",
-            (json.dumps(attrs), memory_id),
-        )
-        await conn.commit()
-
-    async def search_entities(
-        self,
-        query: str,
-        entity_type: str | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Search entities by canonical_name or aliases (case-insensitive partial match)."""
-        if not query or not query.strip():
-            return []
-        conn = await self._db._ensure_conn()
-        query_lower = f"%{query.lower().strip()}%"
-        type_filter = " AND type = ?" if entity_type else ""
-        params: list[Any] = [query_lower, query_lower]
-        if entity_type:
-            params.append(entity_type)
-        params.append(limit)
-        cursor = await conn.execute(
-            f"""
-            SELECT id, canonical_name, type, aliases, mention_count
-            FROM entities
-            WHERE (LOWER(canonical_name) LIKE ? OR LOWER(aliases) LIKE ?)
-            {type_filter}
-            ORDER BY mention_count DESC
-            LIMIT ?
-            """,
-            params,
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "canonical_name": r[1],
-                "type": r[2],
-                "aliases": json.loads(r[3]) if r[3] else [],
-                "mention_count": r[4],
-            }
-            for r in rows
-        ]
-
-    async def get_memories_by_entity(
-        self,
-        entity_id: str,
-        kind: str | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Get memories linked to entity via junction table."""
-        conn = await self._db._ensure_conn()
-        kind_filter = " AND m.kind = ?" if kind else ""
-        params: list[Any] = [entity_id]
-        if kind:
-            params.append(kind)
-        params.append(limit)
-        cursor = await conn.execute(
-            f"""
-            SELECT m.id, m.kind, m.content, m.created_at, m.confidence
-            FROM memories m
-            INNER JOIN memory_entities me ON me.memory_id = m.id
-            WHERE me.entity_id = ?
-              AND m.valid_until IS NULL
-            {kind_filter}
-            ORDER BY m.created_at DESC
-            LIMIT ?
-            """,
-            params,
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "content": r[2],
-                "created_at": r[3],
-                "confidence": r[4],
-            }
-            for r in rows
-        ]
-
-    async def entity_search_for_rrf(
-        self,
-        query: str,
-        kind: str | None = None,
-        tag: str | None = None,
-        limit: int = 10,
-        exclude_session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Entity-based memory search for RRF. Returns same dict shape as fts_search."""
-        if not query or not query.strip():
-            return []
-        conn = await self._db._ensure_conn()
-        query_lower = f"%{query.lower().strip()}%"
-        kind_filter = " AND m.kind = ?" if kind else ""
-        tag_filter = " AND m.tags LIKE ?" if tag else ""
-        session_filter = ""
-        params: list[Any] = [query_lower, query_lower]
-        if kind:
-            params.append(kind)
-        if tag:
-            params.append(f'%"{tag}"%')
-        if exclude_session_id:
-            session_filter = " AND (m.session_id IS NULL OR m.session_id != ?)"
-            params.append(exclude_session_id)
-        params.append(limit)
-        cursor = await conn.execute(
-            f"""
-            SELECT m.id, m.kind, m.content, m.event_time, m.created_at,
-                   m.confidence, m.tags
-            FROM memories m
-            INNER JOIN memory_entities me ON me.memory_id = m.id
-            INNER JOIN entities e ON e.id = me.entity_id
-            WHERE m.valid_until IS NULL
-              AND (LOWER(e.canonical_name) LIKE ? OR LOWER(e.aliases) LIKE ?)
-            {kind_filter}
-            {tag_filter}
-            {session_filter}
-            ORDER BY m.created_at DESC
-            LIMIT ?
-            """,
-            params,
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "kind": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "tags": json.loads(r[6]) if r[6] else [],
-            }
-            for r in rows
-        ]
 
     async def ensure_session(self, session_id: str) -> None:
         """Register session on first sight."""
@@ -815,200 +355,225 @@ class MemoryRepository:
         page = [{"id": r[0], "content": r[1], "source_role": r[2]} for r in rows]
         return (page, total)
 
-    async def get_facts_for_decay(self) -> list[dict[str, Any]]:
-        """Return active facts with decay_rate > 0, sorted oldest first."""
-        conn = await self._db._ensure_conn()
-        cursor = await conn.execute(
-            """SELECT id, confidence, decay_rate, last_accessed, created_at
-               FROM memories
-               WHERE kind = 'fact'
-                 AND valid_until IS NULL
-                 AND decay_rate > 0
-               ORDER BY COALESCE(last_accessed, created_at) ASC, created_at ASC""",
+
+class MemoryRepository:
+    """Facade: delegates to domain services. Preserves backward compat for main, tools, entity_linker."""
+
+    def __init__(self, db: MemoryDatabase) -> None:
+        self._crud = MemoryCrudRepository(db)
+        self._search = MemorySearchService(db)
+        self._entities = EntityRepository(db)
+        self._decay = DecayService(db)
+        self._dedup = DedupService(db, self._crud, self._search)
+
+    def _sf(
+        self,
+        kind: str | None = None,
+        tag: str | None = None,
+        after_ts: int | None = None,
+        before_ts: int | None = None,
+        exclude_session_id: str | None = None,
+    ) -> SearchFilter:
+        return SearchFilter(
+            kind=kind,
+            tag=tag,
+            after_ts=after_ts,
+            before_ts=before_ts,
+            exclude_session_id=exclude_session_id,
         )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "confidence": r[1],
-                "decay_rate": r[2],
-                "last_accessed": r[3],
-                "created_at": r[4],
-            }
-            for r in rows
-        ]
 
-    async def apply_decay_and_prune(
-        self, threshold: float = 0.05
-    ) -> dict[str, Any]:
-        """
-        Apply Ebbinghaus decay: confidence *= exp(-decay_rate * days_since_access).
-        Soft-delete facts where new_confidence < threshold.
-        Returns stats: {decayed, pruned, errors}.
-        """
-        facts = await self.get_facts_for_decay()
-        now = int(time.time())
-        decayed = 0
-        pruned = 0
-        errors: list[str] = []
-        conn = await self._db._ensure_conn()
+    # --- Search (delegate to MemorySearchService) ---
 
-        for fact in facts:
-            try:
-                ref_ts = fact["last_accessed"] or fact["created_at"]
-                days = max(0.0, (now - ref_ts) / 86400.0)
-                new_conf = fact["confidence"] * math.exp(
-                    -fact["decay_rate"] * days
-                )
-                new_conf = max(0.0, min(1.0, new_conf))
+    async def fts_search(
+        self,
+        query: str,
+        kind: str | None = None,
+        tag: str | None = None,
+        after_ts: int | None = None,
+        before_ts: int | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sf = self._sf(kind=kind, tag=tag, after_ts=after_ts, before_ts=before_ts, exclude_session_id=exclude_session_id)
+        return await self._search.fts_search(query, sf=sf, limit=limit)
 
-                if new_conf < threshold:
-                    await conn.execute(
-                        "UPDATE memories SET valid_until = ? WHERE id = ?",
-                        (now, fact["id"]),
-                    )
-                    await conn.execute(
-                        "DELETE FROM vec_memories WHERE memory_id = ?",
-                        (fact["id"],),
-                    )
-                    await conn.execute(
-                        "DELETE FROM memory_entities WHERE memory_id = ?",
-                        (fact["id"],),
-                    )
-                    pruned += 1
-                else:
-                    await conn.execute(
-                        """UPDATE memories
-                           SET confidence = ?, last_accessed = ?
-                           WHERE id = ?""",
-                        (new_conf, now, fact["id"]),
-                    )
-                    decayed += 1
-            except Exception as e:
-                errors.append(f"fact {fact['id']}: {e}")
-                logger.exception("Decay error for fact %s", fact["id"])
+    async def vector_search(
+        self,
+        query_embedding: list[float],
+        kind: str | None = None,
+        tag: str | None = None,
+        after_ts: int | None = None,
+        before_ts: int | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sf = self._sf(kind=kind, tag=tag, after_ts=after_ts, before_ts=before_ts, exclude_session_id=exclude_session_id)
+        return await self._search.vector_search(query_embedding, sf=sf, limit=limit)
 
-        await conn.commit()
-        return {"decayed": decayed, "pruned": pruned, "errors": errors}
+    async def entity_search_for_rrf(
+        self,
+        query: str,
+        kind: str | None = None,
+        tag: str | None = None,
+        after_ts: int | None = None,
+        before_ts: int | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sf = self._sf(kind=kind, tag=tag, after_ts=after_ts, before_ts=before_ts, exclude_session_id=exclude_session_id)
+        return await self._search.entity_search_for_rrf(query, sf=sf, limit=limit)
 
-    async def _get_existing_facts_for_dedup(
-        self, kind: str = "fact"
-    ) -> list[dict[str, str]]:
-        """Fetch id + content of all active facts for batch dedup. Returns lightweight dicts."""
-        conn = await self._db._ensure_conn()
-        cursor = await conn.execute(
-            """SELECT id, content FROM memories
-               WHERE kind = ? AND valid_until IS NULL""",
-            (kind,),
-        )
-        rows = await cursor.fetchall()
-        return [{"id": r[0], "content": r[1] or ""} for r in rows]
+    async def hybrid_search(
+        self,
+        query: str,
+        query_embedding: list[float] | None = None,
+        kind: str | None = None,
+        tag: str | None = None,
+        after_ts: int | None = None,
+        before_ts: int | None = None,
+        limit: int = 10,
+        exclude_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sf = self._sf(kind=kind, tag=tag, after_ts=after_ts, before_ts=before_ts, exclude_session_id=exclude_session_id)
+        return await self._search.hybrid_search(query, query_embedding=query_embedding, sf=sf, limit=limit)
 
-    @staticmethod
-    def _is_duplicate_of_existing(
-        content: str,
-        existing: list[dict[str, str]],
-        threshold: float = 0.75,
+    # --- CRUD (delegate to MemoryCrudRepository) ---
+
+    async def save_episode(self, *args: Any, **kwargs: Any) -> str:
+        return await self._crud.save_episode(*args, **kwargs)
+
+    async def save_fact(self, *args: Any, **kwargs: Any) -> str:
+        return await self._crud.save_fact(*args, **kwargs)
+
+    async def save_fact_with_sources(self, *args: Any, **kwargs: Any) -> str:
+        return await self._crud.save_fact_with_sources(*args, **kwargs)
+
+    async def soft_delete(self, memory_id: str) -> bool:
+        return await self._crud.soft_delete(memory_id)
+
+    async def update_confidence(
+        self, memory_id: str, confidence: float, decay_rate: float
     ) -> bool:
-        """Check if content is a Jaccard duplicate of any existing fact."""
-        wa = set(content.lower().split())
-        if len(wa) < 5:
-            return False
-        for item in existing:
-            wb = set((item.get("content") or "").lower().split())
-            if len(wb) >= 5 and _jaccard(content, item["content"]) > threshold:
-                return True
-        return False
+        return await self._crud.update_confidence(memory_id, confidence, decay_rate)
+
+    async def update_attributes(self, memory_id: str, patch: dict[str, Any]) -> bool:
+        return await self._crud.update_attributes(memory_id, patch)
+
+    async def get_memory_session_id(self, memory_id: str) -> str | None:
+        return await self._crud.get_memory_session_id(memory_id)
+
+    async def save_embedding(self, memory_id: str, embedding: list[float]) -> None:
+        return await self._crud.save_embedding(memory_id, embedding)
+
+    async def get_stats(self) -> dict[str, Any]:
+        return await self._crud.get_stats()
+
+    async def get_recent_memories(
+        self, since_ts: int, kinds: list[str], limit: int = 200
+    ) -> list[dict[str, Any]]:
+        return await self._crud.get_recent_memories(since_ts, kinds, limit)
+
+    async def save_reflection(
+        self,
+        content: str,
+        source_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> str:
+        return await self._crud.save_reflection(
+            content, source_ids=source_ids, tags=tags, attributes=attributes
+        )
+
+    async def get_latest_reflection(self) -> dict[str, Any] | None:
+        return await self._crud.get_latest_reflection()
+
+    async def get_latest_reflection_timestamp(self) -> int | None:
+        return await self._crud.get_latest_reflection_timestamp()
+
+    async def ensure_session(self, session_id: str) -> None:
+        return await self._crud.ensure_session(session_id)
+
+    async def get_pending_consolidations(self, exclude_session_id: str) -> list[str]:
+        return await self._crud.get_pending_consolidations(exclude_session_id)
+
+    async def get_all_pending_consolidations(self) -> list[str]:
+        return await self._crud.get_all_pending_consolidations()
+
+    async def is_session_consolidated(self, session_id: str) -> bool:
+        return await self._crud.is_session_consolidated(session_id)
+
+    async def mark_session_consolidated(self, session_id: str) -> None:
+        return await self._crud.mark_session_consolidated(session_id)
+
+    async def count_facts_by_session(self, session_id: str) -> int:
+        return await self._crud.count_facts_by_session(session_id)
+
+    async def get_episodes_by_session(
+        self, session_id: str, offset: int = 0, limit: int = 30
+    ) -> tuple[list[dict[str, Any]], int]:
+        return await self._crud.get_episodes_by_session(session_id, offset, limit)
+
+    # --- Entities (delegate to EntityRepository) ---
+
+    async def create_or_get_entity(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        aliases: list[str] | None = None,
+    ) -> str:
+        return await self._entities.create_or_get_entity(
+            canonical_name, entity_type, aliases
+        )
+
+    async def link_memory_to_entities(
+        self, memory_id: str, entity_ids: list[str]
+    ) -> None:
+        return await self._entities.link_memory_to_entities(memory_id, entity_ids)
+
+    async def get_memories_for_entity_enrichment(
+        self,
+        kinds: list[str] | None = None,
+        max_entity_count: int = 2,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return await self._entities.get_memories_for_entity_enrichment(
+            kinds=kinds, max_entity_count=max_entity_count, limit=limit
+        )
+
+    async def mark_memory_enriched(self, memory_id: str) -> None:
+        return await self._entities.mark_memory_enriched(memory_id)
+
+    async def search_entities(
+        self,
+        query: str,
+        entity_type: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        return await self._entities.search_entities(
+            query, entity_type=entity_type, limit=limit
+        )
+
+    async def get_memories_by_entity(
+        self,
+        entity_id: str,
+        kind: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        return await self._entities.get_memories_by_entity(
+            entity_id, kind=kind, limit=limit
+        )
+
+    # --- Decay (delegate to DecayService) ---
+
+    async def get_facts_for_decay(self) -> list[dict[str, Any]]:
+        return await self._decay.get_facts_for_decay()
+
+    async def apply_decay_and_prune(self, threshold: float = 0.05) -> dict[str, Any]:
+        return await self._decay.apply_decay_and_prune(threshold)
+
+    # --- Dedup (delegate to DedupService) ---
 
     async def save_facts_batch(
         self, session_id: str, facts: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """Save facts with two-level deduplication. Returns saved, skipped_duplicates, errors."""
-        result: dict[str, Any] = {
-            "saved": [],
-            "skipped_duplicates": 0,
-            "errors": [],
-        }
-        if not facts:
-            return result
-
-        # Level 2: pre-fetch existing facts for batch dedup, or fall back to per-fact FTS
-        conn = await self._db._ensure_conn()
-        cursor = await conn.execute(
-            """SELECT COUNT(*) FROM memories
-               WHERE kind = 'fact' AND valid_until IS NULL"""
-        )
-        row = await cursor.fetchone()
-        fact_count = int(row[0]) if row and row[0] is not None else 0
-        use_prefetch = fact_count <= _DEDUP_PREFETCH_LIMIT
-        existing_facts: list[dict[str, str]] = []
-        if use_prefetch:
-            existing_facts = await self._get_existing_facts_for_dedup(kind="fact")
-
-        seen: set[str] = set()
-        for fact in facts:
-            content = (fact.get("content") or "").strip()
-            if not content:
-                continue
-            normalized = content.lower().strip()
-            # Level 1: intra-batch exact dupes
-            if normalized in seen:
-                result["skipped_duplicates"] += 1
-                continue
-            seen.add(normalized)
-
-            # Level 2: against existing memory
-            if use_prefetch:
-                if self._is_duplicate_of_existing(content, existing_facts):
-                    result["skipped_duplicates"] += 1
-                    continue
-            else:
-                existing = await self.fts_search(content, kind="fact", limit=1)
-                if existing:
-                    wa = set(content.lower().split())
-                    wb = set(existing[0]["content"].lower().split())
-                    if (
-                        len(wa) >= 5
-                        and len(wb) >= 5
-                        and _jaccard(content, existing[0]["content"]) > 0.75
-                    ):
-                        result["skipped_duplicates"] += 1
-                        continue
-
-            try:
-                confidence = float(fact.get("confidence", 1.0))
-                memory_id = await self.save_fact_with_sources(
-                    content=content,
-                    source_ids=fact.get("source_ids") or [],
-                    session_id=session_id,
-                    confidence=confidence,
-                    tags=fact.get("tags"),
-                )
-                preview = f"{content[:80]}..." if len(content) > 80 else content
-                result["saved"].append(
-                    {
-                        "id": memory_id,
-                        "content_preview": preview,
-                        "content": content,
-                        "confidence": confidence,
-                        "duplicate": False,
-                    }
-                )
-            except Exception as e:
-                result["errors"].append(f"{content[:50]}...: {e}")
-
-        return result
-
-
-def _escape_fts5_query(q: str) -> str:
-    """Sanitize for FTS5: keep only word chars and spaces. Prevents query syntax errors."""
-    q = re.sub(r"[^\w\s]", " ", q, flags=re.UNICODE)
-    return " ".join(w for w in q.split() if w)
-
-
-def _jaccard(a: str, b: str) -> float:
-    """Jaccard similarity on word sets. Used for Level 2 dedup (5+ words only)."""
-    wa, wb = set(a.lower().split()), set(b.lower().split())
-    if not wa or not wb:
-        return 0.0
-    return len(wa & wb) / len(wa | wb)
+        return await self._dedup.save_facts_batch(session_id, facts)

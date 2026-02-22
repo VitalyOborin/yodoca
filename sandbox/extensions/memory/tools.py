@@ -5,13 +5,100 @@ See: https://openai.github.io/openai-agents-python/tools/
 """
 
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Awaitable, Callable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_time_expr(expr: str) -> int:
+    """Parse time expression to Unix timestamp.
+
+    Supports:
+    - ISO 8601: 2026-02-20, 2026-02-20T14:30:00
+    - Relative: 2 days ago, 3 hours ago, 1 week ago, 6 months ago
+    - Named: yesterday, today, last week, last month
+    """
+    expr = expr.strip().lower()
+    if not expr:
+        raise ValueError("Empty time expression")
+
+    now = datetime.now()
+
+    # Named anchors
+    anchors = {
+        "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
+        "yesterday": (now - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ),
+    }
+    if expr in anchors:
+        return int(anchors[expr].timestamp())
+
+    # "last week" = start of 7 days ago
+    if expr == "last week":
+        dt = (now - timedelta(days=7)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return int(dt.timestamp())
+
+    # "last month" = same day, previous month
+    if expr == "last month":
+        month = now.month - 1
+        year = now.year
+        if month <= 0:
+            month += 12
+            year -= 1
+        day = min(now.day, 28)  # avoid invalid dates
+        dt = datetime(year, month, day, 0, 0, 0)
+        return int(dt.timestamp())
+
+    # Relative: N minutes/hours/days/weeks/months/years ago
+    match = re.match(
+        r"^(\d+)\s*(minute|hour|day|week|month|year)s?\s*ago$",
+        expr,
+        re.IGNORECASE,
+    )
+    if match:
+        num = int(match.group(1))
+        unit = match.group(2).lower()
+        if unit == "month":
+            month = now.month - num
+            year = now.year
+            while month <= 0:
+                month += 12
+                year -= 1
+            day = min(now.day, 28)
+            dt = datetime(year, month, day, now.hour, now.minute, now.second)
+            return int(dt.timestamp())
+        if unit == "year":
+            dt = now.replace(year=now.year - num)
+            return int(dt.timestamp())
+        deltas = {
+            "minute": timedelta(minutes=num),
+            "hour": timedelta(hours=num),
+            "day": timedelta(days=num),
+            "week": timedelta(weeks=num),
+        }
+        delta = deltas[unit]
+        dt = now - delta
+        return int(dt.timestamp())
+
+    # ISO 8601 (date, datetime; Z treated as UTC)
+    try:
+        parsed = datetime.fromisoformat(expr.replace("Z", "+00:00"))
+        return int(parsed.timestamp())
+    except ValueError:
+        pass
+
+    raise ValueError(
+        f"Unrecognized time expression: {expr!r}. "
+        "Use ISO date (2026-02-20), relative (2 days ago), or named (yesterday, last week)."
+    )
 
 
 # --- Structured output models (Orchestrator tools) ---
@@ -208,18 +295,44 @@ def build_tools(
             str | None,
             Field(default=None, description="Filter by tag, e.g. work, project_alpha"),
         ] = None,
+        after: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Only memories created after this point. "
+                    "Accepts ISO date (2026-02-20), datetime (2026-02-20T14:30:00), "
+                    "or relative expression (2 days ago, yesterday, last week)."
+                ),
+            ),
+        ] = None,
+        before: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Only memories created before this point. "
+                    "Accepts ISO date (2026-02-20), datetime (2026-02-20T14:30:00), "
+                    "or relative expression (3 hours ago, yesterday, last month)."
+                ),
+            ),
+        ] = None,
         limit: Annotated[int, Field(default=10, ge=1, le=50, description="Max results")] = 10,
     ) -> SearchMemoryResult:
         """Search long-term memory (hybrid FTS5 + semantic). Returns relevant memories.
 
         Use to find past conversations, facts, preferences before answering.
         """
+        after_ts = _parse_time_expr(after) if after else None
+        before_ts = _parse_time_expr(before) if before else None
         query_embedding = await embed_fn(query) if embed_fn else None
         results = await repo.hybrid_search(
             query,
             query_embedding=query_embedding,
             kind=kind,
             tag=tag,
+            after_ts=after_ts,
+            before_ts=before_ts,
             limit=limit,
         )
         memories = [
