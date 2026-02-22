@@ -1,4 +1,4 @@
-"""Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider."""
+"""Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider."""
 
 import asyncio
 from typing import TYPE_CHECKING, Any
@@ -12,11 +12,13 @@ from aiogram.utils.token import TokenValidationError, validate_token
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
 
+
 class TelegramChannelExtension:
-    """Extension + ChannelProvider + ServiceProvider: Telegram Bot API via aiogram long-polling.
+    """Extension + ChannelProvider + ServiceProvider + SetupProvider: Telegram Bot API via aiogram long-polling.
 
     Receives user messages via polling, emits user.message events.
     Sends agent responses via send_to_user.
+    Supports interactive setup via SetupProvider.
     """
 
     def __init__(self) -> None:
@@ -26,6 +28,52 @@ class TelegramChannelExtension:
         self._token: str | None = None
         self._chat_id: str | None = None
         self._polling_timeout: int = 30
+
+    def get_setup_schema(self) -> list[dict]:
+        """SetupProvider: schema for interactive configuration."""
+        return [
+            {
+                "name": "token",
+                "description": "Telegram Bot API token from @BotFather",
+                "secret": True,
+                "required": True,
+            },
+            {
+                "name": "chat_id",
+                "description": "Telegram chat ID to receive messages (single-user mode)",
+                "secret": False,
+                "required": True,
+            },
+        ]
+
+    async def apply_config(self, name: str, value: str) -> None:
+        """SetupProvider: save config value to KV."""
+        if not self._ctx:
+            raise RuntimeError("Extension not initialized")
+        kv = self._ctx.get_extension("kv")
+        if not kv:
+            raise RuntimeError("KV extension not available")
+        key = f"telegram_channel.{name}"
+        await kv.set(key, value.strip() if value else None)
+
+    async def on_setup_complete(self) -> tuple[bool, str]:
+        """SetupProvider: verify token and chat_id are set and valid."""
+        if not self._ctx:
+            return False, "Extension not initialized"
+        kv = self._ctx.get_extension("kv")
+        if not kv:
+            return False, "KV extension not available"
+        token = await kv.get("telegram_channel.token")
+        chat_id = await kv.get("telegram_channel.chat_id")
+        if not token or not token.strip():
+            return False, "token is required"
+        if not chat_id or not str(chat_id).strip():
+            return False, "chat_id is required"
+        try:
+            validate_token(token.strip())
+        except TokenValidationError as e:
+            return False, f"Invalid token: {e}"
+        return True, "Telegram channel configured successfully"
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
@@ -38,10 +86,19 @@ class TelegramChannelExtension:
         token = await kv.get("telegram_channel.token")
         if token:
             token = token.strip()
-        if not token:
-            raise RuntimeError(
-                "Telegram bot token missing. Set KV key 'telegram_channel.token' and restart."
+        chat_id_raw = await kv.get("telegram_channel.chat_id")
+        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
+
+        if not token or not chat_id:
+            context.logger.info(
+                "Telegram channel not configured. Use SetupProvider (get_setup_schema, apply_config, on_setup_complete) or set KV keys 'telegram_channel.token' and 'telegram_channel.chat_id'."
             )
+            self._token = None
+            self._chat_id = None
+            self._bot = None
+            self._dp = None
+            self._polling_timeout = int(context.get_config("polling_timeout", 30))
+            return
 
         try:
             validate_token(token)
@@ -49,16 +106,7 @@ class TelegramChannelExtension:
             raise RuntimeError(f"Invalid Telegram bot token: {e}") from e
 
         self._token = token
-
-        chat_id = await kv.get("telegram_channel.chat_id")
-        if chat_id:
-            chat_id = str(chat_id).strip()
-        if not chat_id:
-            raise RuntimeError(
-                "Telegram chat_id missing. Set KV key 'telegram_channel.chat_id' and restart."
-            )
         self._chat_id = chat_id
-
         self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
         self._bot = Bot(
