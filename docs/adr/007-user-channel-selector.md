@@ -36,11 +36,13 @@ The **agent** (Orchestrator or any sub-agent) has no way to:
 
 Without these capabilities, the agent cannot reason about channels or act on user requests like "send to Telegram." The plumbing exists end-to-end, but there is no agent-facing surface.
 
-### Secondary issue: `user_id` resolution for proactive messages
+### Secondary issue: proactive delivery is broken
 
-`MessageRouter.notify_user()` hardcodes `user_id = "default"` when sending proactive notifications. This works for CLI (`print` ignores `user_id`), but Telegram's `send_to_user` validates `user_id == chat_id` — so a proactive message with `user_id="default"` is silently dropped.
+`MessageRouter.notify_user()` hardcodes `user_id = "default"` and calls `ch.send_to_user("default", text)`. This works for CLI (`print` ignores `user_id`), but Telegram's `send_to_user` validates `user_id == chat_id` — so a proactive message with `user_id="default"` is silently dropped.
 
-Each channel internally manages its own user identity (CLI: `"cli_user"`, Telegram: `chat_id` from KV store, Slack: workspace user ID, etc.). These are **channel-internal details** — the agent and the router should not know or care about them. But the `ChannelProvider` protocol currently has no method for the router to ask a channel "who should I address this to?" during proactive delivery.
+The root cause is an architectural mismatch: `send_to_user(user_id, text)` is a **reactive** method designed for the request-response path, where `user_id` is known because it came from the incoming message. In the **proactive** path (notifications, scheduled reminders, heartbeat escalations), there is no incoming message and no external `user_id`. The router is forced to fabricate one.
+
+Each channel internally manages its own user identity (CLI: `"cli_user"`, Telegram: `chat_id` from KV store, Slack: workspace user ID, etc.). These are **channel-internal details** — the router should not know or care about them. The protocol simply lacks a proactive delivery method.
 
 ## Decision
 
@@ -52,9 +54,9 @@ Each channel internally manages its own user identity (CLI: `"cli_user"`, Telegr
 4. **Single-user assumption.** Phase 1 targets the single-user deployment. Multi-user routing is out of scope.
 5. **Backward compatibility.** `channel_id=None` keeps working as before (first registered channel).
 
-### 1. Extend `ChannelProvider` protocol: `get_default_user_id()`
+### 1. Extend `ChannelProvider` protocol: add `send_message(text)`
 
-Add a method to the protocol so that each channel can declare its default recipient for proactive (outbound) messages. This is a **channel-internal contract** — only the router calls it to resolve addressing before `send_to_user()`. The agent never sees this value.
+The current protocol has only `send_to_user(user_id, text)` — a reactive method where the caller provides `user_id`. For proactive delivery, we add a second method where the channel handles all addressing internally:
 
 ```python
 # core/extensions/contract.py
@@ -64,42 +66,53 @@ class ChannelProvider(Protocol):
     """User communication channel. Receives messages and sends responses."""
 
     async def send_to_user(self, user_id: str, message: str) -> None:
-        """Send agent response to user through this channel."""
+        """Reactive: reply to a specific user who sent a message."""
 
-    def get_default_user_id(self) -> str:
-        """Return the channel-internal user identifier for proactive messages.
-        This is an implementation detail of the channel (e.g. CLI returns 'cli_user',
-        Telegram returns chat_id from KV). The agent never sees this value."""
-        ...
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to the channel's default recipient.
+        All addressing (user_id, chat_id, etc.) is internal to the channel."""
 ```
 
-**Why a protocol method, not a sentinel value?** Each channel manages its own user identity internally (string in CLI, numeric `chat_id` in Telegram, workspace user ID in Slack, etc.). The channel is the authority on how to address its user. A sentinel like `"default"` would push this responsibility to each channel's `send_to_user()` implementation, coupling it to a convention instead of an explicit contract.
+**Why two methods, not one?** They serve different paths with different caller knowledge:
+- **Reactive** (`send_to_user`): the kernel handler for `user.message` knows `user_id` from the incoming event — it passes it through `handle_user_message` → agent → `channel.send_to_user(user_id, response)`. This path is correct today.
+- **Proactive** (`send_message`): notifications, scheduled reminders, heartbeat escalations — no incoming user context exists. The channel is the sole authority on how to address its recipient.
 
-### 2. Implement `get_default_user_id()` in existing channels
+The router never touches `user_id` in the proactive path. No `hasattr` guards, no sentinel values, no router-as-middleman.
+
+### 2. Implement `send_message()` in existing channels
 
 **CLI channel:**
 
 ```python
-def get_default_user_id(self) -> str:
-    return "cli_user"
+async def send_message(self, message: str) -> None:
+    print(message)
+    print()
 ```
 
 **Telegram channel:**
 
 ```python
-def get_default_user_id(self) -> str:
-    return self._chat_id or ""
+async def send_message(self, message: str) -> None:
+    if not self._bot or not self._token or not self._chat_id:
+        return
+    try:
+        await self._bot.send_message(chat_id=self._chat_id, text=message)
+    except Exception as e:
+        if self._ctx:
+            self._ctx.logger.exception("Failed to send message: %s", e)
 ```
 
-### 3. Fix `MessageRouter.notify_user()` to resolve `user_id` via the channel
+Note: `_chat_id` is the channel's internal state, read from KV during `initialize()`. The router never sees it.
 
-Replace the hardcoded `user_id = "default"`:
+### 3. Simplify `MessageRouter.notify_user()` to use `send_message()`
+
+Replace the current implementation that hardcodes `user_id = "default"`:
 
 ```python
 # core/extensions/router.py — MessageRouter
 
 async def notify_user(self, text: str, channel_id: str | None = None) -> None:
-    """Send notification to user. Uses channel_id if provided, otherwise first channel."""
+    """Send proactive notification to user. Channel handles all addressing internally."""
     if not self._channels:
         logger.warning("notify_user: no channels registered")
         return
@@ -107,11 +120,10 @@ async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         ch = self._channels[channel_id]
     else:
         ch = next(iter(self._channels.values()))
-    user_id = ch.get_default_user_id() if hasattr(ch, "get_default_user_id") else "default"
-    await ch.send_to_user(user_id, text)
+    await ch.send_message(text)
 ```
 
-The `hasattr` guard ensures backward compatibility with any third-party channel that hasn't implemented the new method yet.
+This is the **entire** proactive delivery logic in the router. One channel lookup, one call. No `user_id`, no `hasattr`, no sentinel values.
 
 ### 4. Add `get_channel_ids()` and `get_channel_descriptions()` to `MessageRouter`
 
@@ -180,7 +192,7 @@ def make_channel_tools(router: MessageRouter) -> list:
 
 Design notes:
 - `send_to_channel` validates the `channel_id` up front and returns a clear error if the channel is not registered, instead of silently falling back to the default channel.
-- It delegates to `router.notify_user(text, channel_id)` — single source of truth for delivery logic (user_id resolution, channel selection). The tool has no knowledge of user identities.
+- It delegates to `router.notify_user(text, channel_id)` which calls `ch.send_message(text)` — the channel handles all addressing internally.
 - `list_channels` returns human-readable output like `"cli_channel (CLI Channel), telegram_channel (Telegram Channel)"` — the labels come from manifest `name` fields, injected via `router.set_channel_descriptions()` during bootstrap. This helps the LLM map natural language ("Telegram") to the correct `channel_id` without requiring exact ID knowledge.
 
 ### 6. Inject channel tools into Orchestrator
@@ -213,9 +225,9 @@ No scheduler changes needed. The infrastructure is ready:
 2. Scheduler stores the payload as-is in SQLite.
 3. On tick, scheduler emits `system.user.notify` with the stored payload.
 4. Kernel handler `on_user_notify` reads `channel_id` from the payload → `router.notify_user(text, "telegram_channel")`.
-5. Router selects the Telegram channel, resolves `user_id` via `get_default_user_id()`, delivers.
+5. Router selects the Telegram channel → `ch.send_message(text)` → channel delivers using its internal `chat_id`.
 
-The docstrings in `schedule_once` and `schedule_recurring` already show `channel_id` in payload examples. After the `user_id` fix (item 3 above), this path will work end-to-end.
+The docstrings in `schedule_once` and `schedule_recurring` already show `channel_id` in payload examples. After the `send_message()` addition (item 3 above), this path will work end-to-end.
 
 ### 8. Heartbeat integration
 
@@ -238,21 +250,6 @@ When escalating, if the task in memory mentions a specific channel (e.g. "telegr
 include it in the reason so the orchestrator knows where to deliver.
 ```
 
-### 9. System prompt guidance
-
-The Orchestrator's system prompt (or capabilities summary) should include guidance about channel tools. This can be added to the prompt template or appended via `capabilities_summary`:
-
-```
-## Communication Channels
-
-You can send messages to specific channels when the user asks.
-- Use `list_channels()` to see available channels.
-- Use `send_to_channel(channel_id, text)` to send a message to a specific channel.
-- When scheduling reminders for a specific channel, include "channel_id" in the
-  payload_json of schedule_once / schedule_recurring.
-- If the user doesn't specify a channel, respond normally (default channel).
-```
-
 ## Scenario Walkthroughs
 
 ### Scenario 1: "Передай мне привет в Telegram"
@@ -263,12 +260,8 @@ CLI → user.message{text, user_id="cli_user", channel_id="cli_channel"}
   → Orchestrator runs:
       1. tool call: send_to_channel("telegram_channel", "Привет")
          → router.notify_user("Привет", "telegram_channel")
-                              ┌─────────────────────────────────────────────┐
-                              │ Inside router (invisible to agent):         │
-                              │   ch = _channels["telegram_channel"]        │
-                              │   uid = ch.get_default_user_id() → chat_id  │
-                              │   ch.send_to_user(uid, "Привет")            │
-                              └─────────────────────────────────────────────┘
+         → telegram_channel.send_message("Привет")
+           (internally: bot.send_message(chat_id=self._chat_id, text="Привет"))
          → Telegram delivers "Привет"
          → tool returns: "Message sent to telegram_channel."
       2. Orchestrator returns: "Хорошо, передал привет в Telegram"
@@ -291,7 +284,7 @@ CLI → user.message → Orchestrator runs:
   → ctx.emit("system.user.notify", {"text": "Выключи чайник!", "channel_id": "telegram_channel"})
   → EventBus → on_user_notify handler
   → router.notify_user("Выключи чайник!", "telegram_channel")
-    → (router resolves user_id internally via channel, delivers)
+  → telegram_channel.send_message("Выключи чайник!")
   → [Telegram] "Выключи чайник!"
 ```
 
@@ -314,14 +307,13 @@ Heartbeat Scout → enriched prompt includes memory:
 
 | # | Component | Change | Scope |
 |---|-----------|--------|-------|
-| 1 | `ChannelProvider` protocol | Add `get_default_user_id() -> str` | `core/extensions/contract.py` |
-| 2 | `cli_channel` | Implement `get_default_user_id()` | `sandbox/extensions/cli_channel/main.py` |
-| 3 | `telegram_channel` | Implement `get_default_user_id()` | `sandbox/extensions/telegram_channel/main.py` |
-| 4 | `MessageRouter` | Add `get_channel_ids()`, `get_channel_descriptions()`, `set_channel_descriptions()`; fix `notify_user()` user_id resolution | `core/extensions/router.py` |
+| 1 | `ChannelProvider` protocol | Add `send_message(text)` for proactive delivery | `core/extensions/contract.py` |
+| 2 | `cli_channel` | Implement `send_message()` | `sandbox/extensions/cli_channel/main.py` |
+| 3 | `telegram_channel` | Implement `send_message()` | `sandbox/extensions/telegram_channel/main.py` |
+| 4 | `MessageRouter` | Add `get_channel_ids()`, `get_channel_descriptions()`, `set_channel_descriptions()`; change `notify_user()` to use `send_message()` | `core/extensions/router.py` |
 | 5 | Channel tools | New module: `list_channels` (with human-readable names), `send_to_channel` (with validation) | `core/tools/channel.py` |
 | 6 | Orchestrator bootstrap | Pass channel tools at agent creation; call `set_channel_descriptions()` from Loader | `core/runner.py`, `core/agents/orchestrator.py` |
-| 7 | System prompt | Add channel guidance to orchestrator prompt | Prompt template |
-| 8 | Heartbeat prompt | Instruct Scout to include channel context in escalation reasons | `sandbox/extensions/heartbeat/prompt.jinja2` |
+| 7 | Heartbeat prompt | Instruct Scout to include channel context in escalation reasons | `sandbox/extensions/heartbeat/prompt.jinja2` |
 
 Estimated complexity: **Low.** All changes are additive. No schema migrations, no new dependencies, no protocol-breaking changes.
 
@@ -352,7 +344,7 @@ Estimated complexity: **Low.** All changes are additive. No schema migrations, n
 | Trade-off | Impact |
 |-----------|--------|
 | **Core tools grow by 2** | Acceptable; tools are small and focused |
-| **Protocol extension** | `get_default_user_id()` is additive; `hasattr` guard provides backward compat |
+| **Protocol extension** | `send_message()` is additive; existing `send_to_user()` unchanged |
 | **Single-user assumption** | Phase 1 only; acceptable for current deployment |
 | **LLM reliability** | Agent must correctly choose `channel_id` from natural language; mitigated by small option set and clear tool descriptions |
 
@@ -361,7 +353,7 @@ Estimated complexity: **Low.** All changes are additive. No schema migrations, n
 | Risk | Severity | Mitigation |
 |------|----------|-------------|
 | **Agent picks wrong channel** | Low | `list_channels` shows available options; user can correct |
-| **Channel offline** | Low | `send_to_user` already handles errors; agent receives error from tool |
+| **Channel offline** | Low | `send_message` handles errors internally; agent receives error from tool |
 | **Prompt injection via channel_id** | Low | Router validates `channel_id` against registered channels; unknown IDs rejected |
 
 ## Alternatives Considered
@@ -386,7 +378,7 @@ Add `channel_id: str | None` to `HeartbeatDecision` so the Scout can specify whe
 
 ## Relation to Other ADRs
 
-- **ADR 002 (Nano-Kernel)** — Channel tools follow the "all functionality in extensions/tools" principle. `get_channel_ids()` and `get_default_user_id()` are minimal additions to core contracts.
+- **ADR 002 (Nano-Kernel)** — Channel tools follow the "all functionality in extensions/tools" principle. `send_message()` and `get_channel_ids()` are minimal additions to core contracts; `user_id` stays out of the router's proactive path entirely.
 - **ADR 003 (Agent-as-Extension)** — Sub-agents can access channel tools if included in their `uses_tools`. For Phase 1, only the Orchestrator receives them. Phase 2 should document how sub-agents opt in via manifest, so developers adding new agents know the capability exists.
 - **ADR 004 (Event Bus)** — No EventBus changes. The existing `system.user.notify` and `system.agent.task` payloads already carry `channel_id`.
 - **ADR 006 (MCP Extension)** — MCP tools and channel tools coexist. An MCP server could theoretically expose channel-like tools, but native channel tools are preferred for reliability and protocol integration.
