@@ -556,7 +556,7 @@ class SchedulerExtension:
                     return "Error: invalid until_iso format."
             next_fire = await store.update_recurring(
                 schedule_id,
-                cron=cron.strip() if cron else None,
+                cron_expr=cron.strip() if cron else None,
                 every_sec=every_seconds,
                 until_at=until_at,
                 status=status,
