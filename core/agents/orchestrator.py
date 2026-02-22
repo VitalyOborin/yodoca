@@ -36,6 +36,7 @@ def create_orchestrator_agent(
     extension_tools: list[Any] | None = None,
     agent_tools: list[Any] | None = None,
     capabilities_summary: str = "",
+    channel_tools: list[Any] | None = None,
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
     settings = load_settings()
@@ -52,6 +53,8 @@ def create_orchestrator_agent(
         tools.extend(extension_tools)
     if agent_tools:
         tools.extend(agent_tools)
+    if channel_tools:
+        tools.extend(channel_tools)
     return Agent(
         name="Orchestrator",
         instructions=instructions,

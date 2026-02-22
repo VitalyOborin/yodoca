@@ -20,6 +20,7 @@ class MessageRouter:
         self._agent: Any = None
         self._agent_id: str = "orchestrator"
         self._channels: dict[str, ChannelProvider] = {}
+        self._channel_descriptions: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
         self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
@@ -38,6 +39,18 @@ class MessageRouter:
     def get_channel(self, ext_id: str) -> ChannelProvider | None:
         """Return channel by extension id. Used when handling user.message events."""
         return self._channels.get(ext_id)
+
+    def get_channel_ids(self) -> list[str]:
+        """Return list of registered channel extension IDs."""
+        return list(self._channels.keys())
+
+    def set_channel_descriptions(self, descriptions: dict[str, str]) -> None:
+        """Set human-readable channel descriptions (from manifest 'name' field)."""
+        self._channel_descriptions = descriptions
+
+    def get_channel_descriptions(self) -> dict[str, str]:
+        """Return {channel_id: human-readable name} for all registered channels."""
+        return self._channel_descriptions.copy()
 
     def subscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Subscribe to an internal event (e.g. user_message, agent_response)."""
@@ -119,7 +132,7 @@ class MessageRouter:
         await channel.send_to_user(user_id, response)
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
-        """Send notification to user. Single-user: kernel picks active channel."""
+        """Send proactive notification to user. Channel handles all addressing internally."""
         if not self._channels:
             logger.warning("notify_user: no channels registered")
             return
@@ -127,5 +140,4 @@ class MessageRouter:
             ch = self._channels[channel_id]
         else:
             ch = next(iter(self._channels.values()))
-        user_id = "default"
-        await ch.send_to_user(user_id, text)
+        await ch.send_message(text)

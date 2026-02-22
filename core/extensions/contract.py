@@ -40,7 +40,11 @@ class ChannelProvider(Protocol):
     """User communication channel. Receives messages and sends responses."""
 
     async def send_to_user(self, user_id: str, message: str) -> None:
-        """Send agent response to user through this channel."""
+        """Reactive: reply to a specific user who sent a message."""
+
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to the channel's default recipient.
+        All addressing (user_id, chat_id, etc.) is internal to the channel."""
 
 
 @runtime_checkable

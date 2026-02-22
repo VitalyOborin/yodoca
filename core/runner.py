@@ -11,6 +11,7 @@ from agents import SQLiteSession
 
 from core.agents.orchestrator import create_orchestrator_agent
 from core.events import EventBus
+from core.tools.channel import make_channel_tools
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter
 from core.logging_config import setup_logging
@@ -61,11 +62,13 @@ async def main_async() -> None:
     loader.detect_and_wire_all(router)
     loader.wire_event_subscriptions(event_bus)
 
+    channel_tools = make_channel_tools(router)
     agent = create_orchestrator_agent(
         model_router=model_router,
         extension_tools=loader.get_all_tools(),
         agent_tools=loader.get_agent_tools(),
         capabilities_summary=loader.get_capabilities_summary(),
+        channel_tools=channel_tools,
     )
     router.set_agent(agent)
 

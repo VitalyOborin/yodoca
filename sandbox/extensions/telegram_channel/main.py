@@ -186,3 +186,13 @@ class TelegramChannelExtension:
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception("Failed to send to %s: %s", self._chat_id, e)
+
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to the channel's default recipient."""
+        if not self._bot or not self._token or not self._chat_id:
+            return
+        try:
+            await self._bot.send_message(chat_id=self._chat_id, text=message)
+        except Exception as e:
+            if self._ctx:
+                self._ctx.logger.exception("Failed to send message: %s", e)

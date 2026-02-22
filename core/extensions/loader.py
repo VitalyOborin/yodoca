@@ -444,6 +444,14 @@ class Loader:
             if isinstance(ext, SchedulerProvider):
                 self._schedulers[ext_id] = ext
 
+        channel_descriptions = {}
+        for m in self._manifests:
+            if m.id in [
+                eid for eid, e in self._extensions.items() if isinstance(e, ChannelProvider)
+            ]:
+                channel_descriptions[m.id] = m.name
+        router.set_channel_descriptions(channel_descriptions)
+
     async def start_all(self) -> None:
         """Call start() on all; wrap ServiceProvider.run_background in tasks; start cron loop."""
         for ext_id, ext in self._extensions.items():

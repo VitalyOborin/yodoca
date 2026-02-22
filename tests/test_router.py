@@ -14,9 +14,13 @@ class MockChannel(ChannelProvider):
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.proactive_sent: list[str] = []
 
     async def send_to_user(self, user_id: str, message: str) -> None:
         self.sent.append((user_id, message))
+
+    async def send_message(self, message: str) -> None:
+        self.proactive_sent.append(message)
 
 
 class TestMessageRouterRegisterAndNotify:
@@ -42,7 +46,8 @@ class TestMessageRouterRegisterAndNotify:
         ch = MockChannel()
         router.register_channel("cli", ch)
         await router.notify_user("hello world")
-        assert ch.sent == [("default", "hello world")]
+        assert ch.proactive_sent == ["hello world"]
+        assert ch.sent == []
 
     @pytest.mark.asyncio
     async def test_notify_user_picks_channel_by_id(self) -> None:
@@ -52,8 +57,20 @@ class TestMessageRouterRegisterAndNotify:
         router.register_channel("first", ch1)
         router.register_channel("second", ch2)
         await router.notify_user("msg", channel_id="second")
-        assert ch2.sent == [("default", "msg")]
-        assert ch1.sent == []
+        assert ch2.proactive_sent == ["msg"]
+        assert ch1.proactive_sent == []
+
+    def test_get_channel_ids(self) -> None:
+        router = MessageRouter()
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        router.register_channel("tg", ch)
+        assert router.get_channel_ids() == ["cli", "tg"]
+
+    def test_set_and_get_channel_descriptions(self) -> None:
+        router = MessageRouter()
+        router.set_channel_descriptions({"cli": "CLI Channel", "tg": "Telegram"})
+        assert router.get_channel_descriptions() == {"cli": "CLI Channel", "tg": "Telegram"}
 
 
 class TestInvokeAgent:

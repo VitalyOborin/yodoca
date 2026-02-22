@@ -63,3 +63,8 @@ class CliChannelExtension:
     async def send_to_user(self, _user_id: str, message: str) -> None:
         print(message)
         print()
+
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to CLI (stdout)."""
+        print(message)
+        print()
