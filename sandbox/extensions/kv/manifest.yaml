@@ -7,7 +7,7 @@ entrypoint: main:KvExtension
 description: |
   Persistent key-value store. Use to save and retrieve named values that must
   survive across conversations and sessions. Tools: kv_set (write or delete a key),
-  kv_get (read a key).
+  kv_get (read a key or keys by glob pattern, e.g. agent_health.*, *report*).
 
 depends_on: []
 secrets: []

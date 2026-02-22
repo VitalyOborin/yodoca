@@ -1,5 +1,6 @@
 """Key-Value Store extension. Provides kv_set and kv_get tools backed by a JSON file in data_dir."""
 
+import fnmatch
 import json
 from pathlib import Path
 from typing import Annotated, Any
@@ -23,6 +24,12 @@ class _FileStore:
 
     def _ns(self, key: str) -> str:
         return f"{self._namespace}:{key}" if self._namespace else key
+
+    def _to_user_key(self, stored_key: str) -> str:
+        """Convert stored key (with optional namespace prefix) to user-facing key."""
+        if self._namespace and stored_key.startswith(f"{self._namespace}:"):
+            return stored_key[len(self._namespace) + 1 :]
+        return stored_key
 
     def _load(self) -> dict[str, str]:
         if not self._path.exists():
@@ -48,6 +55,18 @@ class _FileStore:
     async def get(self, key: str) -> str | None:
         store = self._load()
         return store.get(self._ns(key.strip()))
+
+    async def get_matching(self, pattern: str) -> dict[str, str]:
+        """Return all key-value pairs where user-facing key matches the glob pattern.
+        Pattern uses * (any chars) and ? (single char), e.g. 'key:*', '*what*', 'start*:part*'.
+        """
+        store = self._load()
+        result: dict[str, str] = {}
+        for stored_key, value in store.items():
+            user_key = self._to_user_key(stored_key)
+            if fnmatch.fnmatch(user_key, pattern):
+                result[user_key] = value
+        return dict(sorted(result.items()))
 
     async def set(self, key: str, value: str | None) -> None:
         store = self._load()
@@ -98,6 +117,12 @@ class KvExtension:
             raise RuntimeError("KV store not initialized")
         return await self._store.get(key)
 
+    async def get_matching(self, pattern: str) -> dict[str, str]:
+        """Return all key-value pairs matching the glob pattern (for other extensions)."""
+        if not self._store:
+            raise RuntimeError("KV store not initialized")
+        return await self._store.get_matching(pattern)
+
     async def set(self, key: str, value: str | None) -> None:
         """Write or delete key (for other extensions via context.get_extension('kv'))."""
         if not self._store:
@@ -134,18 +159,31 @@ class KvExtension:
 
         @function_tool(name_override="kv_get")
         async def kv_get(key: Annotated[str, Field(min_length=1)]) -> str:
-            """Retrieve the value stored under key from the persistent key-value store.
+            """Retrieve value(s) from the persistent key-value store.
 
-            Returns the stored value, or a message indicating the key does not exist.
+            Accepts an exact key or a glob pattern with wildcards:
+            - * matches any sequence of characters
+            - ? matches any single character
+            Examples: 'key:*', '*what*', 'agent_health.*', 'start*:part*'
+
+            Returns the stored value for exact match, or key: value lines for pattern match.
+            Returns a message if no keys match.
 
             Args:
-                key: Non-empty key name to look up.
+                key: Non-empty key name or glob pattern (e.g. 'my_key', 'prefix:*').
             """
             if not key or not key.strip():
                 return "Error: key must be a non-empty string."
-            result = await store.get(key.strip())
+            k = key.strip()
+            if "*" in k or "?" in k:
+                matches = await store.get_matching(k)
+                if not matches:
+                    return f"No keys matching pattern '{k}'."
+                lines = [f"{mk}: {mv}" for mk, mv in matches.items()]
+                return "\n".join(lines)
+            result = await store.get(k)
             if result is None:
-                return f"Key '{key.strip()}' not found."
+                return f"Key '{k}' not found."
             return result
 
         return [kv_set, kv_get]
