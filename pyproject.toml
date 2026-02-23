@@ -25,6 +25,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "aiogram>=3.24.0",
     "aioconsole>=0.8.0",
+    "humanize>=4.9.0",
 ]
 
 [project.optional-dependencies]

@@ -710,15 +710,16 @@ Exposed to the Orchestrator via `ToolProvider.get_tools()`. Kept minimal to avoi
 
 `search_memory` accepts filters: `type` (episodic/semantic/procedural/opinion), `entity_name`, `after`/`before` (time expressions), `limit`.
 
-**Timestamp output contract** (see ADR 009): each result dict contains the raw `event_time` integer plus three display-only string fields:
+**Timestamp output contract** (see ADR 009): each result dict contains the raw `event_time` integer plus four display-only string fields:
 
 | Field | Example | Notes |
 | --- | --- | --- |
 | `event_time_iso` | `2026-02-23T15:23:47+00:00` | RFC 3339 UTC |
 | `event_time_local` | `2026-02-23 18:23:47 UTC+3` | Host system local timezone |
 | `event_time_tz` | `UTC+3` | Timezone label |
+| `event_time_relative` | `3 hours ago` | Relative time via `humanize` |
 
-All three fields are empty strings when `event_time` is missing or zero. The `get_timeline` tool's `timestamp` field also uses `event_time_iso` format.
+All four fields are empty strings when `event_time` is missing or zero. The `get_timeline` tool's `timestamp` field also uses `event_time_iso` format. Formatting logic lives in `core/utils/formatting.py` (shared across extensions).
 
 `**memory_stats` output (Phase 6):**
 

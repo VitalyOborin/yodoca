@@ -23,7 +23,9 @@ from retrieval import (
     parse_time_expression,
 )
 from storage import MemoryStorage
-from tools import _format_event_time, build_tools
+from tools import build_tools
+
+from core.utils.formatting import format_event_time as _format_event_time
 
 
 @pytest.fixture
@@ -1616,6 +1618,7 @@ class TestFormatEventTime:
         assert "event_time_iso" in result
         assert "event_time_local" in result
         assert "event_time_tz" in result
+        assert "event_time_relative" in result
 
     def test_iso_is_utc_aware(self) -> None:
         ts = 1771860227
@@ -1633,17 +1636,24 @@ class TestFormatEventTime:
             f"event_time_local must contain tz label, got {result['event_time_local']!r}"
         )
 
+    def test_relative_time_is_nonempty_for_valid_ts(self) -> None:
+        ts = int(time.time()) - 3600
+        result = _format_event_time(ts)
+        rel = result["event_time_relative"]
+        assert rel, "event_time_relative must not be empty for valid timestamps"
+        assert "ago" in rel.lower() or "now" in rel.lower()
+
     def test_none_returns_empty_strings(self) -> None:
         result = _format_event_time(None)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
 
     def test_zero_returns_empty_strings(self) -> None:
         result = _format_event_time(0)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
 
     def test_negative_returns_empty_strings(self) -> None:
         result = _format_event_time(-1)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
 
     def test_local_format_has_correct_structure(self) -> None:
         ts = 1771860227
@@ -1682,6 +1692,7 @@ class TestSearchMemoryTimestampEnrichment:
         assert "event_time_iso" in out
         assert "event_time_local" in out
         assert "event_time_tz" in out
+        assert "event_time_relative" in out
 
     @pytest.mark.asyncio
     async def test_search_result_preserves_event_time_int(

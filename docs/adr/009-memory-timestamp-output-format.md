@@ -18,13 +18,14 @@ The root cause is that epoch integers are internal storage primitives — correc
 
 ## Decision
 
-Add three display-only fields alongside every existing `event_time` integer in `search_memory` results and the `get_timeline` `timestamp` field:
+Add four display-only fields alongside every existing `event_time` integer in `search_memory` results and the `get_timeline` `timestamp` field:
 
 | Field | Example | Purpose |
 | --- | --- | --- |
 | `event_time_iso` | `2026-02-23T15:23:47+00:00` | RFC 3339 UTC — unambiguous, sortable |
 | `event_time_local` | `2026-02-23 18:23:47 UTC+3` | Local wall-clock — human-friendly, suitable for display |
 | `event_time_tz` | `UTC+3` | Timezone label for the local representation |
+| `event_time_relative` | `3 hours ago` | Relative time — most natural for conversational agents |
 
 ### Timezone strategy
 
@@ -41,16 +42,21 @@ Local timezone is determined at runtime from the host system using `datetime.now
 
 ### Helper location
 
-A module-level helper `_format_event_time(ts: int | None) -> dict[str, str]` is added to `sandbox/extensions/memory/tools.py` (the display/output layer). This is the only layer that needs formatted output. Both `search_memory` and `get_timeline` call the same helper so the format is canonical.
+Formatting logic lives in `core/utils/formatting.py` — a shared utility module available to all extensions. The `humanize` library (pure Python, ~50 KB, zero transitive deps) is used under the hood for `event_time_relative` via `humanize.naturaltime()` and will serve future formatting needs (`naturalsize` for bytes, `intcomma` for numbers, etc.).
+
+Memory's `tools.py` imports `format_event_time` from `core.utils.formatting` and calls it in `search_memory` and `get_timeline`.
 
 `get_timeline`'s existing `TimelineEvent.timestamp` field is updated to use the ISO format via the helper (previously it used `time.localtime` with a different pattern — `%Y-%m-%d %H:%M`).
 
 ### Fallback
 
-If `event_time` is `None`, `0`, or a non-positive integer, all three display fields are set to `""` to signal "no timestamp available" without raising.
+If `event_time` is `None`, `0`, or a non-positive integer, all four display fields are set to `""` to signal "no timestamp available" without raising.
 
 ## Consequences
 
 - The AI agent can directly quote dates from tool results without ambiguity or follow-up questions about timezone.
+- `event_time_relative` is the most useful field for conversational context — the agent can say "you mentioned this 2 days ago" without any computation.
 - No performance impact — the helper is pure CPU, O(1), negligible.
 - `get_timeline` output changes: `timestamp` now carries ISO format (`2026-02-23T15:23:47+00:00`) instead of `%Y-%m-%d %H:%M` local format. This is a minor breaking change for any consumer parsing that field's format, but no such consumer exists in the current codebase.
+- `core/utils/formatting.py` is available to all extensions — no duplication when heartbeat, scheduler, or other extensions need human-friendly formatting.
+- New external dependency: `humanize>=4.9.0` (pure Python, ~50 KB).

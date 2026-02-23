@@ -3,40 +3,15 @@
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Callable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
 
+from core.utils.formatting import format_event_time as _format_event_time
 from retrieval import parse_time_expression, _resolve_entity
 
 logger = logging.getLogger(__name__)
-
-# Resolve local timezone once at import time so every call is consistent and cheap.
-_LOCAL_TZ = datetime.now(timezone.utc).astimezone().tzinfo
-
-
-def _format_event_time(ts: int | None) -> dict[str, str]:
-    """Return human-readable timestamp fields derived from a Unix epoch integer.
-
-    Returns a dict with:
-      - event_time_iso:   RFC 3339 in UTC, e.g. "2026-02-23T15:23:47+00:00"
-      - event_time_local: local wall-clock, e.g. "2026-02-23 18:23:47 UTC+3"
-      - event_time_tz:    timezone label, e.g. "UTC+3"
-
-    All fields are empty strings when ts is None, 0, or non-positive.
-    """
-    if not ts or ts <= 0:
-        return {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
-    utc_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    local_dt = utc_dt.astimezone(_LOCAL_TZ)
-    tz_name = local_dt.strftime("%Z")
-    return {
-        "event_time_iso": utc_dt.isoformat(),
-        "event_time_local": local_dt.strftime(f"%Y-%m-%d %H:%M:%S {tz_name}"),
-        "event_time_tz": tz_name,
-    }
 
 
 class SearchResult(BaseModel):
