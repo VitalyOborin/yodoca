@@ -67,6 +67,65 @@ class CausalEdgeInput(BaseModel):
     )
 
 
+class SessionConsolidatedResult(BaseModel):
+    """Result of is_session_consolidated."""
+
+    session_id: str
+    consolidated: bool
+
+
+class SessionEpisodesResult(BaseModel):
+    """Result of get_session_episodes."""
+
+    episodes: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
+class ConflictCandidate(BaseModel):
+    """Single conflict candidate."""
+
+    id: str
+    type: str
+    content: str
+    confidence: float | None = None
+
+
+class ConflictCandidatesResult(BaseModel):
+    """Result of detect_conflicts."""
+
+    candidates: list[ConflictCandidate] = Field(default_factory=list)
+    count: int = 0
+
+
+class ResolveConflictResult(BaseModel):
+    """Result of resolve_conflict."""
+
+    old_node_id: str
+    new_node_id: str
+    status: str = "resolved"
+
+
+class MarkConsolidatedResult(BaseModel):
+    """Result of mark_session_consolidated."""
+
+    session_id: str
+    status: str = "consolidated"
+
+
+class SaveCausalEdgesResult(BaseModel):
+    """Result of save_causal_edges."""
+
+    count: int = 0
+    status: str = "saved"
+
+
+class UpdateEntitySummaryResult(BaseModel):
+    """Result of update_entity_summary."""
+
+    entity_id: str
+    status: str = "updated"
+
+
 def build_write_path_tools(
     storage: Any,
     retrieval: Any,
@@ -76,24 +135,24 @@ def build_write_path_tools(
     """Build internal tools for the write-path memory agent."""
 
     @function_tool
-    async def is_session_consolidated(session_id: str) -> bool:
+    async def is_session_consolidated(session_id: str) -> SessionConsolidatedResult:
         """Check if session was already consolidated. Idempotency guard."""
         result = await storage.is_session_consolidated(session_id)
         logger.debug("is_session_consolidated(%s) = %s", session_id, result)
-        return result
+        return SessionConsolidatedResult(session_id=session_id, consolidated=result)
 
     @function_tool
     async def get_session_episodes(
         session_id: str,
         limit: int = 30,
         offset: int = 0,
-    ) -> list[dict[str, Any]]:
+    ) -> SessionEpisodesResult:
         """Fetch episodic nodes for a session. Paginated, ordered by event_time."""
         episodes = await storage.get_session_episodes(
             session_id, limit=limit, offset=offset
         )
         logger.debug("get_session_episodes(%s): returned %d episodes", session_id, len(episodes))
-        return episodes
+        return SessionEpisodesResult(episodes=episodes, count=len(episodes))
 
     @function_tool
     async def save_nodes_batch(nodes: list[NodeInput]) -> SaveBatchResult:
@@ -198,7 +257,7 @@ def build_write_path_tools(
         return EntityResult(entities_created=created, entities_linked=linked)
 
     @function_tool
-    async def detect_conflicts(fact: str) -> list[dict[str, Any]]:
+    async def detect_conflicts(fact: str) -> ConflictCandidatesResult:
         """Find potentially contradicting facts via hybrid search. Returns top 5 candidates."""
         query_embedding = None
         if embed_fn and fact:
@@ -210,13 +269,19 @@ def build_write_path_tools(
             node_types=["semantic", "procedural", "opinion"],
         )
         logger.debug("detect_conflicts: %d candidates for %r", len(results), fact[:60])
-        return [
-            {"id": r["id"], "type": r["type"], "content": r["content"], "confidence": r.get("confidence")}
+        candidates = [
+            ConflictCandidate(
+                id=r["id"],
+                type=r["type"],
+                content=r["content"],
+                confidence=r.get("confidence"),
+            )
             for r in results
         ]
+        return ConflictCandidatesResult(candidates=candidates, count=len(candidates))
 
     @function_tool
-    async def resolve_conflict(old_node_id: str, new_node_id: str) -> str:
+    async def resolve_conflict(old_node_id: str, new_node_id: str) -> ResolveConflictResult:
         """Resolve conflict: soft-delete old node, create supersedes edge."""
         now = int(time.time())
         await storage.update_node_fields(
@@ -232,20 +297,20 @@ def build_write_path_tools(
             "created_at": now,
         })
         logger.info("resolve_conflict: %s supersedes %s", new_node_id[:8], old_node_id[:8])
-        return "conflict resolved"
+        return ResolveConflictResult(old_node_id=old_node_id, new_node_id=new_node_id, status="resolved")
 
     @function_tool
-    async def mark_session_consolidated(session_id: str) -> str:
+    async def mark_session_consolidated(session_id: str) -> MarkConsolidatedResult:
         """Mark session as consolidated. Call only after all extraction is done."""
         await storage.mark_session_consolidated(session_id)
         logger.info("mark_session_consolidated: %s", session_id)
-        return f"session {session_id} marked consolidated"
+        return MarkConsolidatedResult(session_id=session_id, status="consolidated")
 
     @function_tool
-    async def save_causal_edges(edges: list[CausalEdgeInput]) -> str:
+    async def save_causal_edges(edges: list[CausalEdgeInput]) -> SaveCausalEdgesResult:
         """Create causal edges between episode pairs. source_id=cause, target_id=effect. confidence=0.7."""
         if not edges:
-            return "no edges to save"
+            return SaveCausalEdgesResult(status="error: no edges to save")
         now = int(time.time())
         for e in edges:
             if not e.source_id or not e.target_id:
@@ -261,13 +326,13 @@ def build_write_path_tools(
             })
         count = len([x for x in edges if x.source_id and x.target_id])
         logger.info("save_causal_edges: %d edges saved", count)
-        return f"saved {count} causal edges"
+        return SaveCausalEdgesResult(count=count, status="saved")
 
     @function_tool
-    async def update_entity_summary(entity_id: str, summary: str) -> str:
+    async def update_entity_summary(entity_id: str, summary: str) -> UpdateEntitySummaryResult:
         """Update entity summary and re-embed for improved vector search. Used for entity enrichment."""
         if not entity_id or not (summary or "").strip():
-            return "entity_id and summary required"
+            return UpdateEntitySummaryResult(entity_id=entity_id or "", status="error: entity_id and summary required")
         now = int(time.time())
         await storage.update_entity(
             entity_id, {"summary": summary.strip(), "last_updated": now}
@@ -277,7 +342,7 @@ def build_write_path_tools(
             if emb:
                 await storage.save_entity_embedding(entity_id, emb)
         logger.info("update_entity_summary: entity=%s", entity_id[:8])
-        return f"entity {entity_id} summary updated"
+        return UpdateEntitySummaryResult(entity_id=entity_id, status="updated")
 
     return [
         is_session_consolidated,

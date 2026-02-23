@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from agents import function_tool
@@ -11,6 +12,31 @@ from pydantic import BaseModel, Field
 from retrieval import parse_time_expression, _resolve_entity
 
 logger = logging.getLogger(__name__)
+
+# Resolve local timezone once at import time so every call is consistent and cheap.
+_LOCAL_TZ = datetime.now(timezone.utc).astimezone().tzinfo
+
+
+def _format_event_time(ts: int | None) -> dict[str, str]:
+    """Return human-readable timestamp fields derived from a Unix epoch integer.
+
+    Returns a dict with:
+      - event_time_iso:   RFC 3339 in UTC, e.g. "2026-02-23T15:23:47+00:00"
+      - event_time_local: local wall-clock, e.g. "2026-02-23 18:23:47 UTC+3"
+      - event_time_tz:    timezone label, e.g. "UTC+3"
+
+    All fields are empty strings when ts is None, 0, or non-positive.
+    """
+    if not ts or ts <= 0:
+        return {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+    utc_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    local_dt = utc_dt.astimezone(_LOCAL_TZ)
+    tz_name = local_dt.strftime("%Z")
+    return {
+        "event_time_iso": utc_dt.isoformat(),
+        "event_time_local": local_dt.strftime(f"%Y-%m-%d %H:%M:%S {tz_name}"),
+        "event_time_tz": tz_name,
+    }
 
 
 class SearchResult(BaseModel):
@@ -40,6 +66,98 @@ class ConfirmResult(BaseModel):
 
     node_id: str
     status: str = "confirmed"
+
+
+class EntityInfoResult(BaseModel):
+    """Result of get_entity_info."""
+
+    entity_id: str = ""
+    canonical_name: str = ""
+    summary: str = ""
+    facts: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+    status: str = "ok"
+
+
+class MemoryStatsResult(BaseModel):
+    """Result of memory_stats."""
+
+    nodes: dict[str, int] = Field(default_factory=dict)
+    edges: dict[str, int] = Field(default_factory=dict)
+    entities: int = 0
+    orphan_nodes: int = 0
+    avg_edges_per_node: float = 0.0
+    unconsolidated_sessions: int = 0
+    storage_size_mb: float = 0.0
+    last_consolidation: str | None = None
+    last_decay_run: str | None = None
+
+
+class NodeRef(BaseModel):
+    """Reference to a node in provenance chain."""
+
+    id: str
+    content: str = ""
+
+
+class EntityRef(BaseModel):
+    """Reference to an entity in provenance chain."""
+
+    canonical_name: str
+    type: str = ""
+
+
+class ExplainFactResult(BaseModel):
+    """Result of explain_fact."""
+
+    fact_id: str = ""
+    fact_type: str = ""
+    fact_content: str = ""
+    source_episodes: list[NodeRef] = Field(default_factory=list)
+    supersedes: list[NodeRef] = Field(default_factory=list)
+    superseded_by: list[NodeRef] = Field(default_factory=list)
+    entities: list[EntityRef] = Field(default_factory=list)
+    status: str = "ok"
+
+
+class WeakFact(BaseModel):
+    """Single weak fact entry."""
+
+    id: str
+    content: str
+    confidence: float = 0.0
+    last_accessed: int | None = None
+
+
+class WeakFactsResult(BaseModel):
+    """Result of weak_facts."""
+
+    facts: list[WeakFact] = Field(default_factory=list)
+    threshold: float = 0.3
+
+
+class TimelineEvent(BaseModel):
+    """Single timeline event."""
+
+    id: str
+    timestamp: str
+    content: str
+
+
+class TimelineResult(BaseModel):
+    """Result of get_timeline."""
+
+    events: list[TimelineEvent] = Field(default_factory=list)
+    count: int = 0
+    status: str = "ok"
+
+
+class ForgetResult(BaseModel):
+    """Result of forget_fact."""
+
+    node_id: str = ""
+    content_snippet: str = ""
+    status: str = "forgotten"
 
 
 def build_tools(
@@ -82,8 +200,9 @@ def build_tools(
             event_after=event_after,
             event_before=event_before,
         )
-        logger.info("search_memory: query=%r types=%s results=%d", query[:60], node_types, len(results))
-        return SearchResult(results=results, count=len(results))
+        enriched = [{**r, **_format_event_time(r.get("event_time"))} for r in results]
+        logger.info("search_memory: query=%r types=%s results=%d", query[:60], node_types, len(enriched))
+        return SearchResult(results=enriched, count=len(enriched))
 
     @function_tool
     async def remember_fact(fact: str) -> RememberResult:
@@ -186,113 +305,108 @@ def build_tools(
         return ConfirmResult(node_id=fact_id, status="confirmed")
 
     @function_tool
-    async def get_entity_info(entity_name: str) -> str:
+    async def get_entity_info(entity_name: str) -> EntityInfoResult:
         """Get entity profile: summary, related facts, timeline."""
         if not entity_name or not entity_name.strip():
-            return "No entity name provided."
+            return EntityInfoResult(status="error: no entity name provided")
         entity = await _resolve_entity(storage, entity_name)
         if not entity:
-            return f"No entity found for '{entity_name}'"
+            return EntityInfoResult(status=f"error: entity not found for '{entity_name}'")
         nodes = await storage.entity_nodes_for_entity(
             entity["id"],
             node_types=["semantic", "procedural", "opinion", "episodic"],
             limit=20,
         )
-        facts = [n for n in nodes if n["type"] in ("semantic", "procedural", "opinion")]
-        episodes = [n for n in nodes if n["type"] == "episodic"]
-        lines = ["## Entity: " + entity.get("canonical_name", "")]
-        summary = entity.get("summary")
-        if summary:
-            lines.append(summary)
-        if facts:
-            lines.append("\n## Related facts")
-            for n in facts[:10]:
-                lines.append(f"- {n.get('content', '')}")
-        if episodes:
-            lines.append("\n## Timeline")
-            for ep in sorted(episodes, key=lambda x: x.get("event_time", 0))[:10]:
-                lines.append(f"- {ep.get('content', '')}")
-        return "\n".join(lines)
+        facts = [n.get("content", "") for n in nodes if n["type"] in ("semantic", "procedural", "opinion")][:10]
+        episodes = sorted([n for n in nodes if n["type"] == "episodic"], key=lambda x: x.get("event_time", 0))[:10]
+        timeline = [ep.get("content", "") for ep in episodes]
+        return EntityInfoResult(
+            entity_id=entity["id"],
+            canonical_name=entity.get("canonical_name", ""),
+            summary=entity.get("summary") or "",
+            facts=facts,
+            timeline=timeline,
+            status="ok",
+        )
 
     @function_tool
-    async def memory_stats() -> str:
+    async def memory_stats() -> MemoryStatsResult:
         """Graph-level memory metrics: node/edge counts, entities, data quality indicators."""
         stats = await storage.get_graph_stats()
         unconsolidated = await storage.get_unconsolidated_sessions()
         size_mb = storage.get_storage_size_mb()
-        n = stats["nodes"]
-        e = stats["edges"]
-        lines = [
-            f"Nodes: episodic {n['episodic']}, semantic {n['semantic']}, procedural {n['procedural']}, opinion {n['opinion']}",
-            f"Edges: temporal {e['temporal']}, causal {e['causal']}, entity {e['entity']}, derived_from {e['derived_from']}, supersedes {e['supersedes']}",
-            f"Entities: {stats['entities']}",
-            f"Orphan nodes: {stats['orphan_nodes']}",
-            f"Avg edges/node: {stats['avg_edges_per_node']}",
-            f"Unconsolidated sessions: {len(unconsolidated)}",
-            f"Storage size: {size_mb} MB",
-        ]
+        last_consolidation = None
+        last_decay_run = None
         if get_maintenance_info:
             maint = get_maintenance_info()
-            if maint.get("last_consolidation"):
-                lines.append(f"Last consolidation: {maint['last_consolidation']}")
-            if maint.get("last_decay_run"):
-                lines.append(f"Last decay run: {maint['last_decay_run']}")
-        return "\n".join(lines)
+            last_consolidation = maint.get("last_consolidation")
+            last_decay_run = maint.get("last_decay_run")
+        return MemoryStatsResult(
+            nodes=stats["nodes"],
+            edges=stats["edges"],
+            entities=stats["entities"],
+            orphan_nodes=stats["orphan_nodes"],
+            avg_edges_per_node=stats["avg_edges_per_node"],
+            unconsolidated_sessions=len(unconsolidated),
+            storage_size_mb=size_mb,
+            last_consolidation=last_consolidation,
+            last_decay_run=last_decay_run,
+        )
+
+    def _trunc(s: str, n: int = 80) -> str:
+        c = (s or "")[:n]
+        return c + "..." if len(s or "") > n else c
 
     @function_tool
-    async def explain_fact(fact_id: str) -> str:
+    async def explain_fact(fact_id: str) -> ExplainFactResult:
         """Explain provenance of a fact: source episodes, superseded facts, linked entities."""
         if not fact_id or not fact_id.strip():
-            return "No fact_id provided."
+            return ExplainFactResult(status="error: no fact_id provided")
         chain = await storage.get_provenance_chain(fact_id.strip())
         if not chain["node"]:
-            return f"Fact '{fact_id}' not found."
-        lines = ["## Fact"]
+            return ExplainFactResult(status=f"error: fact '{fact_id}' not found")
         node = chain["node"]
-        lines.append(f"ID: {node.get('id', '')}")
-        lines.append(f"Type: {node.get('type', '')}")
-        lines.append(f"Content: {node.get('content', '')}")
-        def _trunc(s: str, n: int = 80) -> str:
-            c = (s or "")[:n]
-            return c + "..." if len(s or "") > n else c
-
-        if chain["source_episodes"]:
-            lines.append("\n## Source episodes (derived_from)")
-            for ep in chain["source_episodes"]:
-                lines.append(f"- [{ep.get('id', '')}] {_trunc(ep.get('content', ''))}")
-        if chain["supersedes"]:
-            lines.append("\n## Supersedes (replaces)")
-            for s in chain["supersedes"]:
-                lines.append(f"- [{s.get('id', '')}] {_trunc(s.get('content', ''))}")
-        if chain["superseded_by"]:
-            lines.append("\n## Superseded by")
-            for s in chain["superseded_by"]:
-                lines.append(f"- [{s.get('id', '')}] {_trunc(s.get('content', ''))}")
-        if chain["entities"]:
-            lines.append("\n## Linked entities")
-            for ent in chain["entities"]:
-                lines.append(f"- {ent.get('canonical_name', '')} ({ent.get('type', '')})")
-        if not any([chain["source_episodes"], chain["supersedes"], chain["superseded_by"], chain["entities"]]):
-            lines.append("\n## Provenance")
-            lines.append("No source episodes, supersedes edges, or linked entities.")
-        return "\n".join(lines)
+        source_episodes = [
+            NodeRef(id=ep.get("id", ""), content=_trunc(ep.get("content", "")))
+            for ep in chain.get("source_episodes", [])
+        ]
+        supersedes = [
+            NodeRef(id=s.get("id", ""), content=_trunc(s.get("content", "")))
+            for s in chain.get("supersedes", [])
+        ]
+        superseded_by = [
+            NodeRef(id=s.get("id", ""), content=_trunc(s.get("content", "")))
+            for s in chain.get("superseded_by", [])
+        ]
+        entities = [
+            EntityRef(canonical_name=ent.get("canonical_name", ""), type=ent.get("type", ""))
+            for ent in chain.get("entities", [])
+        ]
+        return ExplainFactResult(
+            fact_id=node.get("id", ""),
+            fact_type=node.get("type", ""),
+            fact_content=node.get("content", ""),
+            source_episodes=source_episodes,
+            supersedes=supersedes,
+            superseded_by=superseded_by,
+            entities=entities,
+            status="ok",
+        )
 
     @function_tool
-    async def weak_facts(threshold: float = 0.3, limit: int = 10) -> str:
+    async def weak_facts(threshold: float = 0.3, limit: int = 10) -> WeakFactsResult:
         """List facts with low confidence that may need confirmation or will decay soon."""
         nodes = await storage.get_weak_nodes(threshold=threshold, limit=limit)
-        if not nodes:
-            return f"No facts with confidence < {threshold}."
-        def _trunc60(s: str) -> str:
-            c = (s or "")[:60]
-            return c + "..." if len(s or "") > 60 else c
-
-        lines = [f"## Low-confidence facts (confidence < {threshold})"]
-        for n in nodes:
-            la = n.get("last_accessed")
-            la_str = str(la) if la else "never"
-            lines.append(f"- [{n.get('id', '')}] {_trunc60(n.get('content', ''))} | conf={n.get('confidence', 0):.2f} | last_accessed={la_str}")
-        return "\n".join(lines)
+        facts = [
+            WeakFact(
+                id=n.get("id", ""),
+                content=(n.get("content", "") or "")[:60] + ("..." if len(n.get("content", "") or "") > 60 else ""),
+                confidence=n.get("confidence", 0.0),
+                last_accessed=n.get("last_accessed"),
+            )
+            for n in nodes
+        ]
+        return WeakFactsResult(facts=facts, threshold=threshold)
 
     @function_tool
     async def get_timeline(
@@ -300,7 +414,7 @@ def build_tools(
         after: str = "",
         before: str = "",
         limit: int = 50,
-    ) -> str:
+    ) -> TimelineResult:
         """Get chronological events. Optional: filter by entity name, time range
         (last_week, last_month, YYYY-MM-DD)."""
         entity_id = None
@@ -309,7 +423,7 @@ def build_tools(
             if entity:
                 entity_id = entity["id"]
             else:
-                return f"No entity found for '{entity_name}'"
+                return TimelineResult(status=f"error: no entity found for '{entity_name}'")
         event_after = parse_time_expression(after) if after and after.strip() else None
         event_before = parse_time_expression(before) if before and before.strip() else None
         results = await storage.get_timeline(
@@ -319,22 +433,22 @@ def build_tools(
             limit=limit,
         )
         if not results:
-            return "No events found for the given criteria."
-        lines = []
+            return TimelineResult(status="error: no events found for the given criteria")
+        events = []
         for r in results:
-            et = r.get("event_time", 0)
-            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(et)) if et else "?"
+            fmt = _format_event_time(r.get("event_time"))
+            ts = fmt["event_time_iso"] or "?"
             content = (r.get("content", "") or "")[:200]
             if len(r.get("content", "") or "") > 200:
                 content += "..."
-            lines.append(f"- [{ts}] {content}")
-        return "\n".join(lines)
+            events.append(TimelineEvent(id=r.get("id", ""), timestamp=ts, content=content))
+        return TimelineResult(events=events, count=len(events), status="ok")
 
     @function_tool
-    async def forget_fact(fact: str) -> str:
+    async def forget_fact(fact: str) -> ForgetResult:
         """Forget (soft-delete) a memory. Use ONLY when the user explicitly asks to forget or remove something."""
         if not fact or not fact.strip():
-            return "No fact provided."
+            return ForgetResult(status="error: no fact provided")
         query_embedding = await embed_fn(fact.strip()) if embed_fn else None
         candidates = await retrieval.search(
             fact,
@@ -343,7 +457,7 @@ def build_tools(
             node_types=["semantic", "procedural", "opinion", "episodic"],
         )
         if not candidates:
-            return f"No memory found matching '{fact[:100]}'."
+            return ForgetResult(status=f"error: no memory found matching '{fact[:100]}'")
         node = candidates[0]
         node_id = node["id"]
         content_snippet = (node.get("content", "") or "")[:100]
@@ -351,7 +465,7 @@ def build_tools(
             content_snippet += "..."
         await storage.soft_delete_node(node_id)
         logger.info("forget_fact: deleted node=%s", node_id[:8])
-        return f"Forgotten: {content_snippet}"
+        return ForgetResult(node_id=node_id, content_snippet=content_snippet, status="forgotten")
 
     return [
         search_memory,

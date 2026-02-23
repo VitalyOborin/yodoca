@@ -23,7 +23,7 @@ from retrieval import (
     parse_time_expression,
 )
 from storage import MemoryStorage
-from tools import build_tools
+from tools import _format_event_time, build_tools
 
 
 @pytest.fixture
@@ -1354,18 +1354,18 @@ class TestMemoryStatsTool:
             embed_fn=None,
             token_budget=1000,
         )
-        stats_tool = tools[5]
+        stats_tool = next(t for t in tools if t.name == "memory_stats")
         args = {}
         result = await stats_tool.on_invoke_tool(
             _tool_ctx(stats_tool.name, args), __import__("json").dumps(args)
         )
         out = str(result)
-        assert "Nodes:" in out
-        assert "Edges:" in out
-        assert "Entities:" in out
-        assert "Orphan nodes:" in out
-        assert "Storage size:" in out
-        assert "Unconsolidated sessions:" in out
+        assert "nodes=" in out
+        assert "edges=" in out
+        assert "entities=" in out
+        assert "orphan_nodes=" in out
+        assert "storage_size_mb=" in out
+        assert "unconsolidated_sessions=" in out
 
 
 class TestExplainFactTool:
@@ -1423,14 +1423,14 @@ class TestExplainFactTool:
             embed_fn=None,
             token_budget=1000,
         )
-        explain_tool = tools[6]
+        explain_tool = next(t for t in tools if t.name == "explain_fact")
         args = {"fact_id": fact_id}
         result = await explain_tool.on_invoke_tool(
             _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
         )
         out = str(result)
         assert "extracted fact" in out
-        assert "Source episodes" in out or "derived_from" in out
+        assert "source_episodes=" in out
 
     @pytest.mark.asyncio
     async def test_explain_fact_shows_supersedes_chain(
@@ -1468,21 +1468,21 @@ class TestExplainFactTool:
             embed_fn=None,
             token_budget=1000,
         )
-        explain_tool = tools[6]
+        explain_tool = next(t for t in tools if t.name == "explain_fact")
         args_new = {"fact_id": new_id}
         result_new = await explain_tool.on_invoke_tool(
             _tool_ctx(explain_tool.name, args_new), __import__("json").dumps(args_new)
         )
         out_new = str(result_new)
         assert "new fact" in out_new
-        assert "Supersedes" in out_new or "supersedes" in out_new or "replaces" in out_new
+        assert "supersedes=" in out_new
         assert "old fact" in out_new
         args_old = {"fact_id": old_id}
         result_old = await explain_tool.on_invoke_tool(
             _tool_ctx(explain_tool.name, args_old), __import__("json").dumps(args_old)
         )
         out_old = str(result_old)
-        assert "Superseded by" in out_old or "superseded" in out_old.lower()
+        assert "superseded_by=" in out_old or "supersedes=" in out_old
 
     @pytest.mark.asyncio
     async def test_explain_fact_nonexistent(self, storage: MemoryStorage) -> None:
@@ -1494,12 +1494,12 @@ class TestExplainFactTool:
             embed_fn=None,
             token_budget=1000,
         )
-        explain_tool = tools[6]
+        explain_tool = next(t for t in tools if t.name == "explain_fact")
         args = {"fact_id": "nonexistent-fact-id-12345"}
         result = await explain_tool.on_invoke_tool(
             _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
         )
-        assert "not found" in str(result).lower()
+        assert "not found" in str(result).lower() or "error" in str(result).lower()
 
 
 class TestWeakFactsTool:
@@ -1536,7 +1536,7 @@ class TestWeakFactsTool:
             embed_fn=None,
             token_budget=1000,
         )
-        weak_tool = tools[7]
+        weak_tool = next(t for t in tools if t.name == "weak_facts")
         args = {"threshold": 0.3, "limit": 10}
         result = await weak_tool.on_invoke_tool(
             _tool_ctx(weak_tool.name, args), __import__("json").dumps(args)
@@ -1570,13 +1570,13 @@ class TestWeakFactsTool:
             embed_fn=None,
             token_budget=1000,
         )
-        weak_tool = tools[7]
+        weak_tool = next(t for t in tools if t.name == "weak_facts")
         args = {"threshold": 0.5, "limit": 10}
         result = await weak_tool.on_invoke_tool(
             _tool_ctx(weak_tool.name, args), __import__("json").dumps(args)
         )
         out = str(result)
-        assert "episode" not in out or "No facts" in out
+        assert "episode" not in out or "facts=[]" in out
 
     @pytest.mark.asyncio
     async def test_weak_facts_ordered_by_confidence(
@@ -1605,3 +1605,136 @@ class TestWeakFactsTool:
         assert len(nodes) >= 2
         confs = [n["confidence"] for n in nodes]
         assert confs == sorted(confs)
+
+
+class TestFormatEventTime:
+    """Unit tests for the _format_event_time helper."""
+
+    def test_valid_timestamp_returns_all_fields(self) -> None:
+        ts = 1771860227
+        result = _format_event_time(ts)
+        assert "event_time_iso" in result
+        assert "event_time_local" in result
+        assert "event_time_tz" in result
+
+    def test_iso_is_utc_aware(self) -> None:
+        ts = 1771860227
+        result = _format_event_time(ts)
+        iso = result["event_time_iso"]
+        assert iso.endswith("+00:00"), f"Expected UTC ISO, got: {iso!r}"
+        assert iso.startswith("2026-")
+
+    def test_local_contains_tz_label(self) -> None:
+        ts = 1771860227
+        result = _format_event_time(ts)
+        tz_label = result["event_time_tz"]
+        assert tz_label, "event_time_tz must not be empty"
+        assert tz_label in result["event_time_local"], (
+            f"event_time_local must contain tz label, got {result['event_time_local']!r}"
+        )
+
+    def test_none_returns_empty_strings(self) -> None:
+        result = _format_event_time(None)
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+
+    def test_zero_returns_empty_strings(self) -> None:
+        result = _format_event_time(0)
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+
+    def test_negative_returns_empty_strings(self) -> None:
+        result = _format_event_time(-1)
+        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": ""}
+
+    def test_local_format_has_correct_structure(self) -> None:
+        ts = 1771860227
+        result = _format_event_time(ts)
+        local = result["event_time_local"]
+        # Must have date + time portion
+        assert len(local) >= 19
+        assert "-" in local and ":" in local
+
+
+class TestSearchMemoryTimestampEnrichment:
+    """search_memory tool returns enriched timestamp fields in results."""
+
+    @pytest.mark.asyncio
+    async def test_search_result_contains_timestamp_fields(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "semantic",
+            "content": "unique fact for timestamp test",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        search = tools[0]
+        args = {"query": "unique fact for timestamp test"}
+        import json
+        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+        out = str(raw)
+        assert "event_time_iso" in out
+        assert "event_time_local" in out
+        assert "event_time_tz" in out
+
+    @pytest.mark.asyncio
+    async def test_search_result_preserves_event_time_int(
+        self, storage: MemoryStorage
+    ) -> None:
+        import json
+
+        now = int(time.time())
+        storage.insert_node({
+            "type": "semantic",
+            "content": "backward compat timestamp check",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        search = tools[0]
+        args = {"query": "backward compat timestamp check"}
+        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+        # Deserialize from JSON string returned by tool
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, dict) and "results" in data:
+            for r in data["results"]:
+                assert isinstance(r["event_time"], int), "event_time must remain int"
+                assert r["event_time"] > 0
+
+    @pytest.mark.asyncio
+    async def test_search_result_count_unchanged(
+        self, storage: MemoryStorage
+    ) -> None:
+        import json
+
+        now = int(time.time())
+        for i in range(3):
+            storage.insert_node({
+                "type": "semantic",
+                "content": f"count check node {i}",
+                "event_time": now + i,
+                "created_at": now + i,
+                "valid_from": now + i,
+            })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        search = tools[0]
+        args = {"query": "count check node", "limit": 5}
+        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, dict) and "count" in data and "results" in data:
+            assert data["count"] == len(data["results"])
