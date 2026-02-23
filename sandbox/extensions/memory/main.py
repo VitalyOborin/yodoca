@@ -1,46 +1,43 @@
-"""Memory extension: ToolProvider + ContextProvider. Long-term memory across sessions."""
+"""Memory v2 extension: ToolProvider + ContextProvider + SchedulerProvider."""
 
+import asyncio
 import logging
 import sys
 import time
+import uuid
 from pathlib import Path
-from typing import Any
 
-_UNSET = object()  # Sentinel: reflection cache not yet populated
+from core.events.topics import SystemTopics
 
-# Ensure extension dir is on path for sibling imports (db, repository, tools)
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
-from db import MemoryDatabase
-from entity_linker import extract_and_link
-from repository import MemoryRepository
-from tools import build_consolidator_tools, build_tools
+from retrieval import (
+    KeywordIntentClassifier,
+    MemoryRetrieval,
+    classify_query_complexity,
+    get_adaptive_params,
+)
+from storage import MemoryStorage
+from tools import build_tools
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryExtension:
-    """Extension + ToolProvider + ContextProvider: long-term memory with hybrid FTS5 + vector search."""
+    """Graph-based cognitive memory. Phase 1: episodes, FTS5, temporal edges."""
 
     def __init__(self) -> None:
-        self._db: MemoryDatabase | None = None
-        self._repo: MemoryRepository | None = None
-        self._ctx: Any = None
+        self._storage: MemoryStorage | None = None
+        self._retrieval: MemoryRetrieval | None = None
+        self._ctx: object | None = None
         self._current_session_id: str | None = None
-        self._episodes_per_chunk: int = 30
-        self._embed_fn: Any = None
-        self._entity_link_fn: Any = None
-        self._accurate_ner: bool = False
-        # Cache for latest reflection: changes at most once a week.
-        # Invalidated on save_reflection(). Avoids an SQL query per prompt.
-        self._reflection_cache: dict[str, Any] | None | object = _UNSET
+        self._token_budget: int = 2000
 
-    # --- ContextProvider ---
     @property
     def context_priority(self) -> int:
-        return 100
+        return 50
 
     async def get_context(
         self,
@@ -48,78 +45,44 @@ class MemoryExtension:
         *,
         agent_id: str | None = None,
     ) -> str | None:
-        """Return relevant memory context (hybrid search). Prepends to prompt."""
-        if not self._repo:
+        """Return relevant memory context. Phase 1: FTS5 only."""
+        if not self._retrieval:
             return None
-        sections: list[str] = []
-        query_embedding = None
-        if self._embed_fn:
-            query_embedding = await self._embed_fn(prompt)
-        results = await self._repo.hybrid_search(
+        complexity = classify_query_complexity(prompt)
+        params = get_adaptive_params(complexity)
+        results = await self._retrieval.search(
             prompt,
-            query_embedding=query_embedding,
-            kind="fact",
-            limit=5,
-            exclude_session_id=self._current_session_id,
+            limit=params["limit"],
+            token_budget=params["token_budget"],
         )
-        if results:
-            lines = "\n".join(f"- {r['content']}" for r in results)
-            sections.append(f"## Relevant memory\n{lines}")
-        if self._reflection_cache is _UNSET:
-            self._reflection_cache = await self._repo.get_latest_reflection()
-        if self._reflection_cache:
-            sections.append(f"## Weekly insight\n{self._reflection_cache['content']}")
-        return "\n\n".join(sections) if sections else None
-
-    # --- ToolProvider ---
-    def get_tools(self) -> list[Any]:
-        if not self._repo:
-            return []
-        return build_tools(self._repo, self._embed_fn, self._entity_link_fn)
-
-    def get_consolidator_tools(self) -> list[Any]:
-        """Tools for consolidator agent only. Not exposed to Orchestrator."""
-        if not self._repo:
-            return []
-        return build_consolidator_tools(
-            self._repo,
-            self._episodes_per_chunk,
-            self._embed_fn,
-            self._entity_link_fn,
-            conflict_min_confidence=self._ctx.get_config("conflict_min_confidence", 0.8),
+        if not results:
+            return None
+        return self._retrieval.assemble_context(
+            results,
+            token_budget=params["token_budget"],
         )
 
-    # --- Lifecycle ---
-    async def initialize(self, context: Any) -> None:
+    def get_tools(self) -> list:
+        if not self._retrieval:
+            return []
+        return build_tools(self._retrieval, token_budget=self._token_budget)
+
+    async def initialize(self, context: object) -> None:
         self._ctx = context
-        self._episodes_per_chunk = context.get_config("episodes_per_chunk", 30)
+        self._token_budget = context.get_config("context_token_budget", 2000)
         db_path = context.data_dir / "memory.db"
-        self._db = MemoryDatabase(db_path)
-        await self._db.initialize()
-        embedding_ext = context.get_extension("embedding")
-        if (
-            embedding_ext
-            and embedding_ext.health_check()
-            and self._db.vec_available
-        ):
-            self._embed_fn = lambda text: embedding_ext.embed(text, dimensions=256)
-        else:
-            if not embedding_ext or not embedding_ext.health_check():
-                logger.warning("embedding extension unavailable, FTS5-only mode")
-            elif not self._db.vec_available:
-                logger.warning("vec_memories dimension mismatch, FTS5-only mode")
-        self._repo = MemoryRepository(self._db)
-        ner_ext = context.get_extension("ner")
-        if ner_ext and ner_ext.health_check():
-            self._entity_link_fn = lambda mid, content, strategy="fast": extract_and_link(
-                ner_ext, self._repo, mid, content, strategy=strategy
-            )
-            self._accurate_ner = ner_ext.has_provider("spacy") or ner_ext.has_provider("llm")
-        else:
-            logger.info("ner extension unavailable, entity extraction disabled")
-            self._entity_link_fn = None
+        self._storage = MemoryStorage(db_path)
+        await self._storage.initialize()
+
+        intent_classifier = KeywordIntentClassifier()
+        self._retrieval = MemoryRetrieval(self._storage, intent_classifier)
+
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
+        context.subscribe_event(
+            SystemTopics.SESSION_COMPLETED,
+            self._on_session_completed,
+        )
 
     async def start(self) -> None:
         pass
@@ -128,154 +91,102 @@ class MemoryExtension:
         pass
 
     async def destroy(self) -> None:
-        if self._db:
-            await self._db.close()
-            self._db = None
-            self._repo = None
+        if self._storage:
+            await self._storage.close()
+            self._storage = None
+            self._retrieval = None
 
     def health_check(self) -> bool:
-        return self._db is not None
+        return self._storage is not None
 
-    @property
-    def accurate_ner_available(self) -> bool:
-        """True if spaCy or LLM NER providers are loaded."""
-        return self._accurate_ner
+    async def execute_task(self, task_name: str) -> dict | None:
+        """SchedulerProvider. Phase 1: stub."""
+        if task_name == "run_nightly_maintenance":
+            logger.info("nightly_maintenance not yet implemented (Phase 3+5)")
+            return None
+        return None
 
-    async def get_memories_for_entity_enrichment(
-        self,
-        kinds: list[str] | None = None,
-        max_entity_count: int = 2,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Fetch memories that need entity enrichment."""
-        if not self._repo:
-            return []
-        return await self._repo.get_memories_for_entity_enrichment(
-            kinds=kinds or ["fact", "episode"],
-            max_entity_count=max_entity_count,
-            limit=limit,
-        )
-
-    async def enrich_memory_entities(self, memory_id: str, content: str) -> int:
-        """Re-extract entities with accurate NER. Returns count of new entity links."""
-        if not self._entity_link_fn:
-            return 0
-        entity_ids = await self._entity_link_fn(memory_id, content, strategy="accurate")
-        if self._repo:
-            await self._repo.mark_memory_enriched(memory_id)
-        return len(entity_ids)
-
-    async def _on_user_message(self, data: dict[str, Any]) -> None:
-        """MessageRouter: user_message. Save user message as episode."""
-        if not self._repo:
+    async def _on_user_message(self, data: dict) -> None:
+        """Hot path: save user episode, temporal edge."""
+        if not self._storage:
             return
         text = (data.get("text") or "").strip()
         session_id = data.get("session_id")
 
         if session_id and session_id != self._current_session_id:
+            if self._current_session_id:
+                asyncio.create_task(self._consolidate_session(self._current_session_id))
             self._current_session_id = session_id
-            await self._repo.ensure_session(session_id)
-            await self._trigger_consolidation(session_id)
+            self._storage.ensure_session(session_id)
 
         if not text:
             return
-        memory_id = await self._repo.save_episode(
-            f"{text}",
-            session_id=self._current_session_id,
-            source_role="user",
-        )
-        if self._entity_link_fn:
-            await self._entity_link_fn(memory_id, text)
 
-    async def _on_agent_response(self, data: dict[str, Any]) -> None:
-        """MessageRouter: agent_response. Save assistant response as episode."""
-        if not self._repo:
+        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        now = int(time.time())
+        node_id = str(uuid.uuid4())
+        node = {
+            "id": node_id,
+            "type": "episodic",
+            "content": text,
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "source_type": "conversation",
+            "source_role": "user",
+            "session_id": session_id,
+        }
+        self._storage.insert_node(node)
+        if prev_id:
+            self._storage.insert_edge({
+                "source_id": prev_id,
+                "target_id": node_id,
+                "relation_type": "temporal",
+                "valid_from": now,
+                "created_at": now,
+            })
+
+    async def _on_agent_response(self, data: dict) -> None:
+        """Hot path: save agent episode, temporal edge."""
+        if not self._storage:
             return
         text = (data.get("text") or "").strip()
         if not text:
             return
-        agent_name = data.get("agent_id") or "orchestrator"
-        memory_id = await self._repo.save_episode(
-            f"{text}",
-            session_id=self._current_session_id,
-            source_role=agent_name,
-        )
-        if self._entity_link_fn:
-            await self._entity_link_fn(memory_id, text)
+        session_id = data.get("session_id") or self._current_session_id
+        agent_id = data.get("agent_id") or "orchestrator"
 
-    async def _trigger_consolidation(self, current_session_id: str) -> None:
-        """Emit memory.session_completed for all pending non-current sessions."""
-        pending = await self._repo.get_pending_consolidations(current_session_id)
-        for session_id in pending:
-            await self._ctx.emit(
-                "memory.session_completed",
-                {
-                    "session_id": session_id,
-                    "prompt": f"Consolidate session {session_id}: extract semantic facts.",
-                },
-            )
+        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        now = int(time.time())
+        node_id = str(uuid.uuid4())
+        node = {
+            "id": node_id,
+            "type": "episodic",
+            "content": text,
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "source_type": "conversation",
+            "source_role": agent_id,
+            "session_id": session_id,
+        }
+        self._storage.insert_node(node)
+        if prev_id:
+            self._storage.insert_edge({
+                "source_id": prev_id,
+                "target_id": node_id,
+                "relation_type": "temporal",
+                "valid_from": now,
+                "created_at": now,
+            })
 
-    async def get_pending_consolidations(
-        self, exclude_session_id: str
-    ) -> list[str]:
-        """Return session_ids that need consolidation (exclude current)."""
-        if not self._repo:
-            return []
-        return await self._repo.get_pending_consolidations(exclude_session_id)
+    async def _on_session_completed(self, event: object) -> None:
+        """EventBus: session.completed. Trigger consolidation."""
+        payload = getattr(event, "payload", {}) or {}
+        session_id = payload.get("session_id")
+        if session_id:
+            asyncio.create_task(self._consolidate_session(session_id))
 
-    async def get_all_pending_consolidations(self) -> list[str]:
-        """Return all session_ids that need consolidation (for scheduler)."""
-        if not self._repo:
-            return []
-        return await self._repo.get_all_pending_consolidations()
-
-    async def run_decay_and_prune(self, threshold: float = 0.05) -> dict[str, Any]:
-        """Public API: apply Ebbinghaus decay to all active facts.
-
-        Called by memory_maintenance scheduler. Returns stats dict.
-        """
-        if not self._repo:
-            return {
-                "decayed": 0,
-                "pruned": 0,
-                "errors": ["repository not initialized"],
-            }
-        return await self._repo.apply_decay_and_prune(threshold)
-
-    async def get_recent_memories_for_reflection(
-        self, days: int = 7, limit: int = 200
-    ) -> list[dict[str, Any]]:
-        """Fetch recent facts and episodes for reflection. Called by memory_maintenance."""
-        if not self._repo:
-            return []
-        since_ts = int(time.time()) - (days * 86400)
-        return await self._repo.get_recent_memories(
-            since_ts=since_ts,
-            kinds=["fact", "episode"],
-            limit=limit,
-        )
-
-    async def save_reflection(
-        self,
-        content: str,
-        source_ids: list[str] | None = None,
-        tags: list[str] | None = None,
-    ) -> str:
-        """Save a reflection. Generates embedding if available. Returns memory id."""
-        if not self._repo:
-            raise RuntimeError("memory repository not initialized")
-        memory_id = await self._repo.save_reflection(
-            content=content, source_ids=source_ids or [], tags=tags or []
-        )
-        if self._embed_fn:
-            embedding = await self._embed_fn(content)
-            if embedding:
-                await self._repo.save_embedding(memory_id, embedding)
-        self._reflection_cache = {"id": memory_id, "content": content}
-        return memory_id
-
-    async def get_latest_reflection_timestamp(self) -> int | None:
-        """Return created_at of the most recent reflection, or None. For idempotency."""
-        if not self._repo:
-            return None
-        return await self._repo.get_latest_reflection_timestamp()
+    async def _consolidate_session(self, session_id: str) -> None:
+        """Consolidate session. Phase 1: stub."""
+        logger.info("consolidate_session stub for %s (Phase 3)", session_id)

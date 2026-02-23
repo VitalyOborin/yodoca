@@ -2,12 +2,9 @@
 
 import asyncio
 import os
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-from agents import SQLiteSession
 
 from core.agents.orchestrator import create_orchestrator_agent
 from core.events import EventBus
@@ -15,7 +12,7 @@ from core.tools.channel import make_channel_tools
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter
 from core.logging_config import setup_logging
-from core.settings import load_settings
+from core.settings import get_setting, load_settings
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
@@ -75,14 +72,14 @@ async def main_async() -> None:
     await event_bus.start()
     await loader.start_all()
 
-    session_id = f"orchestrator_{int(time.time())}"
+    session_timeout = get_setting(settings, "session.timeout_sec", 1800)
     session_dir = data_dir / "memory"
     session_dir.mkdir(parents=True, exist_ok=True)
-    session = SQLiteSession(
-        session_id,
-        str(session_dir / "session.db"),
+    router.configure_session(
+        session_db_path=str(session_dir / "session.db"),
+        session_timeout=session_timeout,
+        event_bus=event_bus,
     )
-    router.set_session(session, session_id)
 
     loader.wire_context_providers(router)
 

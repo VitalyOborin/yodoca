@@ -30,6 +30,9 @@ _DEFAULTS: dict[str, Any] = {
         "max_bytes": 10485760,  # 10 MB
         "backup_count": 3,
     },
+    "session": {
+        "timeout_sec": 1800,
+    },
 }
 
 _cached: dict[str, Any] | None = None

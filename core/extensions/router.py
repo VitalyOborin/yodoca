@@ -5,10 +5,15 @@ Serializes agent invocations. Dispatches user_message and agent_response for mid
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from core.extensions.contract import ChannelProvider
+from core.events.topics import SystemTopics
+
+if TYPE_CHECKING:
+    from core.events.bus import EventBus
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,10 @@ class MessageRouter:
         self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
         self._session: Any = None
         self._session_id: str | None = None
+        self._last_message_at: float | None = None
+        self._session_timeout: int = 1800
+        self._session_db_path: str | None = None
+        self._event_bus: "EventBus | None" = None
 
     def set_agent(self, agent: Any, agent_id: str = "orchestrator") -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
@@ -73,6 +82,36 @@ class MessageRouter:
         self._session = session
         self._session_id = session_id
 
+    def configure_session(
+        self,
+        session_db_path: str,
+        session_timeout: int,
+        event_bus: "EventBus | None" = None,
+    ) -> None:
+        """Configure session lifecycle. Creates initial session. Called once by runner."""
+        self._session_db_path = session_db_path
+        self._session_timeout = session_timeout
+        self._event_bus = event_bus
+        self._session_id = f"orchestrator_{int(time.time())}"
+        from agents import SQLiteSession
+
+        self._session = SQLiteSession(self._session_id, session_db_path)
+
+    async def _rotate_session(self) -> None:
+        """Rotate to a new session and publish session.completed for the old one."""
+        old_id = self._session_id
+        self._session_id = f"orchestrator_{int(time.time())}"
+        from agents import SQLiteSession
+
+        assert self._session_db_path is not None
+        self._session = SQLiteSession(self._session_id, self._session_db_path)
+        if self._event_bus:
+            await self._event_bus.publish(
+                SystemTopics.SESSION_COMPLETED,
+                "kernel",
+                {"session_id": old_id, "reason": "inactivity_timeout"},
+            )
+
     async def _emit(self, event: str, data: dict[str, Any]) -> None:
         """Dispatch event to subscribers."""
         for handler in self._subscribers.get(event, []):
@@ -114,6 +153,14 @@ class MessageRouter:
         self, text: str, user_id: str, channel: ChannelProvider
     ) -> None:
         """Invoke agent with user message, send response via channel. Serialized."""
+        now = time.time()
+        if (
+            self._last_message_at is not None
+            and (now - self._last_message_at) > self._session_timeout
+        ):
+            await self._rotate_session()
+        self._last_message_at = now
+
         await self._emit(
             "user_message",
             {"text": text, "user_id": user_id, "channel": channel, "session_id": self._session_id},

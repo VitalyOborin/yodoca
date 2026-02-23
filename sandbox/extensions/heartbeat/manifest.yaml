@@ -10,16 +10,12 @@ description: |
 
 depends_on:
   - memory
-  - memory_maintenance
-  - memory_reflection
   - kv
 
 agent:
   model: gpt-5-mini
   uses_tools:
     - memory
-    - memory_maintenance
-    - memory_reflection
     - kv
 
 agent_config:
