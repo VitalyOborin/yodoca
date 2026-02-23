@@ -1004,6 +1004,55 @@ class MemoryStorage:
             for r in rows
         ]
 
+    async def get_timeline(
+        self,
+        *,
+        entity_id: str | None = None,
+        event_after: int | None = None,
+        event_before: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get chronological episodic events. Optional entity and time range filters."""
+        if not self._read_conn:
+            return []
+        conditions = ["n.type = 'episodic'", "n.valid_until IS NULL"]
+        params: list[Any] = []
+        if entity_id:
+            conditions.append("n.id IN (SELECT node_id FROM node_entities WHERE entity_id = ?)")
+            params.append(entity_id)
+        if event_after is not None:
+            conditions.append("n.event_time >= ?")
+            params.append(event_after)
+        if event_before is not None:
+            conditions.append("n.event_time <= ?")
+            params.append(event_before)
+        where = " AND ".join(conditions)
+        params.append(limit)
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.session_id
+            FROM nodes n
+            WHERE {where}
+            ORDER BY n.event_time ASC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        ]
+
     async def get_nodes_by_ids(self, node_ids: list[str]) -> list[dict[str, Any]]:
         """Batch fetch nodes by ID. Preserves order where possible."""
         if not self._read_conn or not node_ids:

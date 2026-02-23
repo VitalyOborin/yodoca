@@ -294,13 +294,74 @@ def build_tools(
             lines.append(f"- [{n.get('id', '')}] {_trunc60(n.get('content', ''))} | conf={n.get('confidence', 0):.2f} | last_accessed={la_str}")
         return "\n".join(lines)
 
+    @function_tool
+    async def get_timeline(
+        entity_name: str = "",
+        after: str = "",
+        before: str = "",
+        limit: int = 50,
+    ) -> str:
+        """Get chronological events. Optional: filter by entity name, time range
+        (last_week, last_month, YYYY-MM-DD)."""
+        entity_id = None
+        if entity_name and entity_name.strip():
+            entity = await _resolve_entity(storage, entity_name.strip())
+            if entity:
+                entity_id = entity["id"]
+            else:
+                return f"No entity found for '{entity_name}'"
+        event_after = parse_time_expression(after) if after and after.strip() else None
+        event_before = parse_time_expression(before) if before and before.strip() else None
+        results = await storage.get_timeline(
+            entity_id=entity_id,
+            event_after=event_after,
+            event_before=event_before,
+            limit=limit,
+        )
+        if not results:
+            return "No events found for the given criteria."
+        lines = []
+        for r in results:
+            et = r.get("event_time", 0)
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(et)) if et else "?"
+            content = (r.get("content", "") or "")[:200]
+            if len(r.get("content", "") or "") > 200:
+                content += "..."
+            lines.append(f"- [{ts}] {content}")
+        return "\n".join(lines)
+
+    @function_tool
+    async def forget_fact(fact: str) -> str:
+        """Forget (soft-delete) a memory. Use ONLY when the user explicitly asks to forget or remove something."""
+        if not fact or not fact.strip():
+            return "No fact provided."
+        query_embedding = await embed_fn(fact.strip()) if embed_fn else None
+        candidates = await retrieval.search(
+            fact,
+            query_embedding=query_embedding,
+            limit=5,
+            node_types=["semantic", "procedural", "opinion", "episodic"],
+        )
+        if not candidates:
+            return f"No memory found matching '{fact[:100]}'."
+        node = candidates[0]
+        node_id = node["id"]
+        content_snippet = (node.get("content", "") or "")[:100]
+        if len(node.get("content", "") or "") > 100:
+            content_snippet += "..."
+        await storage.soft_delete_node(node_id)
+        logger.info("forget_fact: deleted node=%s", node_id[:8])
+        return f"Forgotten: {content_snippet}"
+
     return [
         search_memory,
         remember_fact,
         correct_fact,
         confirm_fact,
         get_entity_info,
+        get_timeline,
         memory_stats,
         explain_fact,
+        forget_fact,
         weak_facts,
     ]
