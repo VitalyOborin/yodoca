@@ -203,6 +203,9 @@ class TestQueryComplexity:
         assert classify_query_complexity("compare the two options and summarize everything") == "complex"
         assert classify_query_complexity("one two three four five six seven eight nine ten") == "complex"
 
+    def test_russian_broad_query_is_complex(self) -> None:
+        assert classify_query_complexity("расскажи всё") == "complex"
+
 
 class TestEmbeddingIntentClassifier:
     """EmbeddingIntentClassifier with mock embed_fn."""
@@ -674,6 +677,34 @@ class TestConsolidateSessionIdempotency:
         await ext._consolidate_session("sess-idem")
 
         ext._write_agent.consolidate_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_double_trigger_invokes_agent_once(
+        self, storage: MemoryStorage
+    ) -> None:
+        """Session ID change + session.completed both targeting same session: agent invoked once."""
+        from main import MemoryExtension
+
+        storage.ensure_session("sess-dedup")
+        await asyncio.sleep(0.2)
+
+        ext = MemoryExtension()
+        ext._storage = storage
+        ext._current_session_id = "sess-dedup"
+        ext._write_agent = AsyncMock()
+        ext._write_agent.consolidate_session = AsyncMock(return_value="ok")
+
+        # Simulate: user switches to new session (triggers consolidate for sess-dedup)
+        await ext._on_user_message({"text": "hi", "session_id": "sess-new"})
+        # Simulate: session.completed for sess-dedup (should NOT schedule, already pending)
+        event = MagicMock()
+        event.payload = {"session_id": "sess-dedup"}
+        await ext._on_session_completed(event)
+
+        # Allow background consolidation task to run
+        await asyncio.sleep(2.0)
+
+        ext._write_agent.consolidate_session.assert_called_once_with("sess-dedup")
 
 
 class TestMemoryStoragePhase4:

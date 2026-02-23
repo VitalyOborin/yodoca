@@ -43,6 +43,7 @@ class MemoryExtension:
         self._token_budget: int = 2000
         self._last_consolidation_at: str | None = None
         self._last_decay_at: str | None = None
+        self._consolidation_pending: set[str] = set()
 
     @property
     def context_priority(self) -> int:
@@ -198,7 +199,7 @@ class MemoryExtension:
                 "text": (
                     f"Nightly: consolidated {n_consolidated}, "
                     f"decayed {decay_stats['decayed']} pruned {decay_stats['pruned']}, "
-                    f"enriched {enrichment_count}, causal {causal_count}"
+                    f"enriched {enrichment_count}, causal_pairs_analyzed {causal_count}"
                 ),
             }
         return None
@@ -227,7 +228,7 @@ class MemoryExtension:
         return count
 
     async def _infer_causal_edges(self) -> int:
-        """Infer causal edges between consecutive episodes. Returns count processed."""
+        """Infer causal edges between consecutive episodes. Returns count of pairs analyzed."""
         if not self._write_agent or not self._storage or not self._ctx:
             return 0
         batch_size = self._ctx.get_config("causal_inference_batch_size", 50)
@@ -245,7 +246,10 @@ class MemoryExtension:
 
         if session_id and session_id != self._current_session_id:
             if self._current_session_id:
-                asyncio.create_task(self._consolidate_session(self._current_session_id))
+                prev_sid = self._current_session_id
+                if prev_sid not in self._consolidation_pending:
+                    self._consolidation_pending.add(prev_sid)
+                    asyncio.create_task(self._consolidate_session(prev_sid))
             self._current_session_id = session_id
             self._storage.ensure_session(session_id)
 
@@ -327,17 +331,22 @@ class MemoryExtension:
         payload = getattr(event, "payload", {}) or {}
         session_id = payload.get("session_id")
         if session_id:
+            if session_id in self._consolidation_pending:
+                return
+            self._consolidation_pending.add(session_id)
             asyncio.create_task(self._consolidate_session(session_id))
 
     async def _consolidate_session(self, session_id: str) -> None:
         """Consolidate session via write-path agent."""
-        if not self._write_agent or not self._storage:
-            logger.info("consolidate_session skipped (no write agent): %s", session_id)
-            return
-        if await self._storage.is_session_consolidated(session_id):
-            return
         try:
+            if not self._write_agent or not self._storage:
+                logger.info("consolidate_session skipped (no write agent): %s", session_id)
+                return
+            if await self._storage.is_session_consolidated(session_id):
+                return
             result = await self._write_agent.consolidate_session(session_id)
             logger.info("Session %s consolidated: %s", session_id, result)
         except Exception as e:
             logger.exception("consolidate_session failed for %s: %s", session_id, e)
+        finally:
+            self._consolidation_pending.discard(session_id)

@@ -285,7 +285,8 @@ class MemoryStorage:
         self, node_ids: list[str], *, now: int | None = None
     ) -> None:
         """Record access: increment access_count, set last_accessed, apply confidence reinforcement.
-        Fire-and-forget writes. Call from retrieval after search results are returned."""
+        Fire-and-forget writes. Call from retrieval after search results are returned.
+        Uses atomic UPDATE for confidence to avoid race with decay/concurrent updates."""
         if not node_ids:
             return
         now = now or int(time.time())
@@ -294,20 +295,19 @@ class MemoryStorage:
         unique_ids = list(dict.fromkeys(node_ids))
         placeholders = ",".join("?" * len(unique_ids))
         cursor = await self._read_conn.execute(
-            f"SELECT id, access_count, confidence FROM nodes WHERE id IN ({placeholders})",
+            f"SELECT id, access_count FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL",
             unique_ids,
         )
         rows = await cursor.fetchall()
-        updates: list[tuple[int, int, float, str]] = []
+        updates: list[tuple[int, float, str]] = []
         for r in rows:
-            nid, acc, conf = r[0], r[1] or 0, r[2] or 1.0
+            nid, acc = r[0], r[1] or 0
             acc_new = acc + 1
             delta = 0.05 * math.log(1 + acc_new / 20)
-            conf_new = min(1.0, conf + delta)
-            updates.append((acc_new, now, conf_new, nid))
+            updates.append((now, delta, nid))
         if updates:
             self._submit_batch_write(
-                "UPDATE nodes SET access_count = ?, last_accessed = ?, confidence = ? WHERE id = ?",
+                "UPDATE nodes SET access_count = access_count + 1, last_accessed = ?, confidence = MIN(1.0, confidence + ?) WHERE id = ? AND valid_until IS NULL",
                 updates,
                 wait=False,
             )

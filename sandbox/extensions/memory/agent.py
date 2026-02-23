@@ -90,7 +90,7 @@ class MemoryAgent:
     async def infer_causal_edges(
         self, episode_pairs: list[tuple[dict[str, Any], dict[str, Any]]]
     ) -> int:
-        """Analyze episode pairs and create causal edges where appropriate. Returns count of edges created."""
+        """Analyze episode pairs for causal relationships. Returns count of pairs analyzed."""
         if not self._causal_agent or not episode_pairs:
             return 0
         lines = []

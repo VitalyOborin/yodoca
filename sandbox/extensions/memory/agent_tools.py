@@ -199,7 +199,10 @@ def build_write_path_tools(
             limit=5,
             node_types=["semantic", "procedural", "opinion"],
         )
-        return results
+        return [
+            {"id": r["id"], "type": r["type"], "content": r["content"], "confidence": r.get("confidence")}
+            for r in results
+        ]
 
     @function_tool
     async def resolve_conflict(old_node_id: str, new_node_id: str) -> str:

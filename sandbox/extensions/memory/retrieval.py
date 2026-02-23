@@ -124,7 +124,19 @@ def classify_query_complexity(query: str) -> str:
     if len(words) < 10:
         if not any(
             kw in query.lower()
-            for kw in ("compare", "summarize", "everything", "all", "overview")
+            for kw in (
+                "compare",
+                "summarize",
+                "everything",
+                "all",
+                "overview",
+                "всё",
+                "все",
+                "расскажи",
+                "подробно",
+                "обзор",
+                "сравни",
+            )
         ):
             conjunctions = len(re.findall(r"\b(and|or|but)\b", query.lower()))
             if conjunctions < 2:
