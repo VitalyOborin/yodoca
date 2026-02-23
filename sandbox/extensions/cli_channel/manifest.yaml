@@ -10,7 +10,8 @@ description: |
 
 depends_on: []
 secrets: []
-config: {}
+config:
+  streaming_enabled: true
 enabled: true
 
 # Event Bus (ADR 004): publishes is documentation only

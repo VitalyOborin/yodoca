@@ -7,4 +7,7 @@ depends_on:
   - kv
 config:
   polling_timeout: 30        # long-polling timeout in seconds
+  streaming_enabled: true
+  stream_edit_interval_ms: 500
+  stream_min_chunk_chars: 20
 enabled: true

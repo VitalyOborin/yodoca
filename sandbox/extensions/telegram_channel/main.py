@@ -1,6 +1,8 @@
 """Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider."""
 
 import asyncio
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot, Dispatcher
@@ -11,6 +13,15 @@ from aiogram.utils.token import TokenValidationError, validate_token
 
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
+
+
+@dataclass
+class StreamState:
+    """Active stream state for a Telegram user."""
+
+    message_id: int
+    buffer: str = ""
+    last_edit_at: float = 0.0
 
 
 class TelegramChannelExtension:
@@ -28,6 +39,10 @@ class TelegramChannelExtension:
         self._token: str | None = None
         self._chat_id: str | None = None
         self._polling_timeout: int = 30
+        self._streaming_enabled = True
+        self._stream_edit_interval_ms = 500
+        self._stream_min_chunk_chars = 20
+        self._streams: dict[str, StreamState] = {}
 
     def get_setup_schema(self) -> list[dict]:
         """SetupProvider: schema for interactive configuration."""
@@ -93,12 +108,22 @@ class TelegramChannelExtension:
             context.logger.info(
                 "Telegram channel not configured. Use SetupProvider (get_setup_schema, apply_config, on_setup_complete) or set KV keys 'telegram_channel.token' and 'telegram_channel.chat_id'."
             )
+            self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
+            self._stream_edit_interval_ms = int(
+                context.get_config("stream_edit_interval_ms", 500)
+            )
+            self._stream_min_chunk_chars = int(context.get_config("stream_min_chunk_chars", 20))
+            self._polling_timeout = int(context.get_config("polling_timeout", 30))
             self._token = None
             self._chat_id = None
             self._bot = None
             self._dp = None
-            self._polling_timeout = int(context.get_config("polling_timeout", 30))
             return
+
+        self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
+        self._stream_edit_interval_ms = int(context.get_config("stream_edit_interval_ms", 500))
+        self._stream_min_chunk_chars = int(context.get_config("stream_min_chunk_chars", 20))
+        self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
         try:
             validate_token(token)
@@ -107,7 +132,6 @@ class TelegramChannelExtension:
 
         self._token = token
         self._chat_id = chat_id
-        self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
         self._bot = Bot(
             token=self._token,
@@ -174,6 +198,72 @@ class TelegramChannelExtension:
                     await self._bot.session.close()
                 except Exception:
                     pass
+
+    async def on_stream_start(self, user_id: str) -> None:
+        if not self._streaming_enabled or not self._bot:
+            return
+        try:
+            message = await self._bot.send_message(chat_id=self._chat_id, text="...")
+            self._streams[user_id] = StreamState(message_id=message.message_id, last_edit_at=0.0)
+        except Exception as e:
+            if self._ctx:
+                self._ctx.logger.exception(
+                    "Failed to start stream for %s: %s", user_id, e
+                )
+
+    async def on_stream_chunk(self, user_id: str, chunk: str) -> None:
+        if not self._streaming_enabled or not self._bot:
+            return
+        state = self._streams.get(user_id)
+        if not state:
+            return
+        state.buffer += chunk
+        if len(state.buffer) < self._stream_min_chunk_chars:
+            return
+        now = time.monotonic() * 1000
+        if now - state.last_edit_at < self._stream_edit_interval_ms:
+            return
+        try:
+            await self._bot.edit_message_text(
+                chat_id=self._chat_id,
+                message_id=state.message_id,
+                text=state.buffer,
+            )
+            state.last_edit_at = now
+        except Exception:
+            # Swallow transient Telegram errors; next chunk will try again.
+            pass
+
+    async def on_stream_status(self, user_id: str, status: str) -> None:
+        if not self._streaming_enabled or not self._bot:
+            return
+        if str(user_id) != str(self._chat_id):
+            return
+        try:
+            await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
+        except Exception:
+            return
+
+    async def on_stream_end(self, user_id: str, full_text: str) -> None:
+        if not self._bot:
+            return
+        if not self._streaming_enabled:
+            await self.send_to_user(user_id, full_text)
+            return
+        state = self._streams.pop(user_id, None)
+        if not state:
+            return
+        try:
+            await self._bot.edit_message_text(
+                chat_id=self._chat_id,
+                message_id=state.message_id,
+                text=full_text,
+            )
+        except Exception as e:
+            if self._ctx:
+                self._ctx.logger.exception(
+                    "Failed to finalize stream for %s: %s", user_id, e
+                )
 
     async def send_to_user(self, user_id: str, message: str) -> None:
         """ChannelProvider: deliver agent response to user."""

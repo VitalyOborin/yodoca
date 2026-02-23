@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from core.extensions.contract import ChannelProvider
+from core.extensions.contract import ChannelProvider, StreamingChannelProvider
 from core.events.topics import SystemTopics
 
 if TYPE_CHECKING:
@@ -143,6 +143,75 @@ class MessageRouter:
                 logger.exception("Agent invocation failed: %s", e)
                 return f"(Error: {e})"
 
+    async def invoke_agent_streamed(
+        self,
+        prompt: str,
+        on_chunk: Callable[[str], Awaitable[None]],
+        on_tool_call: Callable[[str], Awaitable[None]] | None = None,
+        agent_id: str | None = None,
+    ) -> str:
+        """Run agent with streaming callbacks; return final response.
+
+        Lock is held for the entire stream to keep in-order responses across users.
+        """
+        if not self._agent:
+            return "(No agent configured.)"
+        if self._invoke_middleware:
+            prompt = await self._invoke_middleware(prompt.strip(), agent_id)
+
+        response_delta_type = None
+        try:
+            from openai.types.responses import ResponseTextDeltaEvent
+
+            response_delta_type = ResponseTextDeltaEvent
+        except Exception:
+            response_delta_type = None
+
+        full_text = ""
+        async with self._lock:
+            try:
+                from agents import Runner
+
+                result = Runner.run_streamed(
+                    self._agent,
+                    prompt,
+                    session=self._session,
+                )
+                async for event in result.stream_events():
+                    if event.type == "raw_response_event":
+                        event_data = event.data
+                        delta: str | None = None
+                        if response_delta_type is not None and isinstance(
+                            event_data, response_delta_type
+                        ):
+                            delta = event_data.delta
+                        elif hasattr(event_data, "delta"):
+                            delta = event_data.delta
+                        if delta is not None:
+                            full_text += delta
+                            await on_chunk(delta)
+                    elif (
+                        event.type == "run_item_stream_event"
+                        and getattr(getattr(event, "item", None), "type", None)
+                        == "tool_call_item"
+                    ):
+                        event_item = getattr(event, "item", None)
+                        raw_item = getattr(event_item, "raw_item", None)
+                        tool_name = getattr(raw_item, "name", "tool")
+                        if on_tool_call:
+                            await on_tool_call(str(tool_name))
+                return result.final_output or full_text
+            except Exception as e:
+                logger.exception("Agent streaming invocation failed: %s", e)
+                if full_text:
+                    error_chunk = f"\n(Error: {e})"
+                    try:
+                        await on_chunk(error_chunk)
+                    except Exception:
+                        logger.exception("Error callback failed while reporting stream error")
+                    return full_text + error_chunk
+                return f"(Error: {e})"
+
     async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
         """Apply ContextProvider middleware to prompt without invoking agent."""
         if self._invoke_middleware:
@@ -165,7 +234,19 @@ class MessageRouter:
             "user_message",
             {"text": text, "user_id": user_id, "channel": channel, "session_id": self._session_id},
         )
-        response = await self.invoke_agent(text)
+        if isinstance(channel, StreamingChannelProvider):
+            await channel.on_stream_start(user_id)
+            response = await self.invoke_agent_streamed(
+                text,
+                on_chunk=lambda chunk: channel.on_stream_chunk(user_id, chunk),
+                on_tool_call=lambda name: channel.on_stream_status(
+                    user_id, f"Using: {name}"
+                ),
+            )
+            await channel.on_stream_end(user_id, response)
+        else:
+            response = await self.invoke_agent(text)
+            await channel.send_to_user(user_id, response)
         await self._emit(
             "agent_response",
             {
@@ -176,7 +257,6 @@ class MessageRouter:
                 "agent_id": self._agent_id,
             },
         )
-        await channel.send_to_user(user_id, response)
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         """Send proactive notification to user. Channel handles all addressing internally."""

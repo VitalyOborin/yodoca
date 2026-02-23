@@ -1,11 +1,13 @@
 """Tests for MessageRouter: channels, invoke_agent, notify_user, subscribe."""
 
 import asyncio
+from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.extensions.contract import ChannelProvider
+from core.extensions.contract import ChannelProvider, StreamingChannelProvider
 from core.extensions.router import MessageRouter
 
 
@@ -21,6 +23,41 @@ class MockChannel(ChannelProvider):
 
     async def send_message(self, message: str) -> None:
         self.proactive_sent.append(message)
+
+
+@dataclass
+class _FakeResponseTextDeltaEvent:
+    delta: str
+
+
+@dataclass
+class _FakeStreamEvent:
+    type: str
+    data: object | None = None
+    item: object | None = None
+
+
+class MockStreamingChannel(MockChannel, StreamingChannelProvider):
+    """StreamingChannelProvider collecting stream callbacks."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_started: list[str] = []
+        self.stream_chunks: list[tuple[str, str]] = []
+        self.stream_status: list[tuple[str, str]] = []
+        self.stream_ended: list[tuple[str, str]] = []
+
+    async def on_stream_start(self, user_id: str) -> None:
+        self.stream_started.append(user_id)
+
+    async def on_stream_chunk(self, user_id: str, chunk: str) -> None:
+        self.stream_chunks.append((user_id, chunk))
+
+    async def on_stream_status(self, user_id: str, status: str) -> None:
+        self.stream_status.append((user_id, status))
+
+    async def on_stream_end(self, user_id: str, full_text: str) -> None:
+        self.stream_ended.append((user_id, full_text))
 
 
 class TestMessageRouterRegisterAndNotify:
@@ -133,3 +170,134 @@ class TestSubscribeAndEmit:
         # Next _emit for "ev" should not call handler (we can't easily assert
         # without calling _emit; at least we check no exception)
         router._subscribers.get("ev", [])
+
+
+class TestStreamingInvocation:
+    """invoke_agent_streamed and streaming channel handling."""
+
+    @pytest.mark.asyncio
+    async def test_handle_user_message_streaming_channel(self) -> None:
+        router = MessageRouter()
+        ch = MockStreamingChannel()
+        router.register_channel("cli", ch)
+        router.set_agent(MagicMock())
+        tool_call = _FakeStreamEvent(
+            type="run_item_stream_event",
+            item=SimpleNamespace(type="tool_call_item", raw_item=SimpleNamespace(name="calculator")),
+        )
+
+        async def stream_events() -> None:
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("hi "))
+            yield tool_call
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("world"))
+
+        def fake_streamed(*_args, **_kwargs) -> SimpleNamespace:
+            return SimpleNamespace(
+                stream_events=stream_events,
+                final_output="hi world",
+            )
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
+            await router.handle_user_message("hello", "user1", ch)
+
+        assert ch.stream_started == ["user1"]
+        assert ch.stream_chunks == [("user1", "hi "), ("user1", "world")]
+        assert ch.stream_status == [("user1", "Using: calculator")]
+        assert ch.stream_ended == [("user1", "hi world")]
+        assert ch.stream_chunks and ch.sent == []
+
+    @pytest.mark.asyncio
+    async def test_handle_user_message_non_streaming_unchanged(self) -> None:
+        router = MessageRouter()
+        ch = MockChannel()
+        router.set_agent(MagicMock())
+        with patch("agents.Runner") as mock_runner:
+            result = MagicMock()
+            result.final_output = "reply"
+            mock_runner.run = AsyncMock(return_value=result)
+            await router.handle_user_message("hello", "user2", ch)
+        assert ch.sent == [("user2", "reply")]
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_streamed_error_handling(self) -> None:
+        router = MessageRouter()
+        router.set_agent(MagicMock())
+        chunks: list[str] = []
+
+        async def on_chunk(chunk: str) -> None:
+            chunks.append(chunk)
+
+        async def stream_events() -> None:
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("partial"))
+            raise RuntimeError("stream broken")
+
+        def fake_streamed(*_args, **_kwargs) -> SimpleNamespace:
+            return SimpleNamespace(
+                stream_events=stream_events,
+                final_output=None,
+            )
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
+            result = await router.invoke_agent_streamed("ask", on_chunk=on_chunk)
+
+        assert result.startswith("partial")
+        assert "(Error: stream broken)" in result
+        assert chunks == ["partial", "\n(Error: stream broken)"]
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_streamed_lock_held(self) -> None:
+        router = MessageRouter()
+        router.set_agent(MagicMock())
+        callback_log: list[str] = []
+
+        async def on_chunk_left(chunk: str) -> None:
+            callback_log.append(f"left:{chunk}")
+            await asyncio.sleep(0)
+
+        async def on_chunk_right(chunk: str) -> None:
+            callback_log.append(f"right:{chunk}")
+            await asyncio.sleep(0)
+
+        async def stream_events_left() -> None:
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("a"))
+            await asyncio.sleep(0.05)
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("b"))
+
+        async def stream_events_right() -> None:
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("1"))
+            await asyncio.sleep(0.05)
+            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("2"))
+
+        calls = 0
+
+        def fake_streamed(agent, prompt, session=None) -> SimpleNamespace:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return SimpleNamespace(
+                    stream_events=stream_events_left, final_output="ab", session=session
+                )
+            return SimpleNamespace(
+                stream_events=stream_events_right, final_output="12", session=session
+            )
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
+            task1 = asyncio.create_task(
+                router.invoke_agent_streamed("first", on_chunk=lambda chunk: on_chunk_left(chunk))
+            )
+            await asyncio.sleep(0.01)
+            task2 = asyncio.create_task(
+                router.invoke_agent_streamed("second", on_chunk=lambda chunk: on_chunk_right(chunk))
+            )
+            results = await asyncio.gather(task1, task2)
+
+        assert results == ["ab", "12"]
+        assert callback_log == [
+            "left:a",
+            "left:b",
+            "right:1",
+            "right:2",
+        ]

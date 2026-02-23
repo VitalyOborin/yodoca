@@ -16,9 +16,32 @@ class CliChannelExtension:
     def __init__(self) -> None:
         self.context: "ExtensionContext | None" = None
         self._input_task: asyncio.Task[Any] | None = None
+        self._streaming_enabled = True
+        self._stream_buffer = ""
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self.context = context
+        self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
+
+    async def on_stream_start(self, _user_id: str) -> None:
+        self._stream_buffer = ""
+
+    async def on_stream_chunk(self, _user_id: str, chunk: str) -> None:
+        if self._streaming_enabled:
+            print(chunk, end="", flush=True)
+            return
+        self._stream_buffer += chunk
+
+    async def on_stream_status(self, _user_id: str, status: str) -> None:
+        if self._streaming_enabled:
+            print(f"\n  [{status}]", flush=True)
+
+    async def on_stream_end(self, user_id: str, full_text: str) -> None:
+        if not self._streaming_enabled:
+            await self.send_to_user(user_id, self._stream_buffer or full_text)
+            return
+        print()
+        print()
 
     async def start(self) -> None:
         self._input_task = asyncio.create_task(self._input_loop(), name="cli_input_loop")

@@ -70,6 +70,19 @@ class ExtensionContext:
         """Ask the agent to process a prompt and return a response."""
         return await self._router.invoke_agent(prompt)
 
+    async def invoke_agent_streamed(
+        self,
+        prompt: str,
+        on_chunk: Callable[[str], Awaitable[None]],
+        on_tool_call: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        """Ask the agent to process a prompt with streaming callbacks."""
+        return await self._router.invoke_agent_streamed(
+            prompt,
+            on_chunk=on_chunk,
+            on_tool_call=on_tool_call,
+        )
+
     async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
         """Apply full ContextProvider chain (memory, etc.) without running the agent."""
         return await self._router.enrich_prompt(prompt, agent_id)

@@ -56,6 +56,19 @@ class ServiceProvider(Protocol):
 
 
 @runtime_checkable
+class StreamingChannelProvider(Protocol):
+    """Channel that supports incremental response delivery."""
+
+    async def on_stream_start(self, user_id: str) -> None: ...
+
+    async def on_stream_chunk(self, user_id: str, chunk: str) -> None: ...
+
+    async def on_stream_status(self, user_id: str, status: str) -> None: ...
+
+    async def on_stream_end(self, user_id: str, full_text: str) -> None: ...
+
+
+@runtime_checkable
 class SchedulerProvider(Protocol):
     """Periodic tasks by schedules from manifest.yaml (schedules section).
     Loader reads schedules from manifest and calls execute_task(name) per cron trigger."""
