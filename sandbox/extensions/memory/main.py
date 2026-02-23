@@ -158,6 +158,11 @@ class MemoryExtension:
             decay_threshold=context.get_config("decay_threshold", 0.05),
         )
 
+        prev_session = await self._storage.get_latest_session_id()
+        if prev_session:
+            self._current_session_id = prev_session
+            logger.info("Resumed previous session: %s", prev_session)
+
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(

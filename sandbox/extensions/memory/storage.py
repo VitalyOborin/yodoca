@@ -666,6 +666,16 @@ class MemoryStorage:
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
 
+    async def get_latest_session_id(self) -> str | None:
+        """Return the most recent session_id (by first_seen_at). Used to resume after restart."""
+        if self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT session_id FROM sessions_consolidations ORDER BY first_seen_at DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
     async def insert_entity(self, entity: dict[str, Any]) -> str:
         """Insert entity. Awaitable. Returns entity_id."""
         entity_id = entity.get("id") or str(uuid.uuid4())

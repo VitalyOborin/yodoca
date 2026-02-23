@@ -57,7 +57,7 @@ class MemoryAgent:
             await Runner.run(
                 self._agent,
                 task,
-                max_turns=10,
+                max_turns=25,
             )
             logger.info("Consolidation completed: session=%s", session_id)
             return ConsolidationResult(
