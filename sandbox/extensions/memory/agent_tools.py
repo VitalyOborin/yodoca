@@ -1,11 +1,14 @@
 """Write-path agent tools. Internal to MemoryAgent, not exposed to Orchestrator."""
 
+import logging
 import time
 import uuid
 from typing import Any, Callable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class SaveBatchResult(BaseModel):
@@ -75,7 +78,9 @@ def build_write_path_tools(
     @function_tool
     async def is_session_consolidated(session_id: str) -> bool:
         """Check if session was already consolidated. Idempotency guard."""
-        return await storage.is_session_consolidated(session_id)
+        result = await storage.is_session_consolidated(session_id)
+        logger.debug("is_session_consolidated(%s) = %s", session_id, result)
+        return result
 
     @function_tool
     async def get_session_episodes(
@@ -84,9 +89,11 @@ def build_write_path_tools(
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Fetch episodic nodes for a session. Paginated, ordered by event_time."""
-        return await storage.get_session_episodes(
+        episodes = await storage.get_session_episodes(
             session_id, limit=limit, offset=offset
         )
+        logger.debug("get_session_episodes(%s): returned %d episodes", session_id, len(episodes))
+        return episodes
 
     @function_tool
     async def save_nodes_batch(nodes: list[NodeInput]) -> SaveBatchResult:
@@ -118,6 +125,7 @@ def build_write_path_tools(
             return SaveBatchResult(node_ids=[], count=0)
         node_dicts = [it[0] for it in items]
         source_ids_per_node = [it[1] for it in items]
+        logger.info("save_nodes_batch: saving %d nodes", len(node_dicts))
         node_ids = await storage.insert_nodes_batch(node_dicts)
         for nid, ep_ids in zip(node_ids, source_ids_per_node):
             for ep_id in ep_ids:
@@ -134,6 +142,7 @@ def build_write_path_tools(
             for nid, emb in zip(node_ids, embeddings):
                 if emb:
                     await storage.save_embedding(nid, emb)
+        logger.info("save_nodes_batch: saved %d nodes with embeddings", len(node_ids))
         return SaveBatchResult(node_ids=node_ids, count=len(node_ids))
 
     @function_tool
@@ -185,6 +194,7 @@ def build_write_path_tools(
                     await storage.link_node_entity(node_id, entity_id)
                     created += 1
                     linked += 1
+        logger.info("extract_and_link_entities: created=%d linked=%d", created, linked)
         return EntityResult(entities_created=created, entities_linked=linked)
 
     @function_tool
@@ -199,6 +209,7 @@ def build_write_path_tools(
             limit=5,
             node_types=["semantic", "procedural", "opinion"],
         )
+        logger.debug("detect_conflicts: %d candidates for %r", len(results), fact[:60])
         return [
             {"id": r["id"], "type": r["type"], "content": r["content"], "confidence": r.get("confidence")}
             for r in results
@@ -220,12 +231,14 @@ def build_write_path_tools(
             "valid_from": now,
             "created_at": now,
         })
+        logger.info("resolve_conflict: %s supersedes %s", new_node_id[:8], old_node_id[:8])
         return "conflict resolved"
 
     @function_tool
     async def mark_session_consolidated(session_id: str) -> str:
         """Mark session as consolidated. Call only after all extraction is done."""
         await storage.mark_session_consolidated(session_id)
+        logger.info("mark_session_consolidated: %s", session_id)
         return f"session {session_id} marked consolidated"
 
     @function_tool
@@ -246,7 +259,9 @@ def build_write_path_tools(
                 "valid_from": now,
                 "created_at": now,
             })
-        return f"saved {len([x for x in edges if x.source_id and x.target_id])} causal edges"
+        count = len([x for x in edges if x.source_id and x.target_id])
+        logger.info("save_causal_edges: %d edges saved", count)
+        return f"saved {count} causal edges"
 
     @function_tool
     async def update_entity_summary(entity_id: str, summary: str) -> str:
@@ -261,6 +276,7 @@ def build_write_path_tools(
             emb = await embed_fn(summary.strip())
             if emb:
                 await storage.save_entity_embedding(entity_id, emb)
+        logger.info("update_entity_summary: entity=%s", entity_id[:8])
         return f"entity {entity_id} summary updated"
 
     return [

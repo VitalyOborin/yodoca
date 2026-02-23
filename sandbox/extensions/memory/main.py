@@ -71,11 +71,17 @@ class MemoryExtension:
             graph_depth=params.get("graph_depth"),
         )
         if not results:
+            logger.debug("get_context: no results for %r (complexity=%s)", prompt[:80], complexity)
             return None
-        return await self._retrieval.assemble_context(
+        context = await self._retrieval.assemble_context(
             results,
             token_budget=params["token_budget"],
         )
+        logger.debug(
+            "get_context: %d results, %d chars (complexity=%s, agent=%s)",
+            len(results), len(context or ""), complexity, agent_id,
+        )
+        return context
 
     def get_tools(self) -> list:
         if not self._retrieval or not self._storage:
@@ -145,6 +151,7 @@ class MemoryExtension:
                     tools=write_tools,
                     extension_dir=_ext_dir,
                 )
+                logger.info("Write-path agent initialized (model=%s)", model)
             except Exception as e:
                 logger.warning("Write-path agent unavailable: %s", e)
         self._decay_service = DecayService(
@@ -180,6 +187,7 @@ class MemoryExtension:
         if task_name == "run_nightly_maintenance":
             if not self._storage:
                 return None
+            logger.info("Nightly maintenance started")
             unconsolidated = await self._storage.get_unconsolidated_sessions()
             for sid in unconsolidated:
                 await self._consolidate_session(sid)
@@ -195,13 +203,13 @@ class MemoryExtension:
             enrichment_count = await self._enrich_entities()
             causal_count = await self._infer_causal_edges()
 
-            return {
-                "text": (
-                    f"Nightly: consolidated {n_consolidated}, "
-                    f"decayed {decay_stats['decayed']} pruned {decay_stats['pruned']}, "
-                    f"enriched {enrichment_count}, causal_pairs_analyzed {causal_count}"
-                ),
-            }
+            summary = (
+                f"Nightly: consolidated {n_consolidated}, "
+                f"decayed {decay_stats['decayed']} pruned {decay_stats['pruned']}, "
+                f"enriched {enrichment_count}, causal_pairs_analyzed {causal_count}"
+            )
+            logger.info("Nightly maintenance finished: %s", summary)
+            return {"text": summary}
         return None
 
     async def _enrich_entities(self) -> int:
@@ -249,9 +257,11 @@ class MemoryExtension:
                 prev_sid = self._current_session_id
                 if prev_sid not in self._consolidation_pending:
                     self._consolidation_pending.add(prev_sid)
+                    logger.info("Session switch: scheduling consolidation for %s", prev_sid)
                     asyncio.create_task(self._consolidate_session(prev_sid))
             self._current_session_id = session_id
             self._storage.ensure_session(session_id)
+            logger.debug("Active session: %s", session_id)
 
         if not text:
             return
@@ -279,6 +289,7 @@ class MemoryExtension:
                 "valid_from": now,
                 "created_at": now,
             })
+        logger.debug("Episode saved: node=%s session=%s len=%d", node_id[:8], session_id, len(text))
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
@@ -286,9 +297,12 @@ class MemoryExtension:
         """Generate embedding for episodic node and save to vec_nodes."""
         if not self._embed_fn or not self._storage:
             return
-        embedding = await self._embed_fn(content)
-        if embedding:
-            await self._storage.save_embedding(node_id, embedding)
+        try:
+            embedding = await self._embed_fn(content)
+            if embedding:
+                await self._storage.save_embedding(node_id, embedding)
+        except Exception:
+            logger.exception("Slow-path embedding failed for node %s", node_id[:8])
 
     async def _on_agent_response(self, data: dict) -> None:
         """Hot path: save agent episode, temporal edge."""
@@ -323,6 +337,7 @@ class MemoryExtension:
                 "valid_from": now,
                 "created_at": now,
             })
+        logger.debug("Agent episode saved: node=%s agent=%s session=%s len=%d", node_id[:8], agent_id, session_id, len(text))
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
@@ -332,8 +347,10 @@ class MemoryExtension:
         session_id = payload.get("session_id")
         if session_id:
             if session_id in self._consolidation_pending:
+                logger.debug("session.completed: consolidation already pending for %s", session_id)
                 return
             self._consolidation_pending.add(session_id)
+            logger.info("session.completed: scheduling consolidation for %s", session_id)
             asyncio.create_task(self._consolidate_session(session_id))
 
     async def _consolidate_session(self, session_id: str) -> None:

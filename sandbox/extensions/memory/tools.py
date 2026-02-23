@@ -1,5 +1,6 @@
 """Orchestrator tools for Memory v2. Phase 2: search_memory, remember_fact, correct_fact, confirm_fact."""
 
+import logging
 import time
 import uuid
 from typing import Any, Callable
@@ -8,6 +9,8 @@ from agents import function_tool
 from pydantic import BaseModel, Field
 
 from retrieval import parse_time_expression, _resolve_entity
+
+logger = logging.getLogger(__name__)
 
 
 class SearchResult(BaseModel):
@@ -79,6 +82,7 @@ def build_tools(
             event_after=event_after,
             event_before=event_before,
         )
+        logger.info("search_memory: query=%r types=%s results=%d", query[:60], node_types, len(results))
         return SearchResult(results=results, count=len(results))
 
     @function_tool
@@ -104,6 +108,7 @@ def build_tools(
             embedding = await embed_fn(fact.strip())
             if embedding:
                 await storage.save_embedding(node_id, embedding)
+        logger.info("remember_fact: node=%s len=%d", node_id[:8], len(fact.strip()))
         return RememberResult(node_id=node_id, status="saved")
 
     @function_tool
@@ -160,6 +165,7 @@ def build_tools(
             embedding = await embed_fn(new_fact.strip())
             if embedding:
                 await storage.save_embedding(new_node_id, embedding)
+        logger.info("correct_fact: old=%s new=%s", old_node_id[:8], new_node_id[:8])
         return CorrectResult(
             old_node_id=old_node_id,
             new_node_id=new_node_id,
@@ -176,6 +182,7 @@ def build_tools(
             fact_id,
             {"confidence": 1.0, "decay_rate": 0.0},
         )
+        logger.info("confirm_fact: %s", fact_id[:8])
         return ConfirmResult(node_id=fact_id, status="confirmed")
 
     @function_tool

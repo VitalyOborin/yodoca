@@ -1,10 +1,13 @@
 """MemoryRetrieval: intent classification, FTS5 search, context assembly. Memory v2."""
 
+import logging
 import math
 import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 def cosine_sim(a: list[float], b: list[float]) -> float:
@@ -318,6 +321,11 @@ class MemoryRetrieval:
         if results:
             node_ids = [r["id"] for r in results]
             await self._storage.record_access_for_nodes(node_ids)
+        logger.debug(
+            "search: query=%r intent=%s fts=%d vec=%d graph=%d merged=%d",
+            query[:60], intent, len(fts_results), len(vec_results),
+            len(graph_results), len(results),
+        )
         return results
 
     async def assemble_context(

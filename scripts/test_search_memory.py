@@ -1,4 +1,10 @@
-"""Test script: invoke search_memory to verify semantic search works."""
+"""Test script: invoke Memory v2 hybrid search (FTS5 + vector + graph RRF).
+
+Usage:
+    cd assistant4
+    python scripts/test_search_memory.py
+    python scripts/test_search_memory.py "custom query here"
+"""
 
 import asyncio
 import os
@@ -8,19 +14,26 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-# Fix Windows console Unicode
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from dotenv import load_dotenv
+
 load_dotenv(_PROJECT_ROOT / ".env")
+
+DEFAULT_QUERIES = [
+    "project or task",
+    "work preferences",
+    "что ты знаешь обо мне",
+    "почему мы выбрали такую архитектуру",
+]
 
 
 async def main() -> None:
-    from core.settings import load_settings
-    from core.llm import ModelRouter
-    from core.extensions import Loader, MessageRouter
     from core.events import EventBus
+    from core.extensions import Loader, MessageRouter
+    from core.llm import ModelRouter
+    from core.settings import load_settings
 
     settings = load_settings()
     model_router = ModelRouter(settings=settings, secrets_getter=os.environ.get)
@@ -41,33 +54,53 @@ async def main() -> None:
     await loader.initialize_all(router)
     loader.detect_and_wire_all(router)
 
-    # Get memory extension and call hybrid_search directly (same logic as search_memory tool)
     mem_ext = loader._extensions.get("memory")
-    if not mem_ext or not mem_ext._repo:
-        print("Memory extension not loaded")
+    if not mem_ext or not mem_ext._retrieval:
+        print("ERROR: Memory extension not loaded or retrieval not initialized.")
+        await loader.shutdown()
         return
 
-    repo = mem_ext._repo
+    retrieval = mem_ext._retrieval
     embed_fn = mem_ext._embed_fn
 
-    # Test queries: semantic (concept-based) and lexical (exact words)
-    queries = [
-        "project or task",
-        "work preferences",
-        "user likes or dislikes",
-        "meeting or schedule",
-    ]
-    print("=== Testing search_memory / hybrid_search (FTS5 + vector + entity) ===\n")
+    queries = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_QUERIES
+
+    print("=== Memory v2: Hybrid Search (FTS5 + vector + graph RRF) ===\n")
     for q in queries:
         query_embedding = await embed_fn(q) if embed_fn else None
-        results = await repo.hybrid_search(
-            q, query_embedding=query_embedding, kind="fact", limit=3
+        results = await retrieval.search(
+            q,
+            query_embedding=query_embedding,
+            limit=5,
+            node_types=["episodic", "semantic", "procedural", "opinion"],
         )
         print(f'Query: "{q}" (embedding: {"yes" if query_embedding else "no"})')
+        if not results:
+            print("  (no results)\n")
+            continue
         for r in results:
-            preview = r["content"][:80] + "..." if len(r["content"]) > 80 else r["content"]
-            print(f"  [{r['kind']}] {r['id']}: {preview}")
-        print(f"  count={len(results)}\n")
+            preview = r["content"][:100] + "..." if len(r["content"]) > 100 else r["content"]
+            conf = r.get("confidence", "?")
+            print(f"  [{r['type']}] {r['id'][:8]}.. conf={conf}  {preview}")
+        print(f"  total: {len(results)}\n")
+
+    print("=== Context Assembly (as ContextProvider would return) ===\n")
+    test_query = queries[0]
+    query_embedding = await embed_fn(test_query) if embed_fn else None
+    results = await retrieval.search(
+        test_query,
+        query_embedding=query_embedding,
+        limit=10,
+    )
+    if results:
+        context = await retrieval.assemble_context(results, token_budget=2000)
+        print(f'Query: "{test_query}"\n')
+        print(context or "(empty context)")
+    else:
+        print(f'Query: "{test_query}" -> no results, no context to assemble')
+
+    print()
+    await loader.shutdown()
 
 
 if __name__ == "__main__":

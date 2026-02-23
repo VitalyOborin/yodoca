@@ -1,5 +1,6 @@
 """Memory write-path agent. Phase 3."""
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 from agents import Agent, Runner
 
 from core.extensions.instructions import resolve_instructions
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,17 +52,20 @@ class MemoryAgent:
     async def consolidate_session(self, session_id: str) -> ConsolidationResult:
         """Run consolidation for a session. Agent uses tools to extract, link, and mark done."""
         task = f"Consolidate session {session_id}. Follow the workflow: check idempotency, fetch episodes, extract facts/procedures/opinions, save nodes with derived_from edges, link entities, resolve conflicts if any, then mark session consolidated."
+        logger.info("Consolidation started: session=%s", session_id)
         try:
             await Runner.run(
                 self._agent,
                 task,
                 max_turns=10,
             )
+            logger.info("Consolidation completed: session=%s", session_id)
             return ConsolidationResult(
                 session_id=session_id,
                 status="completed",
             )
         except Exception:
+            logger.exception("Consolidation error: session=%s", session_id)
             return ConsolidationResult(
                 session_id=session_id,
                 status="error",
@@ -81,10 +87,13 @@ class MemoryAgent:
             f"based on these related facts:\n{context}\n\n"
             f"Call update_entity_summary with entity_id='{entity_id}' and your generated summary."
         )
+        logger.info("Enriching entity: %s (%s), %d contents", entity_name, entity_type, len(related_contents))
         try:
             await Runner.run(self._agent, task, max_turns=3)
+            logger.info("Entity enriched: %s", entity_name)
             return True
         except Exception:
+            logger.exception("Entity enrichment failed: %s", entity_name)
             return False
 
     async def infer_causal_edges(
@@ -104,10 +113,13 @@ class MemoryAgent:
             "call save_causal_edges with source_id=Episode A id, target_id=Episode B id.\n\n"
             + "\n".join(lines)
         )
+        logger.info("Causal inference started: %d pairs", len(episode_pairs))
         try:
             await Runner.run(self._causal_agent, task, max_turns=5)
+            logger.info("Causal inference completed: %d pairs analyzed", len(episode_pairs))
             return len(episode_pairs)
         except Exception:
+            logger.exception("Causal inference failed")
             return 0
 
 

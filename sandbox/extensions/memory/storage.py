@@ -111,6 +111,7 @@ class MemoryStorage:
 
     async def close(self) -> None:
         """Drain queue, stop writer, close connections."""
+        logger.info("MemoryStorage closing: %s", self._db_path)
         self._closed = True
         if self._writer_task is not None:
             await self._write_queue.put(None)
@@ -216,6 +217,7 @@ class MemoryStorage:
         )
         if future:
             await future
+        logger.debug("soft_delete_node: %s", node_id[:8])
 
     async def update_node_fields(self, node_id: str, fields: dict[str, Any]) -> None:
         """Partial update of node fields (confidence, decay_rate, etc.)."""
@@ -366,6 +368,7 @@ class MemoryStorage:
 
     async def insert_nodes_batch(self, nodes: list[dict[str, Any]]) -> list[str]:
         """Batch insert nodes. Each is awaitable. Returns list of node_ids."""
+        logger.debug("insert_nodes_batch: %d nodes", len(nodes))
         node_ids: list[str] = []
         futures: list[asyncio.Future[Any]] = []
         for node in nodes:
@@ -651,6 +654,7 @@ class MemoryStorage:
         )
         if future:
             await future
+        logger.debug("mark_session_consolidated: %s", session_id)
 
     async def get_unconsolidated_sessions(self) -> list[str]:
         """Return session_ids where consolidated_at IS NULL. For nightly maintenance."""
@@ -676,7 +680,7 @@ class MemoryStorage:
             entity_id,
             entity["canonical_name"],
             entity["type"],
-            json.dumps(entity.get("aliases") or []),
+            json.dumps(entity.get("aliases") or [], ensure_ascii=False),
             entity.get("summary"),
             entity.get("embedding"),
             entity.get("first_seen", now),
@@ -753,7 +757,7 @@ class MemoryStorage:
                 continue
             set_parts.append(f"{k} = ?")
             params_list.append(
-                json.dumps(v) if k == "aliases" and isinstance(v, list) else v
+                json.dumps(v, ensure_ascii=False) if k == "aliases" and isinstance(v, list) else v
             )
         if not set_parts:
             return
