@@ -303,6 +303,9 @@ class MemoryRetrieval:
             limit,
             graph_results=graph_results if graph_results else None,
         )
+        if results:
+            node_ids = [r["id"] for r in results]
+            await self._storage.record_access_for_nodes(node_ids)
         return results
 
     async def assemble_context(

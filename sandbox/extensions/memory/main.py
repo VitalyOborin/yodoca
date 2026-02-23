@@ -15,6 +15,7 @@ if str(_ext_dir) not in sys.path:
 
 from agent import create_memory_agent
 from agent_tools import build_write_path_tools
+from decay import DecayService
 from retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
@@ -36,6 +37,7 @@ class MemoryExtension:
         self._retrieval: MemoryRetrieval | None = None
         self._embed_fn: object | None = None
         self._write_agent: object | None = None
+        self._decay_service: DecayService | None = None
         self._ctx: object | None = None
         self._current_session_id: str | None = None
         self._token_budget: int = 2000
@@ -136,6 +138,9 @@ class MemoryExtension:
                 )
             except Exception as e:
                 logger.warning("Write-path agent unavailable: %s", e)
+        self._decay_service = DecayService(
+            decay_threshold=context.get_config("decay_threshold", 0.05),
+        )
 
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
@@ -156,20 +161,69 @@ class MemoryExtension:
             self._storage = None
             self._retrieval = None
         self._write_agent = None
+        self._decay_service = None
 
     def health_check(self) -> bool:
         return self._storage is not None
 
     async def execute_task(self, task_name: str) -> dict | None:
-        """SchedulerProvider. Nightly maintenance: consolidate pending sessions."""
+        """SchedulerProvider. Nightly maintenance: consolidate, decay, enrich, causal."""
         if task_name == "run_nightly_maintenance":
             if not self._storage:
                 return None
             unconsolidated = await self._storage.get_unconsolidated_sessions()
             for sid in unconsolidated:
                 await self._consolidate_session(sid)
-            return {"text": f"Nightly maintenance: consolidated {len(unconsolidated)} sessions"}
+            n_consolidated = len(unconsolidated)
+
+            decay_stats = {"decayed": 0, "pruned": 0}
+            if self._decay_service:
+                decay_stats = await self._decay_service.apply(self._storage)
+
+            enrichment_count = await self._enrich_entities()
+            causal_count = await self._infer_causal_edges()
+
+            return {
+                "text": (
+                    f"Nightly: consolidated {n_consolidated}, "
+                    f"decayed {decay_stats['decayed']} pruned {decay_stats['pruned']}, "
+                    f"enriched {enrichment_count}, causal {causal_count}"
+                ),
+            }
         return None
+
+    async def _enrich_entities(self) -> int:
+        """Enrich entities with sparse summaries. Returns count enriched."""
+        if not self._write_agent or not self._storage or not self._ctx:
+            return 0
+        min_mentions = self._ctx.get_config("entity_enrichment_min_mentions", 3)
+        entities = await self._storage.get_entities_needing_enrichment(
+            min_mentions=min_mentions
+        )
+        count = 0
+        for ent in entities[:5]:
+            nodes = await self._storage.entity_nodes_for_entity(
+                ent["id"], node_types=["semantic", "procedural", "opinion"], limit=10
+            )
+            contents = [n.get("content", "") for n in nodes if n.get("content")]
+            if contents and await self._write_agent.enrich_entity(
+                ent["id"],
+                ent["canonical_name"],
+                ent["type"],
+                contents,
+            ):
+                count += 1
+        return count
+
+    async def _infer_causal_edges(self) -> int:
+        """Infer causal edges between consecutive episodes. Returns count processed."""
+        if not self._write_agent or not self._storage or not self._ctx:
+            return 0
+        batch_size = self._ctx.get_config("causal_inference_batch_size", 50)
+        pairs = await self._storage.get_consecutive_episode_pairs(limit=batch_size)
+        if not pairs:
+            return 0
+        return await self._write_agent.infer_causal_edges(pairs)
 
     async def _on_user_message(self, data: dict) -> None:
         """Hot path: save user episode, temporal edge."""

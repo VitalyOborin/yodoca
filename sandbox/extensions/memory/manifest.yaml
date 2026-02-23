@@ -17,6 +17,8 @@ config:
   embedding_dimensions: 256
   decay_threshold: 0.05
   decay_rate_default: 0.1
+  entity_enrichment_min_mentions: 3
+  causal_inference_batch_size: 50
   consolidation_episodes_per_chunk: 30
   conflict_min_confidence: 0.8
   context_token_budget: 2000

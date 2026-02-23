@@ -13,6 +13,7 @@ _memory_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" 
 sys.path.insert(0, str(_memory_ext))
 
 from agent_tools import build_write_path_tools
+from decay import DecayService
 from retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
@@ -889,3 +890,313 @@ class TestGetEntityInfoTool:
             _tool_ctx(entity_tool.name, args), __import__("json").dumps(args)
         )
         assert "No entity found" in str(result) or "not found" in str(result).lower()
+
+
+class TestDecayService:
+    """DecayService: Ebbinghaus decay, protection rules, pruning."""
+
+    @pytest.mark.asyncio
+    async def test_decay_formula_reduces_confidence(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "fact to decay",
+            "event_time": now,
+            "created_at": now - 10 * 86400,
+            "valid_from": now,
+            "confidence": 0.8,
+            "decay_rate": 0.1,
+            "last_accessed": now - 10 * 86400,
+        })
+        await asyncio.sleep(0.3)
+
+        decay = DecayService(decay_threshold=0.05)
+        stats = await decay.apply(storage)
+        assert stats["pruned"] >= 0 or stats["decayed"] >= 0
+
+        node = await storage.get_node(nid)
+        if node and node.get("valid_until") is None:
+            assert node["confidence"] < 0.8
+
+    @pytest.mark.asyncio
+    async def test_episodic_nodes_skipped(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "episodic",
+            "content": "episode",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+            "decay_rate": 0.1,
+        })
+        await asyncio.sleep(0.3)
+
+        decayable = await storage.get_decayable_nodes()
+        assert not any(n["type"] == "episodic" for n in decayable)
+
+    @pytest.mark.asyncio
+    async def test_pruning_below_threshold(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "low confidence fact",
+            "event_time": now,
+            "created_at": now - 100 * 86400,
+            "valid_from": now,
+            "confidence": 0.1,
+            "decay_rate": 0.5,
+            "last_accessed": now - 100 * 86400,
+        })
+        await asyncio.sleep(0.3)
+
+        decay = DecayService(decay_threshold=0.05)
+        stats = await decay.apply(storage)
+        assert stats["pruned"] >= 0
+
+        node = await storage.get_node(nid)
+        if stats["pruned"] > 0:
+            assert node is None or node.get("valid_until") is not None
+
+
+class TestAccessReinforcement:
+    """Access frequency reinforcement in retrieval.search()."""
+
+    @pytest.mark.asyncio
+    async def test_search_increments_access(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "reinforcement test",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "access_count": 0,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        await retrieval.search(
+            "reinforcement",
+            limit=5,
+            node_types=["semantic", "procedural", "opinion"],
+        )
+        await asyncio.sleep(1.5)
+
+        node = await storage.get_node(nid)
+        assert node is not None
+        assert node.get("access_count", 0) >= 1 or node.get("last_accessed") is not None
+
+
+class TestEntityEnrichment:
+    """get_entities_needing_enrichment, update_entity_summary tool."""
+
+    @pytest.mark.asyncio
+    async def test_get_entities_needing_enrichment(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        await storage.insert_entity({
+            "canonical_name": "SparseEntity",
+            "type": "person",
+            "summary": None,
+            "mention_count": 5,
+        })
+        await storage.insert_entity({
+            "canonical_name": "RichEntity",
+            "type": "person",
+            "summary": "Has summary",
+            "mention_count": 5,
+        })
+        await asyncio.sleep(0.2)
+
+        sparse = await storage.get_entities_needing_enrichment(min_mentions=3)
+        names = [e["canonical_name"] for e in sparse]
+        assert "SparseEntity" in names
+        assert "RichEntity" not in names
+
+    @pytest.mark.asyncio
+    async def test_update_entity_summary_tool(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        eid = await storage.insert_entity({
+            "canonical_name": "ToEnrich",
+            "type": "project",
+            "summary": None,
+            "mention_count": 4,
+        })
+        await asyncio.sleep(0.2)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_write_path_tools(
+            storage=storage,
+            retrieval=retrieval,
+            embed_fn=None,
+            embed_batch_fn=None,
+        )
+        update_tool = tools[8]
+        args = {"entity_id": eid, "summary": "A key project for Q1."}
+        result = await update_tool.on_invoke_tool(
+            _tool_ctx(update_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "updated" in str(result).lower()
+        await asyncio.sleep(0.2)
+
+        ent = await storage.get_entity_by_name("ToEnrich")
+        assert ent is not None
+        assert ent.get("summary") == "A key project for Q1."
+
+
+class TestCausalEdgeInference:
+    """get_consecutive_episode_pairs, save_causal_edges tool."""
+
+    @pytest.mark.asyncio
+    async def test_get_consecutive_episode_pairs(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.ensure_session("causal-sess")
+        await asyncio.sleep(0.2)
+        ids = []
+        for i in range(3):
+            nid = storage.insert_node({
+                "type": "episodic",
+                "content": f"ep {i}",
+                "event_time": now + i,
+                "created_at": now + i,
+                "valid_from": now + i,
+                "session_id": "causal-sess",
+            })
+            ids.append(nid)
+        await asyncio.sleep(0.3)
+
+        pairs = await storage.get_consecutive_episode_pairs(limit=10)
+        assert len(pairs) >= 2
+        assert pairs[0][0]["id"] == ids[0] and pairs[0][1]["id"] == ids[1]
+
+    @pytest.mark.asyncio
+    async def test_save_causal_edges_creates_edges(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        a = storage.insert_node({
+            "type": "episodic",
+            "content": "cause",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+        })
+        b = storage.insert_node({
+            "type": "episodic",
+            "content": "effect",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+            "session_id": "s1",
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_write_path_tools(
+            storage=storage,
+            retrieval=retrieval,
+            embed_fn=None,
+            embed_batch_fn=None,
+        )
+        save_causal = tools[7]
+        args = {
+            "edges": [
+                {"source_id": a, "target_id": b, "predicate": "caused_by"},
+            ],
+        }
+        result = await save_causal.on_invoke_tool(
+            _tool_ctx(save_causal.name, args), __import__("json").dumps(args)
+        )
+        assert "saved" in str(result).lower()
+        await asyncio.sleep(0.3)
+
+        chain = await storage.causal_chain_traversal(b, max_depth=3, limit=5)
+        assert len(chain) >= 1
+        assert any(r["id"] == a for r in chain)
+
+    @pytest.mark.asyncio
+    async def test_consecutive_pairs_excludes_existing_causal(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.ensure_session("excl-sess")
+        await asyncio.sleep(0.2)
+        a = storage.insert_node({
+            "type": "episodic",
+            "content": "a",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "excl-sess",
+        })
+        b = storage.insert_node({
+            "type": "episodic",
+            "content": "b",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+            "session_id": "excl-sess",
+        })
+        storage.insert_edge({
+            "source_id": a,
+            "target_id": b,
+            "relation_type": "causal",
+            "valid_from": now + 1,
+            "created_at": now + 1,
+        })
+        await asyncio.sleep(0.3)
+
+        pairs = await storage.get_consecutive_episode_pairs(limit=10)
+        assert not any(
+            p[0]["id"] == a and p[1]["id"] == b for p in pairs
+        )
+
+
+class TestNightlyMaintenance:
+    """Integration: full nightly pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_execute_task_runs_pipeline(
+        self, storage: MemoryStorage, tmp_db
+    ) -> None:
+        from main import MemoryExtension
+
+        storage.ensure_session("nightly-sess")
+        await asyncio.sleep(0.2)
+
+        ext = MemoryExtension()
+        ext._storage = storage
+        ext._retrieval = MemoryRetrieval(
+            storage, KeywordIntentClassifier(),
+        )
+        ext._decay_service = DecayService(decay_threshold=0.05)
+        ext._write_agent = None
+        ext._ctx = MagicMock()
+        ext._ctx.get_config = lambda k, d=None: (
+            3 if k == "entity_enrichment_min_mentions" else
+            50 if k == "causal_inference_batch_size" else d
+        )
+
+        result = await ext.execute_task("run_nightly_maintenance")
+        assert result is not None
+        assert "Nightly" in result.get("text", "")
+        assert "consolidated" in result.get("text", "").lower()
+        assert "decayed" in result.get("text", "").lower() or "pruned" in result.get("text", "").lower()

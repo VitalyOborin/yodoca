@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -20,8 +21,9 @@ class WriteOp:
     """Single write operation for the writer queue."""
 
     sql: str
-    params: tuple
+    params: tuple | list[tuple]
     future: asyncio.Future[Any] | None = None  # None = fire-and-forget
+    batch: bool = False  # if True, params is list[tuple] for executemany
 
 
 def _escape_fts5_query(q: str) -> str:
@@ -92,7 +94,10 @@ class MemoryStorage:
             if op is None:
                 break
             try:
-                await self._write_conn.execute(op.sql, op.params)
+                if op.batch:
+                    await self._write_conn.executemany(op.sql, op.params)
+                else:
+                    await self._write_conn.execute(op.sql, op.params)
                 await self._write_conn.commit()
                 if op.future is not None and not op.future.done():
                     op.future.set_result(None)
@@ -124,6 +129,15 @@ class MemoryStorage:
         """Submit write to queue. If wait=True, returns Future to await."""
         future = asyncio.get_running_loop().create_future() if wait else None
         op = WriteOp(sql=sql, params=params, future=future)
+        self._write_queue.put_nowait(op)
+        return future
+
+    def _submit_batch_write(
+        self, sql: str, params_list: list[tuple], wait: bool = False
+    ) -> asyncio.Future[Any] | None:
+        """Submit batch write (executemany) to queue. If wait=True, returns Future to await."""
+        future = asyncio.get_running_loop().create_future() if wait else None
+        op = WriteOp(sql=sql, params=params_list, future=future, batch=True)
         self._write_queue.put_nowait(op)
         return future
 
@@ -215,6 +229,87 @@ class MemoryStorage:
         )
         if future:
             await future
+
+    async def get_decayable_nodes(self) -> list[dict[str, Any]]:
+        """Return nodes eligible for decay: decay_rate > 0, valid_until IS NULL, type != episodic."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, confidence, decay_rate, last_accessed, created_at, type
+            FROM nodes
+            WHERE decay_rate > 0 AND valid_until IS NULL AND type != 'episodic'
+            """
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "confidence": r[1],
+                "decay_rate": r[2],
+                "last_accessed": r[3],
+                "created_at": r[4],
+                "type": r[5],
+            }
+            for r in rows
+        ]
+
+    async def batch_update_confidence(
+        self, updates: list[tuple[str, float]]
+    ) -> None:
+        """Batch update confidence for nodes. updates: [(node_id, confidence), ...]."""
+        if not updates:
+            return
+        future = self._submit_batch_write(
+            "UPDATE nodes SET confidence = ? WHERE id = ?",
+            [(c, nid) for nid, c in updates],
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def soft_delete_nodes(self, node_ids: list[str]) -> None:
+        """Soft-delete nodes: set valid_until = now for given IDs."""
+        if not node_ids:
+            return
+        now = int(time.time())
+        params_list = [(now, nid) for nid in node_ids]
+        future = self._submit_batch_write(
+            "UPDATE nodes SET valid_until = ? WHERE id = ?", params_list, wait=True
+        )
+        if future:
+            await future
+
+    async def record_access_for_nodes(
+        self, node_ids: list[str], *, now: int | None = None
+    ) -> None:
+        """Record access: increment access_count, set last_accessed, apply confidence reinforcement.
+        Fire-and-forget writes. Call from retrieval after search results are returned."""
+        if not node_ids:
+            return
+        now = now or int(time.time())
+        if self._read_conn is None:
+            return
+        unique_ids = list(dict.fromkeys(node_ids))
+        placeholders = ",".join("?" * len(unique_ids))
+        cursor = await self._read_conn.execute(
+            f"SELECT id, access_count, confidence FROM nodes WHERE id IN ({placeholders})",
+            unique_ids,
+        )
+        rows = await cursor.fetchall()
+        updates: list[tuple[int, int, float, str]] = []
+        for r in rows:
+            nid, acc, conf = r[0], r[1] or 0, r[2] or 1.0
+            acc_new = acc + 1
+            delta = 0.05 * math.log(1 + acc_new / 20)
+            conf_new = min(1.0, conf + delta)
+            updates.append((acc_new, now, conf_new, nid))
+        if updates:
+            self._submit_batch_write(
+                "UPDATE nodes SET access_count = ?, last_accessed = ?, confidence = ? WHERE id = ?",
+                updates,
+                wait=False,
+            )
 
     def insert_edge(self, edge: dict[str, Any]) -> str:
         """Insert edge. Fire-and-forget. Returns edge_id."""
@@ -399,6 +494,24 @@ class MemoryStorage:
         if f2:
             await f2
 
+    async def save_entity_embedding(
+        self, entity_id: str, embedding: list[float]
+    ) -> None:
+        """Update entity embedding and vec_entities. Awaitable via write queue."""
+        blob = self._serialize_embedding(embedding)
+        f1 = self._submit_write(
+            "UPDATE entities SET embedding = ? WHERE id = ?", (blob, entity_id), wait=True
+        )
+        f2 = self._submit_write(
+            "INSERT OR REPLACE INTO vec_entities(entity_id, embedding) VALUES (?, ?)",
+            (entity_id, blob),
+            wait=True,
+        )
+        if f1:
+            await f1
+        if f2:
+            await f2
+
     async def vector_search(
         self,
         query_embedding: list[float],
@@ -453,7 +566,7 @@ class MemoryStorage:
         if self._read_conn is None:
             return None
         cursor = await self._read_conn.execute(
-            "SELECT id, type, content, event_time, created_at, confidence FROM nodes WHERE id = ? AND valid_until IS NULL",
+            "SELECT id, type, content, event_time, created_at, confidence, access_count, last_accessed FROM nodes WHERE id = ? AND valid_until IS NULL",
             (node_id,),
         )
         row = await cursor.fetchone()
@@ -466,6 +579,8 @@ class MemoryStorage:
             "event_time": row[3],
             "created_at": row[4],
             "confidence": row[5],
+            "access_count": row[6],
+            "last_accessed": row[7],
         }
 
     def ensure_session(self, session_id: str) -> None:
@@ -648,6 +763,82 @@ class MemoryStorage:
         )
         if future:
             await future
+
+    async def get_consecutive_episode_pairs(
+        self, limit: int = 50
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Pairs of temporally adjacent episodic nodes (cause, effect) without existing causal edge."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, type, content, event_time, session_id
+            FROM nodes
+            WHERE type = 'episodic' AND valid_until IS NULL AND session_id IS NOT NULL
+            ORDER BY session_id, event_time
+            """
+        )
+        rows = await cursor.fetchall()
+        by_session: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            rec = {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "session_id": r[4],
+            }
+            by_session.setdefault(r[4], []).append(rec)
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for episodes in by_session.values():
+            for i in range(len(episodes) - 1):
+                pairs.append((episodes[i], episodes[i + 1]))
+                if len(pairs) >= limit:
+                    break
+            if len(pairs) >= limit:
+                break
+        if not pairs:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT source_id, target_id FROM edges
+            WHERE relation_type = 'causal' AND valid_until IS NULL
+            """
+        )
+        existing = {(r[0], r[1]) for r in await cursor.fetchall()}
+        return [
+            (prev, curr)
+            for prev, curr in pairs
+            if (prev["id"], curr["id"]) not in existing
+        ][:limit]
+
+    async def get_entities_needing_enrichment(
+        self, min_mentions: int = 3
+    ) -> list[dict[str, Any]]:
+        """Entities with sparse summary and enough mentions for enrichment."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, canonical_name, type, aliases, summary, mention_count
+            FROM entities
+            WHERE (summary IS NULL OR summary = '') AND mention_count >= ?
+            ORDER BY mention_count DESC
+            """,
+            (min_mentions,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "canonical_name": r[1],
+                "type": r[2],
+                "aliases": json.loads(r[3]) if r[3] else [],
+                "summary": r[4],
+                "mention_count": r[5],
+            }
+            for r in rows
+        ]
 
     async def temporal_chain_traversal(
         self,

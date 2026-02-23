@@ -28,6 +28,8 @@ class MemoryAgent:
         model: Any,
         tools: list[Any],
         instructions: str,
+        *,
+        causal_instructions: str | None = None,
     ) -> None:
         self._agent = Agent(
             name="MemoryWritePathAgent",
@@ -35,6 +37,14 @@ class MemoryAgent:
             model=model,
             tools=tools,
         )
+        self._causal_agent: Agent | None = None
+        if causal_instructions:
+            self._causal_agent = Agent(
+                name="MemoryCausalAgent",
+                instructions=causal_instructions,
+                model=model,
+                tools=tools,
+            )
 
     async def consolidate_session(self, session_id: str) -> ConsolidationResult:
         """Run consolidation for a session. Agent uses tools to extract, link, and mark done."""
@@ -55,16 +65,77 @@ class MemoryAgent:
                 status="error",
             )
 
+    async def enrich_entity(
+        self,
+        entity_id: str,
+        entity_name: str,
+        entity_type: str,
+        related_contents: list[str],
+    ) -> bool:
+        """Generate and save entity summary from related node contents. Returns True if successful."""
+        if not related_contents:
+            return False
+        context = "\n".join(f"- {c[:300]}" for c in related_contents[:10])
+        task = (
+            f"Generate a concise 1-3 sentence summary for entity '{entity_name}' (type: {entity_type}) "
+            f"based on these related facts:\n{context}\n\n"
+            f"Call update_entity_summary with entity_id='{entity_id}' and your generated summary."
+        )
+        try:
+            await Runner.run(self._agent, task, max_turns=3)
+            return True
+        except Exception:
+            return False
+
+    async def infer_causal_edges(
+        self, episode_pairs: list[tuple[dict[str, Any], dict[str, Any]]]
+    ) -> int:
+        """Analyze episode pairs and create causal edges where appropriate. Returns count of edges created."""
+        if not self._causal_agent or not episode_pairs:
+            return 0
+        lines = []
+        for i, (prev, curr) in enumerate(episode_pairs[:20], 1):
+            lines.append(
+                f"Pair {i}: Episode A (id={prev['id']}): \"{prev.get('content', '')[:200]}\" "
+                f"-> Episode B (id={curr['id']}): \"{curr.get('content', '')[:200]}\""
+            )
+        task = (
+            "Analyze these consecutive episode pairs. For each pair where A clearly caused B, "
+            "call save_causal_edges with source_id=Episode A id, target_id=Episode B id.\n\n"
+            + "\n".join(lines)
+        )
+        try:
+            await Runner.run(self._causal_agent, task, max_turns=5)
+            return len(episode_pairs)
+        except Exception:
+            return 0
+
 
 def create_memory_agent(
     model: Any,
     tools: list[Any],
     extension_dir: Path,
 ) -> MemoryAgent:
-    """Create MemoryAgent with instructions from prompt.jinja2."""
-    instructions = resolve_instructions(
+    """Create MemoryAgent with consolidation and causal inference instructions."""
+    consolidation_instructions = resolve_instructions(
         instructions_file="prompt.jinja2",
         extension_dir=extension_dir,
-        template_vars={"sandbox_dir": str(extension_dir.parent)},
+        template_vars={
+            "sandbox_dir": str(extension_dir.parent),
+            "mode": "consolidation",
+        },
     )
-    return MemoryAgent(model=model, tools=tools, instructions=instructions)
+    causal_instructions = resolve_instructions(
+        instructions_file="prompt.jinja2",
+        extension_dir=extension_dir,
+        template_vars={
+            "sandbox_dir": str(extension_dir.parent),
+            "mode": "causal_inference",
+        },
+    )
+    return MemoryAgent(
+        model=model,
+        tools=tools,
+        instructions=consolidation_instructions,
+        causal_instructions=causal_instructions,
+    )

@@ -53,6 +53,17 @@ class EntityInput(BaseModel):
     )
 
 
+class CausalEdgeInput(BaseModel):
+    """Input for save_causal_edges. Cause-effect between episodes."""
+
+    source_id: str = Field(description="Cause episode node ID")
+    target_id: str = Field(description="Effect episode node ID")
+    predicate: str = Field(
+        default="caused_by",
+        description="Human-readable label, e.g. caused_by, led_to",
+    )
+
+
 def build_write_path_tools(
     storage: Any,
     retrieval: Any,
@@ -214,6 +225,41 @@ def build_write_path_tools(
         await storage.mark_session_consolidated(session_id)
         return f"session {session_id} marked consolidated"
 
+    @function_tool
+    async def save_causal_edges(edges: list[CausalEdgeInput]) -> str:
+        """Create causal edges between episode pairs. source_id=cause, target_id=effect. confidence=0.7."""
+        if not edges:
+            return "no edges to save"
+        now = int(time.time())
+        for e in edges:
+            if not e.source_id or not e.target_id:
+                continue
+            await storage.insert_edge_awaitable({
+                "source_id": e.source_id,
+                "target_id": e.target_id,
+                "relation_type": "causal",
+                "predicate": (e.predicate or "caused_by").strip() or "caused_by",
+                "confidence": 0.7,
+                "valid_from": now,
+                "created_at": now,
+            })
+        return f"saved {len([x for x in edges if x.source_id and x.target_id])} causal edges"
+
+    @function_tool
+    async def update_entity_summary(entity_id: str, summary: str) -> str:
+        """Update entity summary and re-embed for improved vector search. Used for entity enrichment."""
+        if not entity_id or not (summary or "").strip():
+            return "entity_id and summary required"
+        now = int(time.time())
+        await storage.update_entity(
+            entity_id, {"summary": summary.strip(), "last_updated": now}
+        )
+        if embed_fn:
+            emb = await embed_fn(summary.strip())
+            if emb:
+                await storage.save_entity_embedding(entity_id, emb)
+        return f"entity {entity_id} summary updated"
+
     return [
         is_session_consolidated,
         get_session_episodes,
@@ -222,4 +268,6 @@ def build_write_path_tools(
         detect_conflicts,
         resolve_conflict,
         mark_session_consolidated,
+        save_causal_edges,
+        update_entity_summary,
     ]
