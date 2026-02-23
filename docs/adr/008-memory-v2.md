@@ -760,7 +760,7 @@ The `search()` method internally computes the query embedding (for vector search
 
 **Heartbeat synergy:** The Heartbeat extension runs a Scout agent every 2 minutes with `ctx.enrich_prompt(prompt)`. With intent-aware retrieval, a Heartbeat prompt like "Are there pending tasks or follow-ups?" naturally retrieves recent temporal chains and entity-linked facts — identifying items that require attention without specialized Heartbeat-memory integration code.
 
-### 15. Session Completion and Consolidation Trigger
+### 15. Session Lifecycle and Consolidation Trigger
 
 #### Event Subscriptions
 
@@ -772,11 +772,59 @@ The `search()` method internally computes the query embedding (for vector search
 | `session.completed` | `context.subscribe_event("session.completed", handler)` | Trigger write-path agent for post-session consolidation |
 
 
-#### Session Completion Detection
+#### Core Change: Inactivity-Based Session Rotation
 
-**Decision: Memory v2 detects session changes internally** (not via an external event). This avoids depending on a `session.completed` event that does not currently exist in the Orchestrator.
+**Problem:** Currently, `core/runner.py` generates `session_id` once at process startup (`f"orchestrator_{int(time.time())}"`) and never changes it. The `MessageRouter` passes this static ID in every `user_message` and `agent_response` event. This means Memory v2's session-change detection never triggers — all episodes belong to one infinite session.
 
-**Mechanism:** The hot-path handler tracks the current `session_id`. When the `session_id` in an incoming `user_message` differs from the last seen `session_id`, the previous session is considered complete:
+**Decision:** `MessageRouter` gains inactivity-based session rotation. The kernel already owns `session_id` lifecycle (creates it, passes it to `SQLiteSession`, injects it into events). Adding rotation is a natural extension of existing responsibility.
+
+**Mechanism:**
+
+```python
+# In MessageRouter (core/extensions/router.py):
+_DEFAULT_SESSION_TIMEOUT = 1800  # 30 minutes
+
+async def handle_user_message(self, text: str, user_id: str, channel: ChannelProvider) -> None:
+    now = time.time()
+    if self._last_message_at and (now - self._last_message_at) > self._session_timeout:
+        await self._rotate_session()
+    self._last_message_at = now
+    await self._emit("user_message", {..., "session_id": self._session_id})
+    # ... existing invoke_agent + agent_response ...
+
+async def _rotate_session(self) -> None:
+    old_id = self._session_id
+    self._session_id = f"orchestrator_{int(time.time())}"
+    self._session = SQLiteSession(self._session_id, self._session_db_path)
+    if self._event_bus:
+        await self._event_bus.publish(
+            "session.completed",
+            "kernel",
+            {"session_id": old_id, "reason": "inactivity_timeout"},
+        )
+```
+
+**Design details:**
+
+1. **Inactivity timeout** is configurable via `settings.yaml` (`session.timeout_sec`, default 1800). Stored in `MessageRouter._session_timeout`.
+2. **`SQLiteSession` rotation:** On session change, a new `SQLiteSession` is created for the Agents SDK, giving the Orchestrator fresh short-term conversation context. The old session DB is not deleted — the Agents SDK manages its own cleanup.
+3. **`session.completed` event** is published via EventBus when a session rotates. This is a kernel-guaranteed event — Memory v2 subscribes to it as the primary consolidation trigger.
+4. **Future extension points:** User-initiated session reset (via command or tool), channel-specific session boundaries, and other rotation triggers can be added to `MessageRouter` without changing the memory extension. The contract is: `session_id` changes in events → memory detects the change and consolidates.
+
+#### Session Change Detection in Memory v2
+
+Memory v2 detects session boundaries via two complementary mechanisms:
+
+**Primary: `session.completed` EventBus event.** Published by the kernel when `MessageRouter` rotates the session. Memory v2 subscribes and triggers consolidation:
+
+```python
+async def _on_session_completed(self, event: Event) -> None:
+    session_id = event.payload.get("session_id")
+    if session_id:
+        asyncio.create_task(self._consolidate_session(session_id))
+```
+
+**Secondary: `session_id` change in `user_message` events.** The hot-path handler tracks the current `session_id`. When a new `session_id` appears, the previous session is consolidated. This acts as a fallback if the EventBus event is missed:
 
 ```python
 async def _on_user_message(self, data: dict) -> None:
@@ -789,9 +837,7 @@ async def _on_user_message(self, data: dict) -> None:
     await self._hot_path_ingest(data)
 ```
 
-Additionally, an **inactivity timeout** (configurable, default 30 minutes) marks the current session as complete if no messages arrive within the window. This is checked by the nightly maintenance task as a sweep.
-
-**Forward-compatible:** If the Orchestrator later adds `context.emit("session.completed", ...)` (a one-line change in core), Memory v2 can subscribe to it via EventBus as an additional trigger. The internal detection remains as a fallback, ensuring robustness regardless of core changes.
+**Tertiary: Nightly sweep.** The nightly maintenance task (§10.2) consolidates any sessions that were missed by both mechanisms above (e.g., process crash after the last message, no subsequent message to trigger detection).
 
 ### 16. Manifest
 
@@ -823,7 +869,6 @@ config:
   rrf_weight_fts: 1.0
   rrf_weight_graph: 1.0
   intent_similarity_threshold: 0.45
-  session_inactivity_timeout_sec: 1800
 
 agent_config:
   memory_agent:
@@ -846,9 +891,10 @@ Each capability layer degrades independently:
 | Component                                           | If unavailable                       | Fallback                                                                                                                                                               |
 | --------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `embedding` extension                               | No vector search                     | FTS5 keyword search + entity lookup. Intent classifier falls back to `KeywordIntentClassifier` (English-only regex).                                                   |
+| `embed_batch()` in embedding ext                    | No batch embedding                   | Memory falls back to sequential `embed()` calls. Consolidation is slower (~2-6s vs ~300ms) but functionally identical.                                                 |
 | `sqlite-vec`                                        | No ANN index                         | FTS5 + entity lookup (embeddings stored in BLOB but not indexed)                                                                                                       |
 | LLM for write-path agent                            | No consolidation, no LLM-powered NER | Hot path still records episodes; regex entities still link; decay still runs. Consolidation is deferred until LLM is available.                                        |
-| Session detection fails (no `session_id` in events) | No post-session consolidation        | Nightly cron catches up on all unconsolidated sessions via sweep                                                                                                       |
+| `session.completed` event (core C1)                 | No event-driven consolidation        | Memory detects session changes via `session_id` diff in `user_message` events (secondary). Nightly cron catches remaining unconsolidated sessions (tertiary).          |
 
 
 The system is fully functional with just SQLite + FTS5, degrading gracefully as each capability layer is added.
@@ -865,14 +911,70 @@ The system is fully functional with just SQLite + FTS5, degrading gracefully as 
 
 The agent starts fresh with an empty memory. Episodic nodes accumulate from the first conversation. Consolidation runs after the first completed session.
 
+## Core Changes Required
+
+This ADR introduces two changes outside the memory extension boundary. Both are scoped, non-breaking optimizations that reduce coupling rather than increase it.
+
+### C1. Session Rotation in `MessageRouter`
+
+**What changes:** `core/extensions/router.py` — `MessageRouter` gains inactivity-based session rotation (detailed in §15).
+
+**Scope of change:**
+
+| File | Change |
+| --- | --- |
+| `core/extensions/router.py` | Add `_last_message_at`, `_session_timeout` fields. In `handle_user_message()`, compare elapsed time → call `_rotate_session()` if exceeded. `_rotate_session()` creates new `session_id` + `SQLiteSession`, publishes `session.completed` via EventBus. |
+| `core/events/topics.py` | Register `session.completed` topic (one line). |
+| `core/settings.py` | Add `session.timeout_sec` default (1800). |
+
+**Why in core:** The kernel already owns `session_id` lifecycle — it creates the ID, passes it to `SQLiteSession`, and injects it into `user_message`/`agent_response` events. Session rotation is a natural extension of this existing responsibility. If rotation lived in the memory extension, the extension would need to fabricate new `session_id` values and somehow propagate them back to the kernel — increasing coupling.
+
+**Backward-compatible:** Extensions that ignore `session.completed` are unaffected. The `session_id` format does not change. `SQLiteSession` rotation only affects the Agents SDK's short-term conversation buffer — the Orchestrator's behavior is identical from the user's perspective.
+
+**Forward extension points:** The `_rotate_session()` method can be called from other triggers in the future: user-initiated reset command, channel-specific boundaries, or explicit API calls. The mechanism is generic; inactivity timeout is simply the first trigger.
+
+### C2. Batch Embedding in `embedding` Extension
+
+**What changes:** `sandbox/extensions/embedding/main.py` — add `embed_batch()` alongside existing `embed()`.
+
+**Scope of change:**
+
+```python
+async def embed_batch(
+    self,
+    texts: list[str],
+    *,
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[list[float] | None]:
+    """Batch-embed multiple texts in a single API call.
+
+    Returns a list parallel to `texts`: each element is an embedding vector or
+    None if that specific text was empty / failed.
+    Falls back to sequential embed() calls if the provider doesn't support batching.
+    """
+```
+
+**Why:** Memory v2's write-path agent processes 10-30 nodes per consolidation run. Sequential `embed()` calls mean 10-30 API round-trips (~200ms each) = 2-6 seconds of pure I/O wait. A single `embed_batch()` call reduces this to one round-trip (~300ms). The OpenAI embeddings API already accepts `input: list[str]` — this is a thin wrapper over existing capability.
+
+**Backward-compatible:** `embed()` remains unchanged. Extensions that don't need batching are unaffected. Memory v2 calls `embed_batch()` when available, falls back to sequential `embed()` if the method doesn't exist (e.g., older embedding extension version):
+
+```python
+embed_fn = getattr(embedding_ext, "embed_batch", None)
+if embed_fn:
+    vectors = await embed_fn(texts)
+else:
+    vectors = [await embedding_ext.embed(t) for t in texts]
+```
+
 ## Implementation Phases
 
 
 | Phase                                         | Scope                                                                                                                                                                                                   | Duration | Outcome                                                                                                 |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| **1. Foundation**                             | Schema, hot path (episodes + FTS5 + temporal edges), SQLite writer queue, `search_memory` (FTS5 only), `ContextProvider`, `KeywordIntentClassifier` as interim classifier                               | 2-3 days | Agent remembers conversations, keyword search works, Heartbeat gets context                             |
-| **2. Semantic Search**                        | Embedding integration, vec_nodes index, hybrid search (FTS5 + vector + RRF), `EmbeddingIntentClassifier` (pre-embed exemplars, multilingual intent routing), `remember_fact`, `correct_fact`, `confirm_fact` | 2-3 days | Semantic similarity search, multilingual intent-aware retrieval, agent can explicitly save/correct facts |
-| **3. Write-Path Agent**                       | Memory agent with tools (via `ModelRouter`), post-session consolidation (with idempotency protocol), entity extraction + resolution, conflict detection + resolution                                     | 3-4 days | Automatic fact extraction, entity linking, knowledge evolution                                          |
+| **1. Foundation + Core**                      | Schema, hot path (episodes + FTS5 + temporal edges), SQLite writer queue, `search_memory` (FTS5 only), `ContextProvider`, `KeywordIntentClassifier` as interim classifier. **Core change C1:** session rotation in `MessageRouter` + `session.completed` event topic. | 2-3 days | Agent remembers conversations, keyword search works, Heartbeat gets context, sessions rotate on inactivity |
+| **2. Semantic Search + Batch Embedding**      | Embedding integration, vec_nodes index, hybrid search (FTS5 + vector + RRF), `EmbeddingIntentClassifier` (pre-embed exemplars, multilingual intent routing), `remember_fact`, `correct_fact`, `confirm_fact`. **Core change C2:** `embed_batch()` in embedding extension. | 2-3 days | Semantic similarity search, multilingual intent-aware retrieval, batch embedding reduces consolidation I/O |
+| **3. Write-Path Agent**                       | Memory agent with tools (via `ModelRouter`), post-session consolidation (with idempotency protocol), entity extraction + resolution, conflict detection + resolution. Uses `embed_batch()` from Phase 2. | 3-4 days | Automatic fact extraction, entity linking, knowledge evolution                                          |
 | **4. Intent-Aware Retrieval — Graph Strategies** | Temporal chain traversal, entity-based lookup, adaptive query complexity                                                                                                                                | 2-3 days | "When" queries follow timelines, "who/what" queries traverse entity links                               |
 | **5. Nightly Maintenance + Causal Inference** | Ebbinghaus decay, pruning, entity enrichment, causal edge inference (LLM)                                                                                                                               | 2-3 days | Memory self-organizes, irrelevant facts fade, "why" queries gain causal graph                           |
 | **6. Observability**                          | `memory_stats` with graph metrics (§13), `explain_fact` (provenance chain), weak facts report                                                                                                           | 1-2 days | Memory quality is measurable and debuggable                                                             |
@@ -926,7 +1028,7 @@ The agent starts fresh with an empty memory. Episodic nodes accumulate from the 
 
 - **ADR 002 (Extensions)** — Memory v2 implements `ToolProvider` + `ContextProvider` + `SchedulerProvider`. Protocol composition replaces the need for satellite extensions.
 - **ADR 003 (Agent-as-Extension)** — The write-path memory agent is an internal agent (not an `AgentProvider` visible to the Orchestrator). It uses the same `agents` SDK and `Runner.run()` but is invoked privately by the memory extension. Model resolution goes through `context.model_router.get_model("memory_agent")` — the same `ModelRouter` path that all extensions use (see §10, Model Resolution). The `agent_config` block in the manifest registers the model with the router at startup, ensuring provider switching in `config/settings.yaml` applies to the memory agent without code changes.
-- **ADR 004 (Event Bus)** — Memory v2 detects session changes internally (§15) and does not depend on an external `session.completed` event. If the Orchestrator later publishes `session.completed` via EventBus, Memory v2 can subscribe to it as an additional trigger.
+- **ADR 004 (Event Bus)** — This ADR introduces `session.completed` as a new kernel-published EventBus topic (core change C1, §15). `MessageRouter` publishes this event when a session rotates due to inactivity. Memory v2 subscribes to it as the primary consolidation trigger. Other extensions can subscribe to the same topic for their own session-boundary logic.
 - **ADR 005 (Memory v1)** — **Superseded.** This ADR replaces the flat model with a graph model, absorbs satellite extensions, and adds an agent-powered write path.
 
 ## Alternatives Considered
