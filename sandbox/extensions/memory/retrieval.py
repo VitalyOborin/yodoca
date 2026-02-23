@@ -2,6 +2,7 @@
 
 import math
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
@@ -132,14 +133,45 @@ def classify_query_complexity(query: str) -> str:
 
 
 def get_adaptive_params(complexity: str) -> dict[str, Any]:
-    """Token budget and retrieval depth by complexity."""
+    """Token budget, retrieval depth, and graph depth by complexity."""
     if complexity == "simple":
-        return {"token_budget": 1000, "limit": 5}
-    return {"token_budget": 3000, "limit": 20}
+        return {"token_budget": 1000, "limit": 5, "graph_depth": 2}
+    return {"token_budget": 3000, "limit": 20, "graph_depth": 4}
+
+
+def parse_time_expression(expr: str | None) -> int | None:
+    """Parse time expression to Unix timestamp. last_week, last_month, YYYY-MM-DD."""
+    if not expr or not expr.strip():
+        return None
+    expr = expr.strip().lower()
+    now = int(time.time())
+    if expr == "last_week":
+        return now - 7 * 86400
+    if expr == "last_month":
+        return now - 30 * 86400
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", expr):
+        try:
+            from datetime import datetime
+
+            dt = datetime.strptime(expr, "%Y-%m-%d")
+            return int(dt.timestamp())
+        except ValueError:
+            return None
+    return None
+
+
+async def _resolve_entity(storage: Any, name: str) -> dict[str, Any] | None:
+    """Resolve entity by canonical_name or alias. Returns entity dict or None."""
+    if not name or not name.strip():
+        return None
+    entity = await storage.get_entity_by_name(name.strip())
+    if entity:
+        return entity
+    return await storage.search_entity_by_alias(name.strip())
 
 
 class MemoryRetrieval:
-    """Hybrid FTS5 + vector search with RRF fusion. Intent-aware retrieval."""
+    """Hybrid FTS5 + vector + graph search with RRF fusion. Intent-aware retrieval."""
 
     def __init__(
         self,
@@ -149,20 +181,23 @@ class MemoryRetrieval:
         rrf_k: int = 60,
         rrf_weight_fts: float = 1.0,
         rrf_weight_vector: float = 1.0,
+        rrf_weight_graph: float = 1.0,
     ) -> None:
         self._storage = storage
         self._intent_classifier = intent_classifier
         self._k = rrf_k
         self._w_fts = rrf_weight_fts
         self._w_vec = rrf_weight_vector
+        self._w_graph = rrf_weight_graph
 
     def _rrf_merge(
         self,
         fts_results: list[dict[str, Any]],
         vec_results: list[dict[str, Any]],
         limit: int,
+        graph_results: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Reciprocal Rank Fusion of FTS5 and vector results."""
+        """Reciprocal Rank Fusion of FTS5, vector, and optional graph results."""
         scores: dict[str, float] = {}
         all_items: dict[str, dict[str, Any]] = {}
         for rank, item in enumerate(fts_results, 1):
@@ -173,6 +208,11 @@ class MemoryRetrieval:
             nid = item["id"]
             scores[nid] = scores.get(nid, 0) + self._w_vec / (self._k + rank)
             all_items.setdefault(nid, item)
+        if graph_results:
+            for rank, item in enumerate(graph_results, 1):
+                nid = item["id"]
+                scores[nid] = scores.get(nid, 0) + self._w_graph / (self._k + rank)
+                all_items.setdefault(nid, item)
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
         return [all_items[nid] for nid in ranked]
 
@@ -184,43 +224,190 @@ class MemoryRetrieval:
         limit: int = 10,
         token_budget: int = 2000,
         node_types: list[str] | None = None,
+        entity_name: str | None = None,
+        event_after: int | None = None,
+        event_before: int | None = None,
+        graph_depth: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Hybrid search: FTS5 + vector with RRF fusion. Default excludes episodic."""
+        """Intent-aware hybrid search: FTS5 + vector + graph with RRF fusion."""
         if node_types is None:
             node_types = ["semantic", "procedural", "opinion"]
-        cand_limit = limit * 2
+        cand_limit = max(limit * 2, 5)
+        seed_limit = 5
+
         fts_results = await self._storage.fts_search(
             query,
             node_types=node_types,
             limit=cand_limit,
         )
+        vec_results: list[dict[str, Any]] = []
         if query_embedding is not None:
             vec_results = await self._storage.vector_search(
                 query_embedding,
                 node_types=node_types,
                 limit=cand_limit,
             )
-            results = self._rrf_merge(fts_results, vec_results, limit)
-        else:
-            results = fts_results[:limit]
+
+        intent = self._intent_classifier.classify(
+            query, query_embedding=query_embedding
+        )
+        depth = graph_depth if graph_depth is not None else 3
+        graph_results: list[dict[str, Any]] = []
+
+        if intent in ("why", "when", "who", "what"):
+            seed_ids = [r["id"] for r in (fts_results[:seed_limit] or vec_results[:seed_limit])]
+
+            if intent == "why" and seed_ids:
+                graph_results = await self._storage.causal_chain_traversal(
+                    seed_ids[0], max_depth=depth, limit=limit
+                )
+
+            elif intent == "when" and seed_ids:
+                forward = await self._storage.temporal_chain_traversal(
+                    seed_ids,
+                    direction="forward",
+                    max_depth=depth,
+                    limit=limit,
+                    event_after=event_after,
+                    event_before=event_before,
+                )
+                backward = await self._storage.temporal_chain_traversal(
+                    seed_ids,
+                    direction="backward",
+                    max_depth=depth,
+                    limit=limit,
+                    event_after=event_after,
+                    event_before=event_before,
+                )
+                seen: set[str] = set()
+                for r in forward + backward:
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        graph_results.append(r)
+
+            elif intent in ("who", "what"):
+                entity = await _resolve_entity(
+                    self._storage,
+                    entity_name or query,
+                )
+                if entity:
+                    graph_results = await self._storage.entity_nodes_for_entity(
+                        entity["id"],
+                        node_types=node_types,
+                        limit=limit,
+                    )
+
+        results = self._rrf_merge(
+            fts_results,
+            vec_results,
+            limit,
+            graph_results=graph_results if graph_results else None,
+        )
         return results
 
-    def assemble_context(
+    async def assemble_context(
         self,
         results: list[dict[str, Any]],
         token_budget: int = 2000,
     ) -> str:
-        """Format results as markdown. Phase 1: simplified 'Relevant memory' section."""
+        """Format results with budget shares: Facts 40%, Entity profiles 25%, Temporal 25%, Evidence 10%."""
         if not results:
             return ""
-        lines: list[str] = []
-        approx_chars = 0
         char_per_token = 4
-        max_chars = token_budget * char_per_token
-        for r in results:
-            content = r.get("content", "")
-            if approx_chars + len(content) > max_chars:
-                break
-            lines.append(f"- {content}")
-            approx_chars += len(content)
-        return "## Relevant memory\n" + "\n".join(lines)
+        total_chars = token_budget * char_per_token
+        budget_facts = int(total_chars * 0.40)
+        budget_entities = int(total_chars * 0.25)
+        budget_temporal = int(total_chars * 0.25)
+        budget_evidence = int(total_chars * 0.10)
+
+        facts = [r for r in results if r.get("type") in ("semantic", "procedural", "opinion")]
+        episodic = [r for r in results if r.get("type") == "episodic"]
+        node_ids = [r["id"] for r in results]
+
+        sections: list[str] = []
+
+        if facts:
+            lines = []
+            chars = 0
+            for r in facts:
+                c = r.get("content", "")
+                if chars + len(c) + 4 > budget_facts:
+                    break
+                lines.append(f"- {c}")
+                chars += len(c) + 4
+            if lines:
+                sections.append("## Facts\n" + "\n".join(lines))
+
+        entities = await self._storage.get_entities_for_nodes(node_ids)
+        if entities:
+            lines = []
+            chars = 0
+            for e in entities[:5]:
+                name = e.get("canonical_name", "")
+                summary = e.get("summary") or "(no summary)"
+                block = f"**{name}**: {summary}"
+                if chars + len(block) + 2 > budget_entities:
+                    break
+                lines.append(block)
+                chars += len(block) + 2
+            if lines:
+                sections.append("## Entity profiles\n" + "\n".join(lines))
+
+        if episodic:
+            lines = []
+            chars = 0
+            for r in sorted(episodic, key=lambda x: x.get("event_time", 0)):
+                c = r.get("content", "")
+                if chars + len(c) + 4 > budget_temporal:
+                    break
+                lines.append(f"- {c}")
+                chars += len(c) + 4
+            if lines:
+                sections.append("## Temporal context\n" + "\n".join(lines))
+        else:
+            episode_ids: list[str] = []
+            for r in facts[:3]:
+                targets = await self._storage.get_derived_from_targets(r["id"])
+                episode_ids.extend(targets)
+            if episode_ids:
+                episodes = await self._storage.get_nodes_by_ids(episode_ids)
+                lines = []
+                chars = 0
+                for ep in sorted(episodes, key=lambda x: x.get("event_time", 0)):
+                    c = ep.get("content", "")
+                    if chars + len(c) + 4 > budget_temporal:
+                        break
+                    lines.append(f"- {c}")
+                    chars += len(c) + 4
+                if lines:
+                    sections.append("## Temporal context\n" + "\n".join(lines))
+
+        if facts and budget_evidence > 0:
+            evidence_lines = []
+            chars = 0
+            for r in facts[:2]:
+                targets = await self._storage.get_derived_from_targets(r["id"])
+                if targets:
+                    nodes = await self._storage.get_nodes_by_ids(targets[:1])
+                    if nodes:
+                        src = nodes[0].get("content", "")[:200]
+                        block = f"- Source: {src}..."
+                        if chars + len(block) + 2 <= budget_evidence:
+                            evidence_lines.append(block)
+                            chars += len(block) + 2
+            if evidence_lines:
+                sections.append("## Evidence\n" + "\n".join(evidence_lines))
+
+        if not sections:
+            lines = []
+            chars = 0
+            max_chars = total_chars
+            for r in results:
+                c = r.get("content", "")
+                if chars + len(c) + 4 > max_chars:
+                    break
+                lines.append(f"- {c}")
+                chars += len(c) + 4
+            return "## Relevant memory\n" + "\n".join(lines) if lines else ""
+
+        return "\n\n".join(sections)

@@ -648,3 +648,229 @@ class MemoryStorage:
         )
         if future:
             await future
+
+    async def temporal_chain_traversal(
+        self,
+        seed_node_ids: list[str],
+        *,
+        direction: str = "forward",
+        max_depth: int = 3,
+        limit: int = 20,
+        event_after: int | None = None,
+        event_before: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Follow temporal edges from seed nodes. direction: forward (targets) or backward (sources)."""
+        if not self._read_conn or not seed_node_ids:
+            return []
+        seeds = seed_node_ids[:10]
+        placeholders = ",".join("?" * len(seeds))
+        time_filter = ""
+        time_params: list[Any] = []
+        if event_after is not None:
+            time_filter += " AND n.event_time >= ?"
+            time_params.append(event_after)
+        if event_before is not None:
+            time_filter += " AND n.event_time <= ?"
+            time_params.append(event_before)
+
+        if direction == "forward":
+            join_col, follow_col = "source_id", "target_id"
+        else:
+            join_col, follow_col = "target_id", "source_id"
+
+        sql = f"""
+            WITH RECURSIVE chain(node_id, depth) AS (
+                SELECT id, 0 FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL
+                UNION ALL
+                SELECT e.{follow_col}, c.depth + 1 FROM edges e
+                JOIN chain c ON e.{join_col} = c.node_id
+                WHERE e.relation_type = 'temporal' AND e.valid_until IS NULL
+                  AND c.depth < ?
+            )
+            SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.session_id
+            FROM nodes n
+            JOIN chain c ON n.id = c.node_id
+            WHERE n.valid_until IS NULL {time_filter}
+            ORDER BY n.event_time ASC
+            LIMIT ?
+        """
+        params: list[Any] = list(seeds) + [max_depth] + time_params + [limit]
+        cursor = await self._read_conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        ]
+
+    async def causal_chain_traversal(
+        self,
+        seed_node_id: str,
+        *,
+        max_depth: int = 3,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """BFS following causal edges: source=cause, target=effect. Traverse from effect to causes."""
+        if not self._read_conn:
+            return []
+        sql = """
+            WITH RECURSIVE causal_chain(node_id, depth) AS (
+                SELECT source_id, 1 FROM edges
+                WHERE target_id = ? AND relation_type = 'causal'
+                  AND valid_until IS NULL
+                UNION ALL
+                SELECT e.source_id, cc.depth + 1 FROM edges e
+                JOIN causal_chain cc ON e.target_id = cc.node_id
+                WHERE e.relation_type = 'causal'
+                  AND e.valid_until IS NULL
+                  AND cc.depth < ?
+            )
+            SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.session_id
+            FROM nodes n
+            JOIN causal_chain cc ON n.id = cc.node_id
+            WHERE n.valid_until IS NULL
+            ORDER BY n.event_time DESC
+            LIMIT ?
+        """
+        cursor = await self._read_conn.execute(
+            sql, (seed_node_id, max_depth, limit)
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        ]
+
+    async def entity_nodes_for_entity(
+        self,
+        entity_id: str,
+        *,
+        node_types: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Nodes linked to entity via node_entities."""
+        if not self._read_conn:
+            return []
+        type_filter = ""
+        params: list[Any] = [entity_id, limit]
+        if node_types:
+            placeholders = ",".join("?" * len(node_types))
+            type_filter = f" AND n.type IN ({placeholders})"
+            params = [entity_id] + list(node_types) + [limit]
+        sql = f"""
+            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.session_id
+            FROM nodes n
+            INNER JOIN node_entities ne ON n.id = ne.node_id
+            WHERE ne.entity_id = ? AND n.valid_until IS NULL {type_filter}
+            ORDER BY n.event_time DESC
+            LIMIT ?
+        """
+        cursor = await self._read_conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        ]
+
+    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[dict[str, Any]]:
+        """Batch fetch nodes by ID. Preserves order where possible."""
+        if not self._read_conn or not node_ids:
+            return []
+        seen: set[str] = set()
+        order: list[str] = []
+        for nid in node_ids:
+            if nid not in seen:
+                seen.add(nid)
+                order.append(nid)
+        placeholders = ",".join("?" * len(order))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT id, type, content, event_time, created_at, confidence, session_id
+            FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL
+            """,
+            tuple(order),
+        )
+        rows = await cursor.fetchall()
+        by_id = {
+            r[0]: {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        }
+        return [by_id[nid] for nid in order if nid in by_id]
+
+    async def get_entities_for_nodes(
+        self, node_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Entities linked to these nodes via node_entities. Deduplicated by entity id."""
+        if not self._read_conn or not node_ids:
+            return []
+        placeholders = ",".join("?" * len(node_ids))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT DISTINCT e.id, e.canonical_name, e.type, e.aliases, e.summary, e.mention_count
+            FROM entities e
+            INNER JOIN node_entities ne ON e.id = ne.entity_id
+            WHERE ne.node_id IN ({placeholders})
+            """,
+            tuple(node_ids),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "canonical_name": row[1],
+                "type": row[2],
+                "aliases": json.loads(row[3]) if row[3] else [],
+                "summary": row[4],
+                "mention_count": row[5],
+            }
+            for row in rows
+        ]
+
+    async def get_derived_from_targets(self, node_id: str) -> list[str]:
+        """Target node IDs for derived_from edges from this node (source -> target)."""
+        if not self._read_conn:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT target_id FROM edges
+            WHERE source_id = ? AND relation_type = 'derived_from'
+              AND valid_until IS NULL
+            """,
+            (node_id,),
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]

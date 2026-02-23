@@ -7,6 +7,8 @@ from typing import Any, Callable
 from agents import function_tool
 from pydantic import BaseModel, Field
 
+from retrieval import parse_time_expression, _resolve_entity
+
 
 class SearchResult(BaseModel):
     """Result of search_memory."""
@@ -49,10 +51,14 @@ def build_tools(
     async def search_memory(
         query: str,
         type: str | None = None,
+        entity_name: str | None = None,
+        after: str | None = None,
+        before: str | None = None,
         limit: int = 10,
     ) -> SearchResult:
         """Search long-term memory. Returns relevant facts and knowledge.
         Use type='episodic' for conversation history, or omit for all types.
+        entity_name: filter by entity. after/before: time filter (last_week, last_month, YYYY-MM-DD).
         """
         if type and type not in ("episodic", "semantic", "procedural", "opinion"):
             return SearchResult(results=[], count=0)
@@ -60,12 +66,17 @@ def build_tools(
         query_embedding = None
         if embed_fn:
             query_embedding = await embed_fn(query)
+        event_after = parse_time_expression(after)
+        event_before = parse_time_expression(before)
         results = await retrieval.search(
             query,
             query_embedding=query_embedding,
             limit=limit,
             token_budget=token_budget,
             node_types=node_types,
+            entity_name=entity_name,
+            event_after=event_after,
+            event_before=event_before,
         )
         return SearchResult(results=results, count=len(results))
 
@@ -168,8 +179,32 @@ def build_tools(
 
     @function_tool
     async def get_entity_info(entity_name: str) -> str:
-        """Get entity profile and related facts. Phase 2+."""
-        return "get_entity_info not yet available (Phase 2)"
+        """Get entity profile: summary, related facts, timeline."""
+        if not entity_name or not entity_name.strip():
+            return "No entity name provided."
+        entity = await _resolve_entity(storage, entity_name)
+        if not entity:
+            return f"No entity found for '{entity_name}'"
+        nodes = await storage.entity_nodes_for_entity(
+            entity["id"],
+            node_types=["semantic", "procedural", "opinion", "episodic"],
+            limit=20,
+        )
+        facts = [n for n in nodes if n["type"] in ("semantic", "procedural", "opinion")]
+        episodes = [n for n in nodes if n["type"] == "episodic"]
+        lines = ["## Entity: " + entity.get("canonical_name", "")]
+        summary = entity.get("summary")
+        if summary:
+            lines.append(summary)
+        if facts:
+            lines.append("\n## Related facts")
+            for n in facts[:10]:
+                lines.append(f"- {n.get('content', '')}")
+        if episodes:
+            lines.append("\n## Timeline")
+            for ep in sorted(episodes, key=lambda x: x.get("event_time", 0))[:10]:
+                lines.append(f"- {ep.get('content', '')}")
+        return "\n".join(lines)
 
     @function_tool
     async def memory_stats() -> str:

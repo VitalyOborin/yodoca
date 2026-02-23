@@ -63,10 +63,11 @@ class MemoryExtension:
             query_embedding=query_embedding,
             limit=params["limit"],
             token_budget=params["token_budget"],
+            graph_depth=params.get("graph_depth"),
         )
         if not results:
             return None
-        return self._retrieval.assemble_context(
+        return await self._retrieval.assemble_context(
             results,
             token_budget=params["token_budget"],
         )
@@ -109,6 +110,7 @@ class MemoryExtension:
             rrf_k=context.get_config("rrf_k", 60),
             rrf_weight_fts=context.get_config("rrf_weight_fts", 1.0),
             rrf_weight_vector=context.get_config("rrf_weight_vector", 1.0),
+            rrf_weight_graph=context.get_config("rrf_weight_graph", 1.0),
         )
 
         self._write_agent = None

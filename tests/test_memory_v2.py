@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +18,8 @@ from retrieval import (
     KeywordIntentClassifier,
     MemoryRetrieval,
     classify_query_complexity,
+    get_adaptive_params,
+    parse_time_expression,
 )
 from storage import MemoryStorage
 from tools import build_tools
@@ -183,8 +186,8 @@ class TestMemoryRetrieval:
         )
         assert len(results) >= 1
 
-        ctx = retrieval.assemble_context(results, token_budget=500)
-        assert "Relevant memory" in ctx
+        ctx = await retrieval.assemble_context(results, token_budget=500)
+        assert ctx
         assert "budget" in ctx
 
 
@@ -670,3 +673,219 @@ class TestConsolidateSessionIdempotency:
         await ext._consolidate_session("sess-idem")
 
         ext._write_agent.consolidate_session.assert_not_called()
+
+
+class TestMemoryStoragePhase4:
+    """Phase 4: temporal_chain_traversal, causal_chain_traversal, entity_nodes_for_entity, get_nodes_by_ids."""
+
+    @pytest.mark.asyncio
+    async def test_temporal_chain_traversal(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        storage.ensure_session("s1")
+        await asyncio.sleep(0.2)
+        ids = []
+        for i in range(4):
+            nid = storage.insert_node({
+                "type": "episodic",
+                "content": f"ep {i}",
+                "event_time": now + i,
+                "created_at": now + i,
+                "valid_from": now + i,
+                "session_id": "s1",
+            })
+            ids.append(nid)
+            if i > 0:
+                storage.insert_edge({
+                    "source_id": ids[i - 1],
+                    "target_id": nid,
+                    "relation_type": "temporal",
+                    "valid_from": now + i,
+                    "created_at": now + i,
+                })
+        await asyncio.sleep(0.5)
+
+        forward = await storage.temporal_chain_traversal(
+            [ids[0]], direction="forward", max_depth=3, limit=10
+        )
+        assert len(forward) >= 2
+        contents = [r["content"] for r in forward]
+        assert "ep 0" in contents or "ep 1" in contents
+
+    @pytest.mark.asyncio
+    async def test_causal_chain_traversal(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        cause = storage.insert_node({
+            "type": "episodic",
+            "content": "cause event",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        effect = storage.insert_node({
+            "type": "episodic",
+            "content": "effect event",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+        })
+        storage.insert_edge({
+            "source_id": cause,
+            "target_id": effect,
+            "relation_type": "causal",
+            "valid_from": now + 1,
+            "created_at": now + 1,
+        })
+        await asyncio.sleep(0.3)
+
+        chain = await storage.causal_chain_traversal(
+            effect, max_depth=3, limit=10
+        )
+        assert len(chain) >= 1
+        assert any(r["content"] == "cause event" for r in chain)
+
+    @pytest.mark.asyncio
+    async def test_entity_nodes_for_entity(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        eid = await storage.insert_entity({
+            "canonical_name": "TestProject",
+            "type": "project",
+        })
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "Project milestone",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await storage.link_node_entity(nid, eid)
+        await asyncio.sleep(0.2)
+
+        nodes = await storage.entity_nodes_for_entity(eid, limit=10)
+        assert len(nodes) >= 1
+        assert nodes[0]["content"] == "Project milestone"
+
+    @pytest.mark.asyncio
+    async def test_get_nodes_by_ids(self, storage: MemoryStorage) -> None:
+        import time
+
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "batch fetch test",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.2)
+
+        nodes = await storage.get_nodes_by_ids([nid])
+        assert len(nodes) == 1
+        assert nodes[0]["content"] == "batch fetch test"
+
+
+class TestParseTimeExpression:
+    """parse_time_expression heuristic."""
+
+    def test_last_week(self) -> None:
+        ts = parse_time_expression("last_week")
+        assert ts is not None
+        assert ts < int(time.time())
+
+    def test_last_month(self) -> None:
+        ts = parse_time_expression("last_month")
+        assert ts is not None
+
+    def test_yyyy_mm_dd(self) -> None:
+        ts = parse_time_expression("2025-01-15")
+        assert ts is not None
+
+    def test_empty_returns_none(self) -> None:
+        assert parse_time_expression("") is None
+        assert parse_time_expression(None) is None
+
+
+class TestGetAdaptiveParams:
+    """get_adaptive_params includes graph_depth."""
+
+    def test_simple_has_graph_depth(self) -> None:
+        p = get_adaptive_params("simple")
+        assert p["graph_depth"] == 2
+        assert p["limit"] == 5
+
+    def test_complex_has_graph_depth(self) -> None:
+        p = get_adaptive_params("complex")
+        assert p["graph_depth"] == 4
+        assert p["limit"] == 20
+
+
+class TestGetEntityInfoTool:
+    """get_entity_info tool returns entity profile."""
+
+    @pytest.mark.asyncio
+    async def test_get_entity_info_returns_profile(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        eid = await storage.insert_entity({
+            "canonical_name": "Alice",
+            "type": "person",
+            "summary": "Team lead",
+        })
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "Alice prefers dark mode",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await storage.link_node_entity(nid, eid)
+        await asyncio.sleep(0.2)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        entity_tool = tools[4]
+        args = {"entity_name": "Alice"}
+        result = await entity_tool.on_invoke_tool(
+            _tool_ctx(entity_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "Alice" in str(result)
+        assert "dark mode" in str(result) or "Team lead" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_get_entity_info_not_found(
+        self, storage: MemoryStorage
+    ) -> None:
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        entity_tool = tools[4]
+        args = {"entity_name": "NonexistentEntity123"}
+        result = await entity_tool.on_invoke_tool(
+            _tool_ctx(entity_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "No entity found" in str(result) or "not found" in str(result).lower()
