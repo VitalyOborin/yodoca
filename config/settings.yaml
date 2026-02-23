@@ -8,10 +8,10 @@ supervisor:
 agents:
   default:
     provider: openai # openai # lm_studio
-    model: gpt-5-mini # gpt-5-mini # mistralai/codestral-22b-v0.1
+    model: gpt-5-mini # gpt-5-mini # zai-org/glm-4.7-flash
   orchestrator:
-    provider: openai # openai # lm_studio
-    model: gpt-5.2 # gpt-5.2 # mistralai/codestral-22b-v0.1
+    provider: lm_studio # openai # lm_studio
+    model: zai-org/glm-4.7-flash # gpt-5.2 # zai-org/glm-4.7-flash
     instructions: prompts/orchestrator.jinja2
 
 providers:
