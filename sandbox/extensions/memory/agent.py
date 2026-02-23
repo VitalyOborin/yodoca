@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, Runner
+from agents import Agent, Runner, ModelSettings
 
 from core.extensions.instructions import resolve_instructions
 
@@ -33,10 +33,13 @@ class MemoryAgent:
         instructions: str,
         *,
         causal_instructions: str | None = None,
+        model_settings: ModelSettings | None = None,
     ) -> None:
+        ms = model_settings or ModelSettings(parallel_tool_calls=True)
         self._agent = Agent(
             name="MemoryWritePathAgent",
             instructions=instructions,
+            model_settings=ms,
             model=model,
             tools=tools,
         )
@@ -45,6 +48,7 @@ class MemoryAgent:
             self._causal_agent = Agent(
                 name="MemoryCausalAgent",
                 instructions=causal_instructions,
+                model_settings=ms,
                 model=model,
                 tools=tools,
             )
@@ -127,6 +131,8 @@ def create_memory_agent(
     model: Any,
     tools: list[Any],
     extension_dir: Path,
+    *,
+    model_settings: ModelSettings | None = None,
 ) -> MemoryAgent:
     """Create MemoryAgent with consolidation and causal inference instructions."""
     consolidation_instructions = resolve_instructions(
@@ -150,4 +156,5 @@ def create_memory_agent(
         tools=tools,
         instructions=consolidation_instructions,
         causal_instructions=causal_instructions,
+        model_settings=model_settings,
     )

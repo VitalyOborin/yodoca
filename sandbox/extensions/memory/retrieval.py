@@ -1,10 +1,13 @@
 """MemoryRetrieval: intent classification, FTS5 search, context assembly. Memory v2."""
 
+import hashlib
+import json
 import logging
 import math
 import re
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -96,17 +99,73 @@ class EmbeddingIntentClassifier(IntentClassifier):
         ],
     }
 
-    def __init__(self, embed_fn: Callable[..., Any], threshold: float = 0.45) -> None:
+    def __init__(
+        self,
+        embed_fn: Callable[..., Any],
+        threshold: float = 0.45,
+        *,
+        embed_batch_fn: Callable[..., Any] | None = None,
+        cache_dir: Path | None = None,
+    ) -> None:
         self._embed_fn = embed_fn
+        self._embed_batch_fn = embed_batch_fn
+        self._cache_dir = cache_dir
         self._threshold = threshold
         self._intent_embeddings: dict[str, list[list[float]]] = {}
 
+    def _resolve_cache_path(self) -> Path | None:
+        """Compute cache file path from exemplar text hash. Returns None if cache_dir not set."""
+        if not self._cache_dir:
+            return None
+        canonical = json.dumps(
+            {k: sorted(v) for k, v in sorted(self.EXEMPLARS.items())},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        h = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+        return self._cache_dir / f"intent_embeddings_{h}.json"
+
+    def _load_cache(self, path: Path) -> dict[str, list[list[float]]]:
+        """Load intent embeddings from JSON file."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if isinstance(v, list)}
+
+    def _save_cache(self, path: Path) -> None:
+        """Save intent embeddings to JSON file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self._intent_embeddings, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
     async def initialize(self) -> None:
-        """Pre-embed exemplars at startup. One-time cost."""
+        """Pre-embed exemplars at startup. Cache-first, then batch or sequential."""
+        cache_path = self._resolve_cache_path()
+        if cache_path and cache_path.exists():
+            self._intent_embeddings = self._load_cache(cache_path)
+            logger.info("Intent embeddings loaded from cache")
+            return
+
+        all_texts: list[str] = []
+        intent_ranges: list[tuple[str, int, int]] = []
         for intent, examples in self.EXEMPLARS.items():
+            start = len(all_texts)
+            all_texts.extend(examples)
+            intent_ranges.append((intent, start, len(all_texts)))
+
+        if self._embed_batch_fn:
+            embeddings = await self._embed_batch_fn(all_texts)
+        else:
+            embeddings = [await self._embed_fn(t) for t in all_texts]
+
+        for intent, start, end in intent_ranges:
             self._intent_embeddings[intent] = [
-                await self._embed_fn(ex) for ex in examples
+                e for e in embeddings[start:end] if e is not None
             ]
+
+        if cache_path:
+            self._save_cache(cache_path)
+            logger.info("Intent embeddings cached to %s", cache_path.name)
 
     def classify(self, query: str, **kwargs: Any) -> str:
         """Classify intent. Accepts pre-computed query_embedding via kwargs."""

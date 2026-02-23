@@ -30,7 +30,7 @@ config:
 
 schedules:
   - name: agent_loop
-    cron: "*/2 * * * *"
+    cron: "*/10 * * * *"
     task: emit_heartbeat
     description: "Wake Scout for proactive background check every 2 minutes"
 

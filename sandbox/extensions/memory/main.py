@@ -13,6 +13,8 @@ _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
+from agents import ModelSettings
+
 from agent import create_memory_agent
 from agent_tools import build_write_path_tools
 from decay import DecayService
@@ -113,9 +115,17 @@ class MemoryExtension:
             self._embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
 
         if self._embed_fn:
+            embed_batch_fn = None
+            if embedding_ext and hasattr(embedding_ext, "embed_batch"):
+                dims = context.get_config("embedding_dimensions", 256)
+                embed_batch_fn = lambda texts: embedding_ext.embed_batch(
+                    texts, dimensions=dims
+                )
             classifier = EmbeddingIntentClassifier(
                 embed_fn=self._embed_fn,
                 threshold=context.get_config("intent_similarity_threshold", 0.45),
+                embed_batch_fn=embed_batch_fn,
+                cache_dir=context.data_dir,
             )
             await classifier.initialize()
         else:
@@ -150,6 +160,7 @@ class MemoryExtension:
                     model=model,
                     tools=write_tools,
                     extension_dir=_ext_dir,
+                    model_settings=ModelSettings(parallel_tool_calls=True),
                 )
                 logger.info("Write-path agent initialized (model=%s)", model)
             except Exception as e:
