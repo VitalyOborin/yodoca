@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import time
 import uuid
@@ -1065,3 +1066,128 @@ class MemoryStorage:
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
+
+    async def get_graph_stats(self) -> dict[str, Any]:
+        """Graph-level metrics: node counts by type, edge counts by relation_type, entities, orphans, avg edges/node."""
+        if self._read_conn is None:
+            return {
+                "nodes": {"episodic": 0, "semantic": 0, "procedural": 0, "opinion": 0},
+                "edges": {"temporal": 0, "causal": 0, "entity": 0, "derived_from": 0, "supersedes": 0},
+                "entities": 0,
+                "orphan_nodes": 0,
+                "avg_edges_per_node": 0.0,
+            }
+        node_counts: dict[str, int] = {"episodic": 0, "semantic": 0, "procedural": 0, "opinion": 0}
+        cursor = await self._read_conn.execute(
+            "SELECT type, COUNT(*) FROM nodes WHERE valid_until IS NULL GROUP BY type"
+        )
+        for row in await cursor.fetchall():
+            node_counts[row[0]] = row[1]
+        edge_counts: dict[str, int] = {
+            "temporal": 0,
+            "causal": 0,
+            "entity": 0,
+            "derived_from": 0,
+            "supersedes": 0,
+        }
+        cursor = await self._read_conn.execute(
+            "SELECT relation_type, COUNT(*) FROM edges WHERE valid_until IS NULL GROUP BY relation_type"
+        )
+        for row in await cursor.fetchall():
+            if row[0] in edge_counts:
+                edge_counts[row[0]] = row[1]
+        cursor = await self._read_conn.execute("SELECT COUNT(*) FROM entities")
+        entity_count = (await cursor.fetchone())[0]
+        cursor = await self._read_conn.execute(
+            """
+            SELECT COUNT(*) FROM nodes n
+            WHERE n.valid_until IS NULL
+              AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.source_id = n.id AND e.valid_until IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.target_id = n.id AND e.valid_until IS NULL)
+            """
+        )
+        orphan_count = (await cursor.fetchone())[0]
+        total_nodes = sum(node_counts.values())
+        total_edges = sum(edge_counts.values())
+        avg_edges = total_edges / total_nodes if total_nodes > 0 else 0.0
+        return {
+            "nodes": node_counts,
+            "edges": edge_counts,
+            "entities": entity_count,
+            "orphan_nodes": orphan_count,
+            "avg_edges_per_node": round(avg_edges, 1),
+        }
+
+    def get_storage_size_mb(self) -> float:
+        """Get database file size in MB."""
+        if not self._db_path or not self._db_path.exists():
+            return 0.0
+        return round(os.path.getsize(self._db_path) / (1024 * 1024), 1)
+
+    async def get_provenance_chain(self, node_id: str) -> dict[str, Any]:
+        """Provenance chain: node, source episodes (derived_from), supersedes/superseded_by, linked entities."""
+        node = await self.get_node(node_id)
+        if not node:
+            return {"node": None, "source_episodes": [], "supersedes": [], "superseded_by": [], "entities": []}
+        source_ids = await self.get_derived_from_targets(node_id)
+        source_episodes = await self.get_nodes_by_ids(source_ids) if source_ids else []
+        supersedes_ids = await self._get_supersedes_targets(node_id)
+        superseded_by_ids = await self._get_supersedes_sources(node_id)
+        supersedes = await self.get_nodes_by_ids(supersedes_ids) if supersedes_ids else []
+        superseded_by = await self.get_nodes_by_ids(superseded_by_ids) if superseded_by_ids else []
+        entities = await self.get_entities_for_nodes([node_id])
+        return {
+            "node": node,
+            "source_episodes": source_episodes,
+            "supersedes": supersedes,
+            "superseded_by": superseded_by,
+            "entities": entities,
+        }
+
+    async def _get_supersedes_targets(self, node_id: str) -> list[str]:
+        """Node IDs that this node supersedes (source_id=node_id, relation_type=supersedes)."""
+        if not self._read_conn:
+            return []
+        cursor = await self._read_conn.execute(
+            "SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'supersedes' AND valid_until IS NULL",
+            (node_id,),
+        )
+        return [r[0] for r in await cursor.fetchall()]
+
+    async def _get_supersedes_sources(self, node_id: str) -> list[str]:
+        """Node IDs that supersede this node (target_id=node_id, relation_type=supersedes)."""
+        if not self._read_conn:
+            return []
+        cursor = await self._read_conn.execute(
+            "SELECT source_id FROM edges WHERE target_id = ? AND relation_type = 'supersedes' AND valid_until IS NULL",
+            (node_id,),
+        )
+        return [r[0] for r in await cursor.fetchall()]
+
+    async def get_weak_nodes(
+        self, threshold: float = 0.3, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Nodes with low confidence (non-episodic), ordered by confidence ASC."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, type, content, confidence, last_accessed
+            FROM nodes
+            WHERE valid_until IS NULL AND type != 'episodic' AND confidence < ?
+            ORDER BY confidence ASC
+            LIMIT ?
+            """,
+            (threshold, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "confidence": r[3],
+                "last_accessed": r[4],
+            }
+            for r in rows
+        ]

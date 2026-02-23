@@ -41,6 +41,8 @@ class MemoryExtension:
         self._ctx: object | None = None
         self._current_session_id: str | None = None
         self._token_budget: int = 2000
+        self._last_consolidation_at: str | None = None
+        self._last_decay_at: str | None = None
 
     @property
     def context_priority(self) -> int:
@@ -77,11 +79,17 @@ class MemoryExtension:
     def get_tools(self) -> list:
         if not self._retrieval or not self._storage:
             return []
+        def get_maintenance_info() -> dict:
+            return {
+                "last_consolidation": self._last_consolidation_at,
+                "last_decay_run": self._last_decay_at,
+            }
         return build_tools(
             retrieval=self._retrieval,
             storage=self._storage,
             embed_fn=self._embed_fn,
             token_budget=self._token_budget,
+            get_maintenance_info=get_maintenance_info,
         )
 
     async def initialize(self, context: object) -> None:
@@ -179,6 +187,9 @@ class MemoryExtension:
             decay_stats = {"decayed": 0, "pruned": 0}
             if self._decay_service:
                 decay_stats = await self._decay_service.apply(self._storage)
+                self._last_decay_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+            self._last_consolidation_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             enrichment_count = await self._enrich_entities()
             causal_count = await self._infer_causal_edges()

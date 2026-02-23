@@ -1200,3 +1200,377 @@ class TestNightlyMaintenance:
         assert "Nightly" in result.get("text", "")
         assert "consolidated" in result.get("text", "").lower()
         assert "decayed" in result.get("text", "").lower() or "pruned" in result.get("text", "").lower()
+
+
+class TestGraphStats:
+    """get_graph_stats, get_storage_size_mb, orphan detection, avg edges per node."""
+
+    @pytest.mark.asyncio
+    async def test_get_graph_stats_counts_by_type(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "episodic",
+            "content": "ep",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+        })
+        storage.insert_node({
+            "type": "semantic",
+            "content": "fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        storage.insert_node({
+            "type": "procedural",
+            "content": "how to",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.3)
+
+        stats = await storage.get_graph_stats()
+        assert stats["nodes"]["episodic"] >= 1
+        assert stats["nodes"]["semantic"] >= 1
+        assert stats["nodes"]["procedural"] >= 1
+        assert stats["nodes"]["opinion"] >= 0 or "opinion" in stats["nodes"]
+
+    @pytest.mark.asyncio
+    async def test_get_graph_stats_orphan_detection(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        orphan_id = storage.insert_node({
+            "type": "semantic",
+            "content": "orphan node",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.3)
+
+        stats = await storage.get_graph_stats()
+        assert stats["orphan_nodes"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_get_graph_stats_avg_edges_per_node(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        a = storage.insert_node({
+            "type": "episodic",
+            "content": "a",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+        })
+        b = storage.insert_node({
+            "type": "episodic",
+            "content": "b",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+            "session_id": "s1",
+        })
+        storage.insert_edge({
+            "source_id": a,
+            "target_id": b,
+            "relation_type": "temporal",
+            "valid_from": now + 1,
+            "created_at": now + 1,
+        })
+        await asyncio.sleep(0.3)
+
+        stats = await storage.get_graph_stats()
+        assert "avg_edges_per_node" in stats
+        assert isinstance(stats["avg_edges_per_node"], (int, float))
+
+    @pytest.mark.asyncio
+    async def test_get_storage_size_mb(self, storage: MemoryStorage, tmp_db) -> None:
+        size = storage.get_storage_size_mb()
+        assert size >= 0.0
+        assert isinstance(size, float)
+
+
+class TestMemoryStatsTool:
+    """memory_stats tool returns formatted output."""
+
+    @pytest.mark.asyncio
+    async def test_memory_stats_contains_sections(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "semantic",
+            "content": "seed fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        stats_tool = tools[5]
+        args = {}
+        result = await stats_tool.on_invoke_tool(
+            _tool_ctx(stats_tool.name, args), __import__("json").dumps(args)
+        )
+        out = str(result)
+        assert "Nodes:" in out
+        assert "Edges:" in out
+        assert "Entities:" in out
+        assert "Orphan nodes:" in out
+        assert "Storage size:" in out
+        assert "Unconsolidated sessions:" in out
+
+
+class TestExplainFactTool:
+    """explain_fact tool: provenance chain traversal."""
+
+    @pytest.mark.asyncio
+    async def test_explain_fact_shows_source_episodes(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        ep1 = storage.insert_node({
+            "type": "episodic",
+            "content": "user said X",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+        })
+        ep2 = storage.insert_node({
+            "type": "episodic",
+            "content": "agent replied Y",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+            "session_id": "s1",
+        })
+        fact_id = storage.insert_node({
+            "type": "semantic",
+            "content": "extracted fact from X and Y",
+            "event_time": now + 2,
+            "created_at": now + 2,
+            "valid_from": now + 2,
+        })
+        storage.insert_edge({
+            "source_id": fact_id,
+            "target_id": ep1,
+            "relation_type": "derived_from",
+            "valid_from": now + 2,
+            "created_at": now + 2,
+        })
+        storage.insert_edge({
+            "source_id": fact_id,
+            "target_id": ep2,
+            "relation_type": "derived_from",
+            "valid_from": now + 2,
+            "created_at": now + 2,
+        })
+        await asyncio.sleep(0.5)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        explain_tool = tools[6]
+        args = {"fact_id": fact_id}
+        result = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
+        )
+        out = str(result)
+        assert "extracted fact" in out
+        assert "Source episodes" in out or "derived_from" in out
+
+    @pytest.mark.asyncio
+    async def test_explain_fact_shows_supersedes_chain(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        old_id = storage.insert_node({
+            "type": "semantic",
+            "content": "old fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        new_id = storage.insert_node({
+            "type": "semantic",
+            "content": "new fact supersedes old",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+        })
+        storage.insert_edge({
+            "source_id": new_id,
+            "target_id": old_id,
+            "relation_type": "supersedes",
+            "valid_from": now + 1,
+            "created_at": now + 1,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        explain_tool = tools[6]
+        args_new = {"fact_id": new_id}
+        result_new = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args_new), __import__("json").dumps(args_new)
+        )
+        out_new = str(result_new)
+        assert "new fact" in out_new
+        assert "Supersedes" in out_new or "supersedes" in out_new or "replaces" in out_new
+        assert "old fact" in out_new
+        args_old = {"fact_id": old_id}
+        result_old = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args_old), __import__("json").dumps(args_old)
+        )
+        out_old = str(result_old)
+        assert "Superseded by" in out_old or "superseded" in out_old.lower()
+
+    @pytest.mark.asyncio
+    async def test_explain_fact_nonexistent(self, storage: MemoryStorage) -> None:
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        explain_tool = tools[6]
+        args = {"fact_id": "nonexistent-fact-id-12345"}
+        result = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "not found" in str(result).lower()
+
+
+class TestWeakFactsTool:
+    """weak_facts tool: low-confidence facts."""
+
+    @pytest.mark.asyncio
+    async def test_weak_facts_returns_low_confidence_only(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "semantic",
+            "content": "high confidence fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "confidence": 1.0,
+        })
+        storage.insert_node({
+            "type": "semantic",
+            "content": "low confidence fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "confidence": 0.2,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        weak_tool = tools[7]
+        args = {"threshold": 0.3, "limit": 10}
+        result = await weak_tool.on_invoke_tool(
+            _tool_ctx(weak_tool.name, args), __import__("json").dumps(args)
+        )
+        out = str(result)
+        assert "low confidence" in out.lower()
+        assert "0.2" in out or "0.20" in out
+        assert "high confidence" not in out
+
+    @pytest.mark.asyncio
+    async def test_weak_facts_excludes_episodic(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "episodic",
+            "content": "episode with low conf",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+            "confidence": 0.1,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        weak_tool = tools[7]
+        args = {"threshold": 0.5, "limit": 10}
+        result = await weak_tool.on_invoke_tool(
+            _tool_ctx(weak_tool.name, args), __import__("json").dumps(args)
+        )
+        out = str(result)
+        assert "episode" not in out or "No facts" in out
+
+    @pytest.mark.asyncio
+    async def test_weak_facts_ordered_by_confidence(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        storage.insert_node({
+            "type": "semantic",
+            "content": "conf 0.25",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "confidence": 0.25,
+        })
+        storage.insert_node({
+            "type": "semantic",
+            "content": "conf 0.1",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "confidence": 0.1,
+        })
+        await asyncio.sleep(0.3)
+
+        nodes = await storage.get_weak_nodes(threshold=0.3, limit=5)
+        assert len(nodes) >= 2
+        confs = [n["confidence"] for n in nodes]
+        assert confs == sorted(confs)

@@ -44,6 +44,7 @@ def build_tools(
     storage: Any,
     embed_fn: Callable[..., Any] | None,
     token_budget: int = 2000,
+    get_maintenance_info: Callable[[], dict] | None = None,
 ) -> list[Any]:
     """Build Orchestrator tools. Phase 2: search, remember, correct, confirm."""
 
@@ -208,8 +209,83 @@ def build_tools(
 
     @function_tool
     async def memory_stats() -> str:
-        """Graph-level memory metrics. Phase 6."""
-        return "memory_stats not yet available (Phase 6)"
+        """Graph-level memory metrics: node/edge counts, entities, data quality indicators."""
+        stats = await storage.get_graph_stats()
+        unconsolidated = await storage.get_unconsolidated_sessions()
+        size_mb = storage.get_storage_size_mb()
+        n = stats["nodes"]
+        e = stats["edges"]
+        lines = [
+            f"Nodes: episodic {n['episodic']}, semantic {n['semantic']}, procedural {n['procedural']}, opinion {n['opinion']}",
+            f"Edges: temporal {e['temporal']}, causal {e['causal']}, entity {e['entity']}, derived_from {e['derived_from']}, supersedes {e['supersedes']}",
+            f"Entities: {stats['entities']}",
+            f"Orphan nodes: {stats['orphan_nodes']}",
+            f"Avg edges/node: {stats['avg_edges_per_node']}",
+            f"Unconsolidated sessions: {len(unconsolidated)}",
+            f"Storage size: {size_mb} MB",
+        ]
+        if get_maintenance_info:
+            maint = get_maintenance_info()
+            if maint.get("last_consolidation"):
+                lines.append(f"Last consolidation: {maint['last_consolidation']}")
+            if maint.get("last_decay_run"):
+                lines.append(f"Last decay run: {maint['last_decay_run']}")
+        return "\n".join(lines)
+
+    @function_tool
+    async def explain_fact(fact_id: str) -> str:
+        """Explain provenance of a fact: source episodes, superseded facts, linked entities."""
+        if not fact_id or not fact_id.strip():
+            return "No fact_id provided."
+        chain = await storage.get_provenance_chain(fact_id.strip())
+        if not chain["node"]:
+            return f"Fact '{fact_id}' not found."
+        lines = ["## Fact"]
+        node = chain["node"]
+        lines.append(f"ID: {node.get('id', '')}")
+        lines.append(f"Type: {node.get('type', '')}")
+        lines.append(f"Content: {node.get('content', '')}")
+        def _trunc(s: str, n: int = 80) -> str:
+            c = (s or "")[:n]
+            return c + "..." if len(s or "") > n else c
+
+        if chain["source_episodes"]:
+            lines.append("\n## Source episodes (derived_from)")
+            for ep in chain["source_episodes"]:
+                lines.append(f"- [{ep.get('id', '')}] {_trunc(ep.get('content', ''))}")
+        if chain["supersedes"]:
+            lines.append("\n## Supersedes (replaces)")
+            for s in chain["supersedes"]:
+                lines.append(f"- [{s.get('id', '')}] {_trunc(s.get('content', ''))}")
+        if chain["superseded_by"]:
+            lines.append("\n## Superseded by")
+            for s in chain["superseded_by"]:
+                lines.append(f"- [{s.get('id', '')}] {_trunc(s.get('content', ''))}")
+        if chain["entities"]:
+            lines.append("\n## Linked entities")
+            for ent in chain["entities"]:
+                lines.append(f"- {ent.get('canonical_name', '')} ({ent.get('type', '')})")
+        if not any([chain["source_episodes"], chain["supersedes"], chain["superseded_by"], chain["entities"]]):
+            lines.append("\n## Provenance")
+            lines.append("No source episodes, supersedes edges, or linked entities.")
+        return "\n".join(lines)
+
+    @function_tool
+    async def weak_facts(threshold: float = 0.3, limit: int = 10) -> str:
+        """List facts with low confidence that may need confirmation or will decay soon."""
+        nodes = await storage.get_weak_nodes(threshold=threshold, limit=limit)
+        if not nodes:
+            return f"No facts with confidence < {threshold}."
+        def _trunc60(s: str) -> str:
+            c = (s or "")[:60]
+            return c + "..." if len(s or "") > 60 else c
+
+        lines = [f"## Low-confidence facts (confidence < {threshold})"]
+        for n in nodes:
+            la = n.get("last_accessed")
+            la_str = str(la) if la else "never"
+            lines.append(f"- [{n.get('id', '')}] {_trunc60(n.get('content', ''))} | conf={n.get('confidence', 0):.2f} | last_accessed={la_str}")
+        return "\n".join(lines)
 
     return [
         search_memory,
@@ -218,4 +294,6 @@ def build_tools(
         confirm_fact,
         get_entity_info,
         memory_stats,
+        explain_fact,
+        weak_facts,
     ]
