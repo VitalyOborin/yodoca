@@ -11,6 +11,7 @@ import pytest
 _memory_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
 sys.path.insert(0, str(_memory_ext))
 
+from agent_tools import build_write_path_tools
 from retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
@@ -393,3 +394,279 @@ class TestRememberCorrectConfirmTools:
         assert old_node is None
         nodes = await storage.fts_search("new corrected fact")
         assert len(nodes) >= 1
+
+
+class TestMemoryStoragePhase3:
+    """Phase 3: get_session_episodes, mark_session_consolidated, entity ops, get_unconsolidated_sessions."""
+
+    @pytest.mark.asyncio
+    async def test_get_session_episodes_paginated(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        storage.ensure_session("sess-ep")
+        await asyncio.sleep(0.2)
+
+        for i in range(5):
+            storage.insert_node({
+                "type": "episodic",
+                "content": f"episode {i}",
+                "event_time": now + i,
+                "created_at": now + i,
+                "valid_from": now + i,
+                "source_role": "user",
+                "session_id": "sess-ep",
+            })
+        await asyncio.sleep(0.5)
+
+        page1 = await storage.get_session_episodes("sess-ep", limit=2, offset=0)
+        assert len(page1) == 2
+        assert page1[0]["content"] == "episode 0"
+        assert page1[1]["content"] == "episode 1"
+
+        page2 = await storage.get_session_episodes("sess-ep", limit=2, offset=2)
+        assert len(page2) == 2
+        assert page2[0]["content"] == "episode 2"
+
+    @pytest.mark.asyncio
+    async def test_mark_session_consolidated_roundtrip(
+        self, storage: MemoryStorage
+    ) -> None:
+        storage.ensure_session("sess-mark")
+        await asyncio.sleep(0.2)
+
+        assert await storage.is_session_consolidated("sess-mark") is False
+        await storage.mark_session_consolidated("sess-mark")
+        await asyncio.sleep(0.2)
+        assert await storage.is_session_consolidated("sess-mark") is True
+
+    @pytest.mark.asyncio
+    async def test_insert_entity_get_by_name_link_node(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "Alice works at Acme",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.2)
+
+        entity_id = await storage.insert_entity({
+            "canonical_name": "Alice",
+            "type": "person",
+            "aliases": ["Alice Smith", "Al"],
+        })
+        assert entity_id
+
+        found = await storage.get_entity_by_name("alice")
+        assert found is not None
+        assert found["canonical_name"] == "Alice"
+        assert found["type"] == "person"
+
+        await storage.link_node_entity(nid, entity_id)
+        await asyncio.sleep(0.2)
+
+        alias_found = await storage.search_entity_by_alias("Al")
+        assert alias_found is not None
+        assert alias_found["canonical_name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_get_unconsolidated_sessions(
+        self, storage: MemoryStorage
+    ) -> None:
+        storage.ensure_session("u1")
+        storage.ensure_session("u2")
+        await asyncio.sleep(0.2)
+
+        uncons = await storage.get_unconsolidated_sessions()
+        assert set(uncons) >= {"u1", "u2"}
+
+        await storage.mark_session_consolidated("u1")
+        await asyncio.sleep(0.2)
+        uncons2 = await storage.get_unconsolidated_sessions()
+        assert "u1" not in uncons2
+        assert "u2" in uncons2
+
+
+class TestWritePathTools:
+    """Write-path agent tools: save_nodes_batch, extract_and_link_entities, resolve_conflict."""
+
+    @pytest.mark.asyncio
+    async def test_save_nodes_batch_creates_derived_from_edges(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        ep1 = storage.insert_node({
+            "type": "episodic",
+            "content": "user said X",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+            "session_id": "s1",
+        })
+        ep2 = storage.insert_node({
+            "type": "episodic",
+            "content": "agent replied Y",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+            "session_id": "s1",
+        })
+        await asyncio.sleep(0.5)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_write_path_tools(
+            storage=storage,
+            retrieval=retrieval,
+            embed_fn=None,
+            embed_batch_fn=None,
+        )
+        save_tool = tools[2]
+        args = {
+            "nodes": [
+                {
+                    "type": "semantic",
+                    "content": "extracted fact from X and Y",
+                    "source_episode_ids": [ep1, ep2],
+                },
+            ],
+        }
+        result = await save_tool.on_invoke_tool(
+            _tool_ctx(save_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "node_ids" in str(result) or "count" in str(result)
+        await asyncio.sleep(0.5)
+
+        nodes = await storage.fts_search("extracted fact", node_types=["semantic"])
+        assert len(nodes) >= 1
+        assert nodes[0]["content"] == "extracted fact from X and Y"
+
+    @pytest.mark.asyncio
+    async def test_extract_and_link_entities_creates_and_links(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        nid = storage.insert_node({
+            "type": "semantic",
+            "content": "Project Alpha is led by Bob",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        await asyncio.sleep(0.2)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_write_path_tools(
+            storage=storage,
+            retrieval=retrieval,
+            embed_fn=None,
+            embed_batch_fn=None,
+        )
+        extract_tool = tools[3]
+        args = {
+            "nodes": [
+                {
+                    "node_id": nid,
+                    "entities": [
+                        {
+                            "canonical_name": "Project Alpha",
+                            "type": "project",
+                            "aliases": ["Alpha"],
+                        },
+                        {
+                            "canonical_name": "Bob",
+                            "type": "person",
+                            "aliases": [],
+                        },
+                    ],
+                },
+            ],
+        }
+        result = await extract_tool.on_invoke_tool(
+            _tool_ctx(extract_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "entities_created" in str(result) or "entities_linked" in str(result)
+        await asyncio.sleep(0.2)
+
+        alpha = await storage.get_entity_by_name("Project Alpha")
+        bob = await storage.get_entity_by_name("Bob")
+        assert alpha is not None
+        assert bob is not None
+
+    @pytest.mark.asyncio
+    async def test_resolve_conflict_soft_deletes_and_supersedes(
+        self, storage: MemoryStorage
+    ) -> None:
+        import time
+
+        now = int(time.time())
+        old_id = storage.insert_node({
+            "type": "semantic",
+            "content": "old conflicting fact",
+            "event_time": now,
+            "created_at": now,
+            "valid_from": now,
+        })
+        new_id = storage.insert_node({
+            "type": "semantic",
+            "content": "new corrected fact",
+            "event_time": now + 1,
+            "created_at": now + 1,
+            "valid_from": now + 1,
+        })
+        await asyncio.sleep(0.3)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_write_path_tools(
+            storage=storage,
+            retrieval=retrieval,
+            embed_fn=None,
+            embed_batch_fn=None,
+        )
+        resolve_tool = tools[5]
+        args = {"old_node_id": old_id, "new_node_id": new_id}
+        result = await resolve_tool.on_invoke_tool(
+            _tool_ctx(resolve_tool.name, args), __import__("json").dumps(args)
+        )
+        assert "resolved" in str(result).lower()
+        await asyncio.sleep(0.3)
+
+        old_node = await storage.get_node(old_id)
+        assert old_node is None
+
+
+class TestConsolidateSessionIdempotency:
+    """_consolidate_session skips already-consolidated sessions."""
+
+    @pytest.mark.asyncio
+    async def test_consolidate_skips_when_already_done(
+        self, storage: MemoryStorage
+    ) -> None:
+        from main import MemoryExtension
+
+        storage.ensure_session("sess-idem")
+        await storage.mark_session_consolidated("sess-idem")
+        await asyncio.sleep(0.2)
+
+        ext = MemoryExtension()
+        ext._storage = storage
+        ext._write_agent = AsyncMock()
+        ext._write_agent.consolidate_session = AsyncMock()
+
+        await ext._consolidate_session("sess-idem")
+
+        ext._write_agent.consolidate_session.assert_not_called()

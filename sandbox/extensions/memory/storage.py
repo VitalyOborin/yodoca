@@ -241,6 +241,73 @@ class MemoryStorage:
         self._submit_write(sql, params)
         return edge_id
 
+    async def insert_edge_awaitable(self, edge: dict[str, Any]) -> str:
+        """Insert edge and await write confirmation. Returns edge_id."""
+        edge_id = edge.get("id") or str(uuid.uuid4())
+        sql = """
+            INSERT INTO edges (
+                id, source_id, target_id, relation_type, predicate,
+                weight, confidence, valid_from, valid_until, evidence, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            edge_id,
+            edge["source_id"],
+            edge["target_id"],
+            edge["relation_type"],
+            edge.get("predicate"),
+            edge.get("weight", 1.0),
+            edge.get("confidence", 1.0),
+            edge["valid_from"],
+            edge.get("valid_until"),
+            json.dumps(edge.get("evidence") or []),
+            edge["created_at"],
+        )
+        future = self._submit_write(sql, params, wait=True)
+        if future:
+            await future
+        return edge_id
+
+    async def insert_nodes_batch(self, nodes: list[dict[str, Any]]) -> list[str]:
+        """Batch insert nodes. Each is awaitable. Returns list of node_ids."""
+        node_ids: list[str] = []
+        futures: list[asyncio.Future[Any]] = []
+        for node in nodes:
+            node_id = node.get("id") or str(uuid.uuid4())
+            node_ids.append(node_id)
+            sql = """
+                INSERT INTO nodes (
+                    id, type, content, embedding,
+                    event_time, created_at, valid_from, valid_until,
+                    confidence, access_count, last_accessed, decay_rate,
+                    source_type, source_role, session_id, attributes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            params = (
+                node_id,
+                node["type"],
+                node["content"],
+                node.get("embedding"),
+                node["event_time"],
+                node["created_at"],
+                node["valid_from"],
+                node.get("valid_until"),
+                node.get("confidence", 1.0),
+                node.get("access_count", 0),
+                node.get("last_accessed"),
+                node.get("decay_rate", 0.1),
+                node.get("source_type"),
+                node.get("source_role"),
+                node.get("session_id"),
+                json.dumps(node.get("attributes") or {}),
+            )
+            future = self._submit_write(sql, params, wait=True)
+            if future:
+                futures.append(future)
+        for f in futures:
+            await f
+        return node_ids
+
     async def get_last_episode_id(self, session_id: str) -> str | None:
         """Get the most recent episodic node id for a session."""
         if self._read_conn is None:
@@ -423,3 +490,161 @@ class MemoryStorage:
         )
         row = await cursor.fetchone()
         return row is not None and row[0] is not None
+
+    async def get_session_episodes(
+        self,
+        session_id: str,
+        *,
+        limit: int = 30,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Paginated fetch of episodic nodes for a session, ordered by event_time ASC."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, type, content, event_time, created_at, confidence, session_id
+            FROM nodes
+            WHERE type = 'episodic' AND session_id = ? AND valid_until IS NULL
+            ORDER BY event_time ASC
+            LIMIT ? OFFSET ?
+            """,
+            (session_id, limit, offset),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+            }
+            for r in rows
+        ]
+
+    async def mark_session_consolidated(self, session_id: str) -> None:
+        """Mark session as consolidated. Awaitable via write queue."""
+        now = int(time.time())
+        future = self._submit_write(
+            "UPDATE sessions_consolidations SET consolidated_at = ? WHERE session_id = ?",
+            (now, session_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def get_unconsolidated_sessions(self) -> list[str]:
+        """Return session_ids where consolidated_at IS NULL. For nightly maintenance."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            "SELECT session_id FROM sessions_consolidations WHERE consolidated_at IS NULL"
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+    async def insert_entity(self, entity: dict[str, Any]) -> str:
+        """Insert entity. Awaitable. Returns entity_id."""
+        entity_id = entity.get("id") or str(uuid.uuid4())
+        now = int(time.time())
+        sql = """
+            INSERT INTO entities (
+                id, canonical_name, type, aliases, summary, embedding,
+                first_seen, last_updated, mention_count, attributes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            entity_id,
+            entity["canonical_name"],
+            entity["type"],
+            json.dumps(entity.get("aliases") or []),
+            entity.get("summary"),
+            entity.get("embedding"),
+            entity.get("first_seen", now),
+            entity.get("last_updated", now),
+            entity.get("mention_count", 1),
+            json.dumps(entity.get("attributes") or {}),
+        )
+        future = self._submit_write(sql, params, wait=True)
+        if future:
+            await future
+        return entity_id
+
+    async def get_entity_by_name(self, canonical_name: str) -> dict[str, Any] | None:
+        """Case-insensitive lookup by canonical_name."""
+        if self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT id, canonical_name, type, aliases, summary, mention_count FROM entities WHERE LOWER(canonical_name) = LOWER(?)",
+            (canonical_name,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "canonical_name": row[1],
+            "type": row[2],
+            "aliases": json.loads(row[3]) if row[3] else [],
+            "summary": row[4],
+            "mention_count": row[5],
+        }
+
+    async def search_entity_by_alias(self, alias: str) -> dict[str, Any] | None:
+        """Search entities by alias in JSON aliases field."""
+        if self._read_conn is None:
+            return None
+        escaped = alias.replace('"', '""')
+        pattern = f'%"{escaped}"%'
+        cursor = await self._read_conn.execute(
+            "SELECT id, canonical_name, type, aliases, summary, mention_count FROM entities WHERE aliases LIKE ?",
+            (pattern,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "canonical_name": row[1],
+            "type": row[2],
+            "aliases": json.loads(row[3]) if row[3] else [],
+            "summary": row[4],
+            "mention_count": row[5],
+        }
+
+    async def link_node_entity(self, node_id: str, entity_id: str) -> None:
+        """Link node to entity via node_entities junction. Awaitable."""
+        future = self._submit_write(
+            "INSERT OR IGNORE INTO node_entities (node_id, entity_id) VALUES (?, ?)",
+            (node_id, entity_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def update_entity(
+        self, entity_id: str, fields: dict[str, Any]
+    ) -> None:
+        """Partial update of entity fields. Awaitable."""
+        allowed = {"summary", "embedding", "mention_count", "last_updated", "aliases"}
+        params_list: list[Any] = []
+        set_parts: list[str] = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            set_parts.append(f"{k} = ?")
+            params_list.append(
+                json.dumps(v) if k == "aliases" and isinstance(v, list) else v
+            )
+        if not set_parts:
+            return
+        set_clause = ", ".join(set_parts)
+        params = tuple(params_list) + (entity_id,)
+        future = self._submit_write(
+            f"UPDATE entities SET {set_clause} WHERE id = ?", params, wait=True
+        )
+        if future:
+            await future

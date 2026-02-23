@@ -13,6 +13,8 @@ _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
+from agent import create_memory_agent
+from agent_tools import build_write_path_tools
 from retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
@@ -33,6 +35,7 @@ class MemoryExtension:
         self._storage: MemoryStorage | None = None
         self._retrieval: MemoryRetrieval | None = None
         self._embed_fn: object | None = None
+        self._write_agent: object | None = None
         self._ctx: object | None = None
         self._current_session_id: str | None = None
         self._token_budget: int = 2000
@@ -108,6 +111,30 @@ class MemoryExtension:
             rrf_weight_vector=context.get_config("rrf_weight_vector", 1.0),
         )
 
+        self._write_agent = None
+        if context.model_router:
+            try:
+                model = context.model_router.get_model("memory_agent")
+                embed_batch_fn = None
+                if embedding_ext and hasattr(embedding_ext, "embed_batch"):
+                    dims = context.get_config("embedding_dimensions", 256)
+                    embed_batch_fn = lambda texts: embedding_ext.embed_batch(
+                        texts, dimensions=dims
+                    )
+                write_tools = build_write_path_tools(
+                    storage=self._storage,
+                    retrieval=self._retrieval,
+                    embed_fn=self._embed_fn,
+                    embed_batch_fn=embed_batch_fn,
+                )
+                self._write_agent = create_memory_agent(
+                    model=model,
+                    tools=write_tools,
+                    extension_dir=_ext_dir,
+                )
+            except Exception as e:
+                logger.warning("Write-path agent unavailable: %s", e)
+
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
@@ -126,15 +153,20 @@ class MemoryExtension:
             await self._storage.close()
             self._storage = None
             self._retrieval = None
+        self._write_agent = None
 
     def health_check(self) -> bool:
         return self._storage is not None
 
     async def execute_task(self, task_name: str) -> dict | None:
-        """SchedulerProvider. Phase 1: stub."""
+        """SchedulerProvider. Nightly maintenance: consolidate pending sessions."""
         if task_name == "run_nightly_maintenance":
-            logger.info("nightly_maintenance not yet implemented (Phase 3+5)")
-            return None
+            if not self._storage:
+                return None
+            unconsolidated = await self._storage.get_unconsolidated_sessions()
+            for sid in unconsolidated:
+                await self._consolidate_session(sid)
+            return {"text": f"Nightly maintenance: consolidated {len(unconsolidated)} sessions"}
         return None
 
     async def _on_user_message(self, data: dict) -> None:
@@ -231,5 +263,14 @@ class MemoryExtension:
             asyncio.create_task(self._consolidate_session(session_id))
 
     async def _consolidate_session(self, session_id: str) -> None:
-        """Consolidate session. Phase 1: stub."""
-        logger.info("consolidate_session stub for %s (Phase 3)", session_id)
+        """Consolidate session via write-path agent."""
+        if not self._write_agent or not self._storage:
+            logger.info("consolidate_session skipped (no write agent): %s", session_id)
+            return
+        if await self._storage.is_session_consolidated(session_id):
+            return
+        try:
+            result = await self._write_agent.consolidate_session(session_id)
+            logger.info("Session %s consolidated: %s", session_id, result)
+        except Exception as e:
+            logger.exception("consolidate_session failed for %s: %s", session_id, e)
