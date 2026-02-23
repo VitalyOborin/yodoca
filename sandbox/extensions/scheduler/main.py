@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import aiosqlite
 from pydantic import Field
@@ -377,58 +377,90 @@ class SchedulerExtension:
         store = self._store
         ctx = self._ctx
 
-        @function_tool(name_override="schedule_once")
+        @function_tool(name_override="schedule_once", strict_mode=False)
         async def schedule_once(
-            topic: str,
-            payload_json: str,
-            delay_seconds: Annotated[float | None, Field(default=None, gt=0)] = None,
+            topic: str = Field(
+                ...,
+                description=(
+                    "Event topic. Use 'system.user.notify' to send a message to the user, "
+                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
+                    "'system.agent.background' for maintenance tasks without user response."
+                ),
+            ),
+            message: str = Field(
+                ...,
+                description=(
+                    "Text message (for system.user.notify) or prompt instruction "
+                    "(for system.agent.task / system.agent.background)."
+                ),
+            ),
+            channel_id: str | None = None,
+            payload_extra_json: str | None = None,
+            delay_seconds: int | None = None,
             at_iso: str | None = None,
         ) -> str:
             """Schedule a one-shot event to fire once.
 
             Provide exactly one of: delay_seconds (seconds from now) or at_iso (ISO 8601 datetime).
 
-            Payload contracts for system topics:
-            - system.user.notify: use key "text" for static messages known at scheduling time.
-              Example: payload_json='{"text": "<ready message>", "channel_id": null}'
-            - system.agent.task: use key "prompt" for dynamic content, decisions, anything requiring reasoning at fire time.
-              Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
-            - system.agent.background: use key "prompt" for maintenance, analysis; no user response needed.
-              Example: payload_json='{"prompt": "<quiet task>"}'
-
             Args:
-                topic: Event topic (e.g. system.user.notify, system.agent.task).
-                payload_json: JSON string payload. For system.user.notify use {"text": "..."}.
-                delay_seconds: Seconds from now until fire. Mutually exclusive with at_iso.
-                at_iso: ISO 8601 datetime (e.g. 2025-02-21T10:00:00). Mutually exclusive with delay_seconds.
+                channel_id: Optional delivery channel ID (e.g. 'telegram_channel'). If null, uses the default channel.
+                payload_extra_json: Optional JSON string payload for custom (non-system) topics only.
+                delay_seconds: Seconds from now until fire (positive number). Mutually exclusive with at_iso.
+                at_iso: ISO 8601 datetime (e.g. '2025-02-21T10:00:00'). Mutually exclusive with delay_seconds.
             """
             if (delay_seconds is None) == (at_iso is None):
                 return "Error: provide exactly one of delay_seconds or at_iso."
             if delay_seconds is not None and delay_seconds <= 0:
                 return "Error: delay_seconds must be positive."
-            try:
-                payload = json.loads(payload_json)
-            except json.JSONDecodeError as e:
-                return f"Error: invalid payload_json: {e}"
+
+            if topic == "system.user.notify":
+                payload: dict[str, Any] = {"text": message}
+            elif topic in ("system.agent.task", "system.agent.background"):
+                payload = {"prompt": message}
+            elif payload_extra_json:
+                try:
+                    payload = json.loads(payload_extra_json)
+                except json.JSONDecodeError as e:
+                    return f"Error: invalid payload_extra_json: {e}"
+            else:
+                payload = {"message": message}
+            if channel_id:
+                payload["channel_id"] = channel_id
+
             if at_iso:
                 try:
                     dt = datetime.fromisoformat(at_iso.replace("Z", "+00:00"))
                     fire_at = dt.timestamp()
                 except (ValueError, TypeError):
-                    return "Error: invalid at_iso format. Use ISO 8601 (e.g. 2025-02-21T10:00:00)."
+                    return "Error: invalid at_iso format. Use ISO 8601 (e.g. '2025-02-21T10:00:00')."
                 if fire_at <= time.time():
                     return "Error: at_iso must be in the future."
-                delay = fire_at - time.time()
             else:
-                delay = delay_seconds
-            fire_at = time.time() + delay
-            row_id = await store.insert_one_shot(topic, payload_json, fire_at)
-            return f"Scheduled one-shot #{row_id}: topic={topic}, fires in {int(delay)}s."
+                fire_at = time.time() + delay_seconds  # type: ignore[operator]
 
-        @function_tool(name_override="schedule_recurring")
+            row_id = await store.insert_one_shot(topic, json.dumps(payload), fire_at)
+            return f"Scheduled one-shot #{row_id}: topic={topic}, fires in {int(fire_at - time.time())}s."
+
+        @function_tool(name_override="schedule_recurring", strict_mode=False)
         async def schedule_recurring(
-            topic: str,
-            payload_json: str,
+            topic: str = Field(
+                ...,
+                description=(
+                    "Event topic. Use 'system.user.notify' to send a message to the user, "
+                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
+                    "'system.agent.background' for maintenance tasks without user response."
+                ),
+            ),
+            message: str = Field(
+                ...,
+                description=(
+                    "Text message (for system.user.notify) or prompt instruction "
+                    "(for system.agent.task / system.agent.background)."
+                ),
+            ),
+            channel_id: str | None = None,
+            payload_extra_json: str | None = None,
             cron: str | None = None,
             every_seconds: float | None = None,
             until_iso: str | None = None,
@@ -437,27 +469,30 @@ class SchedulerExtension:
 
             Provide exactly one of: cron (e.g. '0 9 * * *') or every_seconds. Optionally set until_iso for end datetime.
 
-            Payload contracts for system topics:
-            - system.user.notify: use key "text" for static messages known at scheduling time.
-              Example: payload_json='{"text": "<ready message>", "channel_id": null}'
-            - system.agent.task: use key "prompt" for dynamic content, decisions, anything requiring reasoning at fire time.
-              Example: payload_json='{"prompt": "Tell the user current time in HH:MM", "channel_id": null}'
-            - system.agent.background: use key "prompt" for maintenance, analysis; no user response needed.
-              Example: payload_json='{"prompt": "<quiet task>"}'
-
             Args:
-                topic: Event topic (e.g. system.user.notify, system.agent.task).
-                payload_json: JSON string payload. For system.user.notify use {"text": "..."}.
+                channel_id: Optional delivery channel ID (e.g. 'telegram_channel'). If null, uses the default channel.
+                payload_extra_json: Optional JSON string payload for custom (non-system) topics only.
                 cron: Cron expression (e.g. '0 9 * * *' for daily at 9:00). Mutually exclusive with every_seconds.
-                every_seconds: Interval in seconds. Mutually exclusive with cron.
+                every_seconds: Interval in seconds (positive number). Mutually exclusive with cron.
                 until_iso: Optional ISO 8601 end datetime. Schedule stops after this time.
             """
             if (cron is None or not cron.strip()) == (every_seconds is None or every_seconds <= 0):
                 return "Error: provide exactly one of cron or every_seconds (positive)."
-            try:
-                payload = json.loads(payload_json)
-            except json.JSONDecodeError as e:
-                return f"Error: invalid payload_json: {e}"
+
+            if topic == "system.user.notify":
+                payload: dict[str, Any] = {"text": message}
+            elif topic in ("system.agent.task", "system.agent.background"):
+                payload = {"prompt": message}
+            elif payload_extra_json:
+                try:
+                    payload = json.loads(payload_extra_json)
+                except json.JSONDecodeError as e:
+                    return f"Error: invalid payload_extra_json: {e}"
+            else:
+                payload = {"message": message}
+            if channel_id:
+                payload["channel_id"] = channel_id
+
             if cron:
                 try:
                     c = croniter(cron.strip(), time.time())
@@ -465,7 +500,8 @@ class SchedulerExtension:
                 except (ValueError, KeyError) as e:
                     return f"Error: invalid cron expression: {e}"
             else:
-                next_fire = time.time() + every_seconds
+                next_fire = time.time() + every_seconds  # type: ignore[operator]
+
             until_at: float | None = None
             if until_iso:
                 try:
@@ -475,9 +511,10 @@ class SchedulerExtension:
                     return "Error: invalid until_iso format."
                 if until_at <= time.time():
                     return "Error: until_iso must be in the future."
+
             row_id = await store.insert_recurring(
                 topic,
-                payload_json,
+                json.dumps(payload),
                 cron.strip() if cron else None,
                 every_seconds if every_seconds else None,
                 until_at,
@@ -530,7 +567,7 @@ class SchedulerExtension:
                 await store.cancel_recurring(schedule_id)
             return f"Schedule #{schedule_id} cancelled."
 
-        @function_tool(name_override="update_recurring_schedule")
+        @function_tool(name_override="update_recurring_schedule", strict_mode=False)
         async def update_recurring_schedule(
             schedule_id: int,
             cron: str | None = None,

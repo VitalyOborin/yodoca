@@ -13,6 +13,7 @@ agents:
     provider: lm_studio # openai # lm_studio
     model: zai-org/glm-4.7-flash # gpt-5.2 # zai-org/glm-4.7-flash
     instructions: prompts/orchestrator.jinja2
+    max_tokens: 4096  # или больше
 
 providers:
   openai:
