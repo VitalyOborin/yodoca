@@ -32,6 +32,23 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 
 ---
 
+## Streaming
+
+Channels can optionally implement **StreamingChannelProvider** (in addition to `ChannelProvider`) to receive incremental response delivery instead of a single complete message. The kernel detects streaming via `isinstance(channel, StreamingChannelProvider)` and branches in `handle_user_message()`: streaming channels get token-by-token chunks and status updates; non-streaming channels get the same behaviour as before (`invoke_agent()` then `send_to_user()`).
+
+**Protocol** (`core/extensions/contract.py`):
+
+| Method | When | Purpose |
+|--------|------|---------|
+| `on_stream_start(user_id)` | Before agent run | Typing indicator, placeholder message |
+| `on_stream_chunk(user_id, chunk)` | Each text delta | Append to buffer or display |
+| `on_stream_status(user_id, status)` | Tool call / handoff | e.g. "Using: search_memory" |
+| `on_stream_end(user_id, full_text)` | After completion | Final message, cleanup |
+
+**Lifecycle:** `on_stream_start` → zero or more `on_stream_chunk` / `on_stream_status` → `on_stream_end`. The kernel holds the agent lock for the whole stream; `agent_response` is emitted after the stream ends with the full text. See [ADR 010](adr/010-streaming.md).
+
+---
+
 ## CLI Channel
 
 **Location:** `sandbox/extensions/cli_channel/`
@@ -44,8 +61,9 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 - Emits `user.message` with `user_id="cli_user"`, `channel_id=extension_id`
 - `send_to_user` prints to stdout
 - Handles `EOFError`/`KeyboardInterrupt` for clean shutdown
+- **Streaming:** Implements `StreamingChannelProvider`. When `streaming_enabled` is true, prints chunks as they arrive; `on_stream_status` prints e.g. `[Using: tool_name]`. When disabled, buffers and prints once at `on_stream_end` (useful for debugging).
 
-**Configuration:** None. No secrets. Enable in manifest.
+**Configuration:** Optional `config.streaming_enabled` (default `true`). No secrets. Enable in manifest.
 
 **Use case:** Local development, quick testing without external services.
 
@@ -55,7 +73,7 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 
 **Location:** `sandbox/extensions/telegram_channel/`
 
-**Roles:** ChannelProvider + ServiceProvider (aiogram long-polling)
+**Roles:** ChannelProvider + ServiceProvider (aiogram long-polling); optionally **StreamingChannelProvider**
 
 **Behaviour:**
 
@@ -65,6 +83,7 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 - Token validated via `aiogram.utils.token.validate_token` on initialize
 - Default parse mode: HTML (`DefaultBotProperties(parse_mode=ParseMode.HTML)`)
 - `send_to_user` sends via `bot.send_message(chat_id, text)`; also verifies `user_id == chat_id`
+- **Streaming:** Implements `StreamingChannelProvider`. Simulates streaming by sending an initial "..." message, then editing it as chunks arrive (debounced by `stream_edit_interval_ms` and `stream_min_chunk_chars` to respect Telegram rate limits). Shows a **typing indicator** at stream start and repeats `send_chat_action(chat_id, "typing")` every 4 seconds in a background task until the response is complete. Per-user stream state (`message_id`, buffer, typing task) supports multi-user readiness.
 
 **Dependencies:** `kv` extension (required in `depends_on`)
 
@@ -80,6 +99,9 @@ Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and re
 | Key | Default | Description |
 |-----|---------|-------------|
 | `config.polling_timeout` | 30 | Long-polling timeout in seconds |
+| `config.streaming_enabled` | true | Use streaming (edit message + typing) when true |
+| `config.stream_edit_interval_ms` | 500 | Min interval between message edits (ms) |
+| `config.stream_min_chunk_chars` | 20 | Min characters before an edit |
 
 **Setup:**
 
@@ -138,7 +160,8 @@ User types in CLI or sends Telegram message
 
 1. Create `sandbox/extensions/my_channel/` with `manifest.yaml` and `main.py`
 2. Implement `ChannelProvider`: both `send_to_user` (reactive replies) and `send_message` (proactive delivery)
-3. In `start()` or `run_background()`, receive user input and emit:
+3. Optionally implement **StreamingChannelProvider** (`on_stream_start`, `on_stream_chunk`, `on_stream_status`, `on_stream_end`) for incremental delivery. The kernel uses streaming only when the channel implements this protocol; otherwise it uses `invoke_agent()` and `send_to_user()`.
+4. In `start()` or `run_background()`, receive user input and emit:
 
    ```python
    await self._ctx.emit("user.message", {
@@ -148,7 +171,7 @@ User types in CLI or sends Telegram message
    })
    ```
 
-4. Register as ChannelProvider (Loader detects via `isinstance`)
+5. Loader detects ChannelProvider (and optionally StreamingChannelProvider) via `isinstance`
 
 ---
 
@@ -157,3 +180,4 @@ User types in CLI or sends Telegram message
 - [extensions.md](extensions.md) — Extension architecture
 - [event_bus.md](event_bus.md) — Event Bus and `user.message` topic
 - [ADR 007](adr/007-user-channel-selector.md) — Agent-driven channel selection
+- [ADR 010](adr/010-streaming.md) — Streaming response delivery (protocol, router, channels)

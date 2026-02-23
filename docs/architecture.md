@@ -103,6 +103,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
 | `Extension` (base) | `initialize`, `start`, `stop`, `destroy`, `health_check` | Lifecycle |
 | `ToolProvider` | `get_tools()` | Provides `@function_tool` objects for the agent |
 | `ChannelProvider` | `send_to_user(user_id, message)`, `send_message(text)` | User communication channel |
+| `StreamingChannelProvider` | `on_stream_start`, `on_stream_chunk`, `on_stream_status`, `on_stream_end` | Incremental response delivery (optional; see [ADR 010](adr/010-streaming.md)) |
 | `AgentProvider` | `get_agent_descriptor()`, `invoke(task, context)` | Specialized AI agent |
 | `SchedulerProvider` | `execute_task(task_name)` | Cron-driven periodic tasks |
 | `ServiceProvider` | `run_background()` | Long-running background service |
@@ -128,6 +129,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/extensions/router.py`
 - **Role:** Routes user messages to the Orchestrator; delivers responses to channels. In-memory pub/sub for `user_message` and `agent_response`. ContextProvider middleware enriches prompts before agent invocation.
 - **Key details:** `asyncio.Lock` serializes concurrent agent invocations; `SQLiteSession` stores conversation history; `notify_user()` enables proactive messages.
+- **Streaming:** If the channel implements `StreamingChannelProvider`, `handle_user_message()` uses `invoke_agent_streamed()` and calls the channel's stream lifecycle (`on_stream_start` → `on_stream_chunk` / `on_stream_status` → `on_stream_end`). Otherwise it uses `invoke_agent()` and `send_to_user()` as before. See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
 
 ### Core Tools
 
@@ -170,14 +172,22 @@ EventBus  (journal → dispatch)
   ▼
 router.handle_user_message(text, user_id, channel)
   ├─ _emit("user_message")                → Memory.save_episode (subscriber)
-  ├─ invoke_agent(text)
-  │    ├─ invoke_middleware(prompt)         → ContextProvider chain (Memory.get_context)
-  │    └─ Runner.run(agent, prompt, session=SQLiteSession)
+  ├─ if channel is StreamingChannelProvider:
+  │    ├─ channel.on_stream_start(user_id)
+  │    ├─ invoke_agent_streamed(text, on_chunk, on_tool_call)
+  │    │    ├─ invoke_middleware(prompt)
+  │    │    └─ Runner.run_streamed() → on_chunk (deltas), on_tool_call (tool name)
+  │    └─ channel.on_stream_end(user_id, full_text)
+  ├─ else:
+  │    ├─ invoke_agent(text)
+  │    │    ├─ invoke_middleware(prompt)   → ContextProvider chain (Memory.get_context)
+  │    │    └─ Runner.run(agent, prompt, session=SQLiteSession)
+  │    └─ channel.send_to_user(user_id, response)
   ├─ _emit("agent_response")              → Memory.save_episode (subscriber)
-  └─ channel.send_to_user(user_id, response)
+  └─ (response already delivered by channel)
 ```
 
-See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow.
+See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [ADR 010](adr/010-streaming.md) for streaming design.
 
 ---
 

@@ -40,6 +40,8 @@ Documentation for the assistant4 AI agent platform.
 | [006](adr/006-mcp-extension.md) | MCP Extension |
 | [007](adr/007-user-channel-selector.md) | Agent-Driven Channel Selection |
 | [008](adr/008-memory-v2.md) | Memory v2: Graph-Based Cognitive Memory |
+| [009](adr/009-memory-timestamp-output-format.md) | Memory Timestamp Output Format |
+| [010](adr/010-streaming.md) | Streaming Response Delivery |
 
 ---
 

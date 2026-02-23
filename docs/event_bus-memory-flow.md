@@ -38,9 +38,11 @@ Memory integrates via **two subscription mechanisms**:
 │                                                                                    │
 │   1. Check session timeout → _rotate_session() if inactivity exceeded              │
 │   2. _emit("user_message", {text, user_id, channel, session_id})  ──► Memory       │
-│   3. invoke_agent(text)  [with ContextProvider middleware: Memory.get_context()]   │
+│   3. If channel is StreamingChannelProvider:                                       │
+│        channel.on_stream_start → invoke_agent_streamed(on_chunk, on_tool_call)      │
+│        → channel.on_stream_end(full_text)                                           │
+│      Else: invoke_agent(text) → channel.send_to_user(user_id, response)             │
 │   4. _emit("agent_response", {text, agent_id, ...})  ──► Memory                    │
-│   5. channel.send_to_user(user_id, response)                                       │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,9 +61,9 @@ Memory integrates via **two subscription mechanisms**:
 
 5. **MessageRouter** — `handle_user_message()`:
    - Emits `user_message` to MessageRouter subscribers (in-memory, synchronous)
-   - Invokes the agent (with context injection middleware)
-   - Emits `agent_response` to MessageRouter subscribers
-   - Sends the response to the user via the channel
+   - If the channel implements `StreamingChannelProvider`, uses the streaming path: `on_stream_start` → `invoke_agent_streamed()` (callbacks push chunks and tool status to the channel) → `on_stream_end`. Otherwise invokes the agent and calls `channel.send_to_user()`.
+   - Emits `agent_response` to MessageRouter subscribers (with full response text in both paths)
+   - Response is already delivered by the channel (streaming or non-streaming)
 
 6. **Memory ingestion** — Memory subscribes in `initialize()`:
    ```python

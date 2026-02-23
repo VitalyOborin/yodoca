@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
 
 
+# Typing action is shown for 5 seconds; repeat every 4 seconds while agent is working.
+TYPING_HEARTBEAT_INTERVAL_SEC = 4
+
+
 @dataclass
 class StreamState:
     """Active stream state for a Telegram user."""
@@ -22,6 +26,7 @@ class StreamState:
     message_id: int
     buffer: str = ""
     last_edit_at: float = 0.0
+    typing_task: asyncio.Task[None] | None = None
 
 
 class TelegramChannelExtension:
@@ -199,12 +204,33 @@ class TelegramChannelExtension:
                 except Exception:
                     pass
 
+    async def _typing_heartbeat(self) -> None:
+        """Send typing action every 4 seconds (Telegram shows it for 5s). Run as task until cancelled."""
+        try:
+            while True:
+                await asyncio.sleep(TYPING_HEARTBEAT_INTERVAL_SEC)
+                if not self._bot or not self._chat_id:
+                    break
+                try:
+                    await self._bot.send_chat_action(
+                        chat_id=self._chat_id, action="typing"
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            pass
+
     async def on_stream_start(self, user_id: str) -> None:
         if not self._streaming_enabled or not self._bot:
             return
         try:
+            await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
             message = await self._bot.send_message(chat_id=self._chat_id, text="...")
-            self._streams[user_id] = StreamState(message_id=message.message_id, last_edit_at=0.0)
+            state = StreamState(message_id=message.message_id, last_edit_at=0.0)
+            state.typing_task = asyncio.create_task(self._typing_heartbeat())
+            self._streams[user_id] = state
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception(
@@ -253,6 +279,12 @@ class TelegramChannelExtension:
         state = self._streams.pop(user_id, None)
         if not state:
             return
+        if state.typing_task is not None:
+            state.typing_task.cancel()
+            try:
+                await state.typing_task
+            except asyncio.CancelledError:
+                pass
         try:
             await self._bot.edit_message_text(
                 chat_id=self._chat_id,

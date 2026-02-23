@@ -106,6 +106,19 @@ async def send_message(self, message: str) -> None:
 
 Loader registers channels in `MessageRouter`. `notify_user(text, channel_id)` routes to the specified channel or the default one. For proactive delivery, the kernel calls `send_message(text)` — the channel handles addressing internally.
 
+### `StreamingChannelProvider` (optional, for channels)
+
+Channels can implement this protocol **in addition to** `ChannelProvider` to receive incremental response delivery. The kernel uses `Runner.run_streamed()` and calls the channel's lifecycle methods instead of `send_to_user()` once at the end.
+
+```python
+async def on_stream_start(self, user_id: str) -> None: ...
+async def on_stream_chunk(self, user_id: str, chunk: str) -> None: ...
+async def on_stream_status(self, user_id: str, status: str) -> None: ...
+async def on_stream_end(self, user_id: str, full_text: str) -> None: ...
+```
+
+See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
+
 ### `AgentProvider`
 
 Specialized AI agent. Can be exposed as a **tool** (Orchestrator calls it) or **handoff** (future: direct routing).
@@ -289,6 +302,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | Method | Description |
 |--------|-------------|
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
+| `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
 | `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain without invoking agent |
 | `on_user_message` | Alias for `router.handle_user_message` (full message cycle) |
 
