@@ -38,6 +38,44 @@ class EmbeddingExtension:
             logger.warning("Embedding failed: %s", e)
             return None
 
+    async def embed_batch(
+        self,
+        texts: list[str],
+        *,
+        model: str | None = None,
+        dimensions: int | None = None,
+    ) -> list[list[float] | None]:
+        """Batch-embed multiple texts in a single API call.
+
+        Returns a list parallel to texts: each element is an embedding vector or
+        None if that specific text was empty / failed.
+        Falls back to sequential embed() calls if the batch API fails.
+        """
+        if not self._client or not texts:
+            return [None] * len(texts)
+        cleaned = [t.strip() if t else "" for t in texts]
+        non_empty = [(i, t) for i, t in enumerate(cleaned) if t]
+        if not non_empty:
+            return [None] * len(texts)
+        try:
+            resp = await self._client.embeddings.create(
+                model=model or self._default_model,
+                input=[t for _, t in non_empty],
+                dimensions=dimensions or self._default_dimensions,
+            )
+            result: list[list[float] | None] = [None] * len(texts)
+            for emb_data, (orig_idx, _) in zip(resp.data, non_empty):
+                result[orig_idx] = list(emb_data.embedding)
+            return result
+        except Exception as e:
+            logger.warning(
+                "Batch embedding failed, falling back to sequential: %s", e
+            )
+            return [
+                await self.embed(t, model=model, dimensions=dimensions)
+                for t in texts
+            ]
+
     # --- Lifecycle ---
 
     async def initialize(self, context: Any) -> None:

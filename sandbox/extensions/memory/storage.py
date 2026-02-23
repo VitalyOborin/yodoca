@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,14 @@ class MemoryStorage:
         await self._write_conn.commit()
 
         self._read_conn = await aiosqlite.connect(str(self._db_path))
+        await self._read_conn.enable_load_extension(True)
+        try:
+            import sqlite_vec
+
+            await self._read_conn.load_extension(sqlite_vec.loadable_path())
+        except Exception:
+            pass
+        await self._read_conn.enable_load_extension(False)
         await self._read_conn.execute("PRAGMA query_only=ON")
 
         self._writer_task = asyncio.create_task(self._writer_loop())
@@ -150,6 +159,63 @@ class MemoryStorage:
         self._submit_write(sql, params)
         return node_id
 
+    async def insert_node_awaitable(self, node: dict[str, Any]) -> str:
+        """Insert node and await write confirmation. Returns node_id."""
+        node_id = node.get("id") or str(uuid.uuid4())
+        sql = """
+            INSERT INTO nodes (
+                id, type, content, embedding,
+                event_time, created_at, valid_from, valid_until,
+                confidence, access_count, last_accessed, decay_rate,
+                source_type, source_role, session_id, attributes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            node_id,
+            node["type"],
+            node["content"],
+            node.get("embedding"),
+            node["event_time"],
+            node["created_at"],
+            node["valid_from"],
+            node.get("valid_until"),
+            node.get("confidence", 1.0),
+            node.get("access_count", 0),
+            node.get("last_accessed"),
+            node.get("decay_rate", 0.1),
+            node.get("source_type"),
+            node.get("source_role"),
+            node.get("session_id"),
+            json.dumps(node.get("attributes") or {}),
+        )
+        future = self._submit_write(sql, params, wait=True)
+        if future:
+            await future
+        return node_id
+
+    async def soft_delete_node(self, node_id: str) -> None:
+        """Soft-delete node: set valid_until = now."""
+        now = int(time.time())
+        future = self._submit_write(
+            "UPDATE nodes SET valid_until = ? WHERE id = ?", (now, node_id), wait=True
+        )
+        if future:
+            await future
+
+    async def update_node_fields(self, node_id: str, fields: dict[str, Any]) -> None:
+        """Partial update of node fields (confidence, decay_rate, etc.)."""
+        allowed = {"confidence", "decay_rate", "access_count", "last_accessed"}
+        updates = [(k, v) for k, v in fields.items() if k in allowed]
+        if not updates:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k, _ in updates)
+        params = tuple(v for _, v in updates) + (node_id,)
+        future = self._submit_write(
+            f"UPDATE nodes SET {set_clause} WHERE id = ?", params, wait=True
+        )
+        if future:
+            await future
+
     def insert_edge(self, edge: dict[str, Any]) -> str:
         """Insert edge. Fire-and-forget. Returns edge_id."""
         edge_id = edge.get("id") or str(uuid.uuid4())
@@ -235,6 +301,82 @@ class MemoryStorage:
                 "created_at": r[4],
                 "confidence": r[5],
                 "session_id": r[6],
+            }
+            for r in rows
+        ]
+
+    def _serialize_embedding(self, embedding: list[float]) -> bytes:
+        """Serialize float list to BLOB for sqlite-vec."""
+        try:
+            import sqlite_vec
+
+            return sqlite_vec.serialize_float32(embedding)
+        except ImportError:
+            import struct
+
+            return struct.pack("%sf" % len(embedding), *embedding)
+
+    async def save_embedding(self, node_id: str, embedding: list[float]) -> None:
+        """Update node embedding and vec_nodes. Awaitable via write queue."""
+        blob = self._serialize_embedding(embedding)
+        f1 = self._submit_write(
+            "UPDATE nodes SET embedding = ? WHERE id = ?", (blob, node_id), wait=True
+        )
+        f2 = self._submit_write(
+            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+            (node_id, blob),
+            wait=True,
+        )
+        if f1:
+            await f1
+        if f2:
+            await f2
+
+    async def vector_search(
+        self,
+        query_embedding: list[float],
+        *,
+        node_types: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """KNN search via vec_nodes MATCH. Returns same shape as fts_search plus distance."""
+        if self._read_conn is None:
+            return []
+        blob = self._serialize_embedding(query_embedding)
+        type_filter = ""
+        inner_limit = limit * 5 if node_types else limit
+        params: list[Any] = [blob, inner_limit]
+        if node_types:
+            placeholders = ",".join("?" * len(node_types))
+            type_filter = f" AND n.type IN ({placeholders})"
+            params = [blob, inner_limit] + list(node_types) + [limit]
+        else:
+            params = [blob, inner_limit, limit]
+        sql = f"""
+            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.session_id, v.distance
+            FROM (
+                SELECT node_id, distance FROM vec_nodes
+                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+            ) v
+            INNER JOIN nodes n ON n.id = v.node_id
+            WHERE n.valid_until IS NULL
+              {type_filter}
+            ORDER BY v.distance
+            LIMIT ?
+        """
+        cursor = await self._read_conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "type": r[1],
+                "content": r[2],
+                "event_time": r[3],
+                "created_at": r[4],
+                "confidence": r[5],
+                "session_id": r[6],
+                "distance": r[7],
             }
             for r in rows
         ]

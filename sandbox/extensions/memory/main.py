@@ -14,6 +14,7 @@ if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
 from retrieval import (
+    EmbeddingIntentClassifier,
     KeywordIntentClassifier,
     MemoryRetrieval,
     classify_query_complexity,
@@ -31,6 +32,7 @@ class MemoryExtension:
     def __init__(self) -> None:
         self._storage: MemoryStorage | None = None
         self._retrieval: MemoryRetrieval | None = None
+        self._embed_fn: object | None = None
         self._ctx: object | None = None
         self._current_session_id: str | None = None
         self._token_budget: int = 2000
@@ -45,13 +47,17 @@ class MemoryExtension:
         *,
         agent_id: str | None = None,
     ) -> str | None:
-        """Return relevant memory context. Phase 1: FTS5 only."""
+        """Return relevant memory context. Hybrid FTS5 + vector with RRF."""
         if not self._retrieval:
             return None
         complexity = classify_query_complexity(prompt)
         params = get_adaptive_params(complexity)
+        query_embedding = None
+        if self._embed_fn:
+            query_embedding = await self._embed_fn(prompt)
         results = await self._retrieval.search(
             prompt,
+            query_embedding=query_embedding,
             limit=params["limit"],
             token_budget=params["token_budget"],
         )
@@ -63,9 +69,14 @@ class MemoryExtension:
         )
 
     def get_tools(self) -> list:
-        if not self._retrieval:
+        if not self._retrieval or not self._storage:
             return []
-        return build_tools(self._retrieval, token_budget=self._token_budget)
+        return build_tools(
+            retrieval=self._retrieval,
+            storage=self._storage,
+            embed_fn=self._embed_fn,
+            token_budget=self._token_budget,
+        )
 
     async def initialize(self, context: object) -> None:
         self._ctx = context
@@ -74,8 +85,28 @@ class MemoryExtension:
         self._storage = MemoryStorage(db_path)
         await self._storage.initialize()
 
-        intent_classifier = KeywordIntentClassifier()
-        self._retrieval = MemoryRetrieval(self._storage, intent_classifier)
+        embedding_ext = context.get_extension("embedding")
+        self._embed_fn = None
+        if embedding_ext and embedding_ext.health_check():
+            dims = context.get_config("embedding_dimensions", 256)
+            self._embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
+
+        if self._embed_fn:
+            classifier = EmbeddingIntentClassifier(
+                embed_fn=self._embed_fn,
+                threshold=context.get_config("intent_similarity_threshold", 0.45),
+            )
+            await classifier.initialize()
+        else:
+            classifier = KeywordIntentClassifier()
+
+        self._retrieval = MemoryRetrieval(
+            storage=self._storage,
+            intent_classifier=classifier,
+            rrf_k=context.get_config("rrf_k", 60),
+            rrf_weight_fts=context.get_config("rrf_weight_fts", 1.0),
+            rrf_weight_vector=context.get_config("rrf_weight_vector", 1.0),
+        )
 
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
@@ -145,6 +176,16 @@ class MemoryExtension:
                 "valid_from": now,
                 "created_at": now,
             })
+        if self._embed_fn:
+            asyncio.create_task(self._slow_path(node_id, text))
+
+    async def _slow_path(self, node_id: str, content: str) -> None:
+        """Generate embedding for episodic node and save to vec_nodes."""
+        if not self._embed_fn or not self._storage:
+            return
+        embedding = await self._embed_fn(content)
+        if embedding:
+            await self._storage.save_embedding(node_id, embedding)
 
     async def _on_agent_response(self, data: dict) -> None:
         """Hot path: save agent episode, temporal edge."""
@@ -179,6 +220,8 @@ class MemoryExtension:
                 "valid_from": now,
                 "created_at": now,
             })
+        if self._embed_fn:
+            asyncio.create_task(self._slow_path(node_id, text))
 
     async def _on_session_completed(self, event: object) -> None:
         """EventBus: session.completed. Trigger consolidation."""
