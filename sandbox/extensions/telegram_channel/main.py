@@ -1,9 +1,17 @@
 """Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider."""
 
 import asyncio
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+_ext_dir = Path(__file__).resolve().parent
+if str(_ext_dir) not in sys.path:
+    sys.path.insert(0, str(_ext_dir))
+
+from formatting import escape_html, md_to_tg_html
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -19,13 +27,16 @@ if TYPE_CHECKING:
 TYPING_HEARTBEAT_INTERVAL_SEC = 4
 
 
+MAX_TG_MESSAGE_LEN = 4096
+
+
 @dataclass
 class StreamState:
     """Active stream state for a Telegram user."""
 
     message_id: int
     buffer: str = ""
-    last_edit_at: float = 0.0
+    last_edit_at: float = 0.0  # 0.0 means "never edited" — first edit fires immediately
     typing_task: asyncio.Task[None] | None = None
 
 
@@ -227,7 +238,11 @@ class TelegramChannelExtension:
             return
         try:
             await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
-            message = await self._bot.send_message(chat_id=self._chat_id, text="...")
+            message = await self._bot.send_message(
+                chat_id=self._chat_id,
+                text="...",
+                parse_mode=ParseMode.HTML,
+            )
             state = StreamState(message_id=message.message_id, last_edit_at=0.0)
             state.typing_task = asyncio.create_task(self._typing_heartbeat())
             self._streams[user_id] = state
@@ -253,7 +268,8 @@ class TelegramChannelExtension:
             await self._bot.edit_message_text(
                 chat_id=self._chat_id,
                 message_id=state.message_id,
-                text=state.buffer,
+                text=escape_html(state.buffer),
+                parse_mode=ParseMode.HTML,
             )
             state.last_edit_at = now
         except Exception:
@@ -286,11 +302,33 @@ class TelegramChannelExtension:
             except asyncio.CancelledError:
                 pass
         try:
-            await self._bot.edit_message_text(
-                chat_id=self._chat_id,
-                message_id=state.message_id,
-                text=full_text,
-            )
+            formatted = md_to_tg_html(full_text)
+            if len(formatted) <= MAX_TG_MESSAGE_LEN:
+                await self._bot.edit_message_text(
+                    chat_id=self._chat_id,
+                    message_id=state.message_id,
+                    text=formatted,
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                # Split into MAX_TG_MESSAGE_LEN chunks; replace placeholder with the
+                # first chunk and send the rest as new messages.
+                parts = [
+                    formatted[i : i + MAX_TG_MESSAGE_LEN]
+                    for i in range(0, len(formatted), MAX_TG_MESSAGE_LEN)
+                ]
+                await self._bot.edit_message_text(
+                    chat_id=self._chat_id,
+                    message_id=state.message_id,
+                    text=parts[0],
+                    parse_mode=ParseMode.HTML,
+                )
+                for part in parts[1:]:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        text=part,
+                        parse_mode=ParseMode.HTML,
+                    )
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception(
@@ -304,7 +342,11 @@ class TelegramChannelExtension:
         if str(user_id) != self._chat_id:
             return
         try:
-            await self._bot.send_message(chat_id=self._chat_id, text=message)
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=md_to_tg_html(message),
+                parse_mode=ParseMode.HTML,
+            )
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception("Failed to send to %s: %s", self._chat_id, e)
@@ -314,7 +356,11 @@ class TelegramChannelExtension:
         if not self._bot or not self._token or not self._chat_id:
             return
         try:
-            await self._bot.send_message(chat_id=self._chat_id, text=message)
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=md_to_tg_html(message),
+                parse_mode=ParseMode.HTML,
+            )
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception("Failed to send message: %s", e)

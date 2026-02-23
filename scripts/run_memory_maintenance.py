@@ -72,37 +72,44 @@ async def main() -> None:
     await event_bus.recover()
     loader.set_event_bus(event_bus)
 
-    await loader.discover()
-    await loader.load_all()
-    await loader.initialize_all(router)
-    loader.detect_and_wire_all(router)
+    try:
+        await loader.discover()
+        await loader.load_all()
+        await loader.initialize_all(router)
+        loader.detect_and_wire_all(router)
 
-    mem_ext = loader._extensions.get("memory")
-    if not mem_ext or not mem_ext._storage:
-        print("ERROR: Memory extension not loaded or storage not initialized.")
-        return
+        mem_ext = loader._extensions.get("memory")
+        if not mem_ext or not mem_ext._storage:
+            print("ERROR: Memory extension not loaded or storage not initialized.")
+            return
 
-    await print_stats(mem_ext._storage)
+        await print_stats(mem_ext._storage)
 
-    if dry_run:
-        print("[dry-run] Skipping maintenance pipeline. Use without --dry-run to execute.")
+        if dry_run:
+            print("[dry-run] Skipping maintenance pipeline. Use without --dry-run to execute.")
+            return
+
+        print("Running nightly maintenance pipeline...")
+        t0 = time.monotonic()
+        result = await mem_ext.execute_task("run_nightly_maintenance")
+        elapsed = time.monotonic() - t0
+
+        if result:
+            print(f"\nResult: {result.get('text', result)}")
+        else:
+            print("\nResult: None (no work to do)")
+        print(f"Elapsed: {elapsed:.2f}s")
+
+        await print_stats(mem_ext._storage)
+
+    finally:
         await loader.shutdown()
-        return
-
-    print("Running nightly maintenance pipeline...")
-    t0 = time.monotonic()
-    result = await mem_ext.execute_task("run_nightly_maintenance")
-    elapsed = time.monotonic() - t0
-
-    if result:
-        print(f"\nResult: {result.get('text', result)}")
-    else:
-        print("\nResult: None (no work to do)")
-    print(f"Elapsed: {elapsed:.2f}s")
-
-    await print_stats(mem_ext._storage)
-    await loader.shutdown()
+        await event_bus.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    sys.exit(0)
