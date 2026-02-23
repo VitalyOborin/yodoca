@@ -171,7 +171,7 @@ async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str 
 
 Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and prepends them to the user prompt before `Runner.run()`.
 
-**Example:** The `memory` extension implements ContextProvider to inject relevant episodic/semantic context via hybrid search.
+**Example:** The `memory` extension implements ContextProvider to inject relevant context via intent-aware hybrid search (FTS5 + vector + graph traversal + RRF).
 
 ### `SetupProvider`
 
@@ -513,4 +513,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `memory_maintenance`, `memory_reflection`, `kv`, `scheduler`, `heartbeat`, `embedding`, `ner`, `builder_agent`, `simple_agent`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `heartbeat`, `embedding`, `builder_agent`, `simple_agent`

@@ -1,6 +1,6 @@
 # EventBus → MessageRouter → Memory Flow
 
-This document describes the data flow from user input through EventBus and MessageRouter into the Memory extension, including context injection and consolidation. It aligns with [ADR 005: Simplified Memory System](adr/005-memory.md) and reflects the current implementation in `sandbox/extensions/memory` and `sandbox/extensions/memory_maintenance`.
+This document describes the data flow from user input through EventBus and MessageRouter into the Memory v2 extension, including context injection, consolidation, and nightly maintenance. It aligns with [ADR 008: Memory v2](adr/008-memory-v2.md) and reflects the current implementation in `sandbox/extensions/memory`.
 
 ---
 
@@ -11,7 +11,7 @@ Memory integrates via **two subscription mechanisms**:
 | Source | API | Backend | Purpose |
 |--------|-----|---------|---------|
 | MessageRouter | `context.subscribe(event, handler)` | In-memory `router._emit()` | User messages and agent responses (hot path) |
-| EventBus | `context.emit(topic, payload)` | SQLite journal | Consolidation triggers (`memory.session_completed`) |
+| EventBus | `context.subscribe_event(topic, handler)` | SQLite journal | Session lifecycle (`session.completed`) |
 
 **Important:** The Memory extension does **not** subscribe to EventBus `user.message` directly. User messages reach Memory indirectly: EventBus → Loader kernel handler → MessageRouter → Memory (via MessageRouter internal events).
 
@@ -36,10 +36,11 @@ Memory integrates via **two subscription mechanisms**:
 ┌────────────────────────────────────────────────────────────────────────────────────┐
 │ MessageRouter.handle_user_message(text, user_id, channel)                          │
 │                                                                                    │
-│   1. _emit("user_message", {text, user_id, channel, session_id})  ──► Memory       │
-│   2. invoke_agent(text)  [with ContextProvider middleware: Memory.get_context()]   │
-│   3. _emit("agent_response", {text, agent_id, ...})  ──► Memory                    │
-│   4. channel.send_to_user(user_id, response)                                       │
+│   1. Check session timeout → _rotate_session() if inactivity exceeded              │
+│   2. _emit("user_message", {text, user_id, channel, session_id})  ──► Memory       │
+│   3. invoke_agent(text)  [with ContextProvider middleware: Memory.get_context()]   │
+│   4. _emit("agent_response", {text, agent_id, ...})  ──► Memory                    │
+│   5. channel.send_to_user(user_id, response)                                       │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,26 +53,32 @@ Memory integrates via **two subscription mechanisms**:
 
 2. **EventBus persists** — Event is written to `event_journal` (SQLite), then delivered by the dispatch loop to all subscribers.
 
-3. **Kernel handler** — Loader registers `kernel_user_message_handler` on EventBus topic `user.message` (in `wire_event_subscriptions()`). The handler calls `router.handle_user_message(text, user_id, channel)`.
+3. **Kernel handler** — Loader registers `kernel_user_message_handler` on EventBus topic `user.message`. The handler calls `router.handle_user_message(text, user_id, channel)`.
 
-4. **MessageRouter** — `handle_user_message()`:
-   - Emits `user_message` to MessageRouter subscribers (in-memory, synchronous with the call)
+4. **Session timeout** — `MessageRouter` checks if `(now - _last_message_at) > session_timeout`. If exceeded, it rotates the session: generates a new session ID, publishes `session.completed` via EventBus for the old session.
+
+5. **MessageRouter** — `handle_user_message()`:
+   - Emits `user_message` to MessageRouter subscribers (in-memory, synchronous)
    - Invokes the agent (with context injection middleware)
    - Emits `agent_response` to MessageRouter subscribers
    - Sends the response to the user via the channel
 
-5. **Memory ingestion** — Memory subscribes in `initialize()`:
+6. **Memory ingestion** — Memory subscribes in `initialize()`:
    ```python
    context.subscribe("user_message", self._on_user_message)
    context.subscribe("agent_response", self._on_agent_response)
    ```
-   Both handlers call `save_episode()` → `MemoryRepository.save_episode()` → `memories` table (kind='episode'), FTS5 indexed via DB triggers. **Hot path: no LLM, no embedding** (ADR §6).
+   Both handlers:
+   - Create an episodic node (fire-and-forget via writer queue)
+   - Create a temporal edge to the previous episode (fire-and-forget)
+   - Schedule slow-path embedding generation (`asyncio.create_task`)
+   - On session change: trigger consolidation of the old session
 
 ---
 
 ## 2. Context Injection (Memory → Agent)
 
-Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Memory implements `ContextProvider` with `context_priority=100`.
+Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Memory implements `ContextProvider` with `context_priority=50`.
 
 ```
 MessageRouter.invoke_agent(prompt)
@@ -79,89 +86,120 @@ MessageRouter.invoke_agent(prompt)
     ▼
 set_invoke_middleware() chain
     │
-    ├─► Memory.get_context(prompt)  →  fts_search(prompt, limit=5)
-    │       → "## Relevant memory\n- ...\n- ..."
+    ├─► Memory.get_context(prompt)
+    │       → classify_query_complexity(prompt)
+    │       → embed_fn(prompt)                     [if embedding available]
+    │       → intent_classifier.classify(prompt)
+    │       → hybrid search: FTS5 + vector + graph → RRF fusion
+    │       → assemble_context(results, token_budget)
+    │              Facts 40% | Entity profiles 25% | Temporal 25% | Evidence 10%
+    │       → return formatted markdown or None
     │
     ▼
-Enhanced prompt = header + "\n\n---\n\n" + original_prompt
+Enhanced prompt = context + "\n\n---\n\n" + original_prompt
     │
     ▼
 Runner.run(agent, enhanced_prompt, session=session)
 ```
 
 - **Where:** `Loader.wire_context_providers()` builds the middleware; `router.set_invoke_middleware()` registers it.
-- **Memory role:** `get_context()` returns FTS5 search results as a formatted string, or `None` if no matches. Excludes the current session to avoid redundant context.
+- **Memory role:** `get_context()` runs intent-aware hybrid search and returns structured context with budget-allocated sections, or `None` if no matches.
 
 ---
 
-## 3. Consolidation Flow (Memory → EventBus → Memory Consolidator)
+## 3. Consolidation Flow
 
-Consolidation extracts semantic facts from episodes. It is triggered in two ways:
+Consolidation extracts semantic facts, procedural patterns, and opinions from episodic nodes. It is triggered in two ways:
 
-### 3.1 Session switch (reactive)
+### 3.1 Session change (reactive)
 
-When the user starts a new session, Memory emits `memory.session_completed` for all **pending** (non-current) sessions:
+When the user starts a new session (either by session ID change or inactivity timeout), Memory triggers consolidation of the old session:
 
 ```python
 # Memory._on_user_message
 if session_id and session_id != self._current_session_id:
+    if self._current_session_id:
+        asyncio.create_task(self._consolidate_session(self._current_session_id))
     self._current_session_id = session_id
-    await self._repo.ensure_session(session_id)
-    await self._trigger_consolidation(session_id)  # emits for pending sessions
+    self._storage.ensure_session(session_id)
 ```
 
-`_trigger_consolidation()`:
-```python
-for session_id in pending:
-    await self._ctx.emit("memory.session_completed", {"session_id": session_id, "prompt": "..."})
-```
+### 3.2 Session rotation (MessageRouter)
 
-### 3.2 Scheduler (nightly)
-
-`memory_maintenance` implements `SchedulerProvider`. Schedules are defined in manifest.yaml; Loader calls `execute_task(task_name)` per cron trigger. At 03:00 (`0 3 * * *`):
+When inactivity exceeds `session.timeout_sec` (default 1800s), MessageRouter rotates the session and publishes `session.completed`:
 
 ```python
-# MemoryMaintenanceExtension.execute_task("execute_consolidation")
-pending = await mem.get_all_pending_consolidations()
-for session_id in pending:
-    await self._ctx.emit("memory.session_completed", {...})
+# MessageRouter.handle_user_message
+if (now - _last_message_at) > _session_timeout:
+    _rotate_session()  # publishes session.completed via EventBus
 ```
 
-### 3.3 EventBus → Consolidator Agent
+Memory subscribes to `session.completed` via `context.subscribe_event()` and triggers consolidation.
 
-`memory_maintenance` manifest declares:
+### 3.3 Nightly maintenance (scheduled)
 
-```yaml
-events:
-  subscribes:
-    - topic: memory.session_completed
-      handler: invoke_agent
+The `memory` extension implements `SchedulerProvider`. At 03:00 daily:
+
+```python
+# MemoryExtension.execute_task("run_nightly_maintenance")
+unconsolidated = await self._storage.get_unconsolidated_sessions()
+for sid in unconsolidated:
+    await self._consolidate_session(sid)
 ```
 
-The Loader wires this as a **proactive** EventBus subscription: when `memory.session_completed` is published, the consolidator agent is invoked with the event payload as the task prompt.
+### 3.4 Write-path agent execution
 
 ```
-EventBus "memory.session_completed"
+_consolidate_session(session_id)
     │
     ▼
-Loader proactive_handler (invoke_agent)
+MemoryAgent.consolidate_session(session_id)
     │
     ▼
-MemoryMaintenanceExtension.invoke(task, context)
+Runner.run(agent, task)  # agent uses write-path tools
     │
-    ▼
-Runner.run(agent, task)  # agent uses memory consolidator tools
-    │
-    ├─ get_episodes_for_consolidation(session_id)
-    ├─ save_facts_batch(session_id, facts)
+    ├─ is_session_consolidated(session_id)          → skip if true
+    ├─ get_session_episodes(session_id, paginated)
+    ├─ [LLM] extract facts, procedures, opinions
+    ├─ save_nodes_batch(nodes + source_episode_ids)  → derived_from edges + batch embed
+    ├─ extract_and_link_entities(nodes + entities)   → resolve or create entity anchors
+    ├─ detect_conflicts(fact) → resolve_conflict(old, new) if needed
     └─ mark_session_consolidated(session_id)
 ```
 
-The consolidator agent uses tools from the Memory extension (`get_consolidator_tools()`): `get_episodes_for_consolidation`, `save_facts_batch`, `mark_session_consolidated`, `is_session_consolidated`. These tools are **not** exposed to the Orchestrator.
+The write-path agent is a private `Agent` instance inside the memory extension (not an `AgentProvider`). Its tools are internal and not exposed to the Orchestrator.
 
 ---
 
-## 4. Data Flow Summary
+## 4. Nightly Maintenance Pipeline
+
+Beyond consolidation, the nightly task runs three additional stages:
+
+```
+execute_task("run_nightly_maintenance")
+    │
+    ├─ 1. Consolidate pending sessions (see §3.3)
+    │
+    ├─ 2. Ebbinghaus decay + pruning
+    │     → DecayService.apply(storage)
+    │     → confidence_new = confidence × exp(−decay_rate × days^0.8)
+    │     → batch_update_confidence / soft_delete_nodes
+    │
+    ├─ 3. Entity enrichment
+    │     → get_entities_needing_enrichment(min_mentions=3)
+    │     → for each sparse entity: LLM generates summary
+    │     → update_entity_summary + re-embed
+    │
+    └─ 4. Causal edge inference
+          → get_consecutive_episode_pairs(limit=50)
+          → MemoryAgent.infer_causal_edges(pairs)
+          → [LLM] analyze pairs for explicit cause-effect
+          → save_causal_edges (confidence=0.7)
+```
+
+---
+
+## 5. Data Flow Summary
 
 | Stage | Component | Action |
 |-------|-----------|--------|
@@ -169,43 +207,44 @@ The consolidator agent uses tools from the Memory extension (`get_consolidator_t
 | | EventBus | Journal + dispatch → kernel handler |
 | | Loader | `router.handle_user_message()` |
 | | MessageRouter | `_emit("user_message")` → Memory |
-| | Memory | `_on_user_message` → `save_episode` |
+| | Memory | `_on_user_message` → episodic node + temporal edge + slow path |
 | | MessageRouter | `invoke_agent` (with context) |
 | | MessageRouter | `_emit("agent_response")` → Memory |
-| | Memory | `_on_agent_response` → `save_episode` |
+| | Memory | `_on_agent_response` → episodic node + temporal edge + slow path |
 | **Retrieval** | MessageRouter | `invoke_middleware` → Memory.get_context |
-| | Memory | `fts_search` → formatted string |
-| **Consolidation** | Memory / Scheduler | `emit("memory.session_completed", {...})` → EventBus |
-| | EventBus | Dispatch → proactive handler |
-| | Loader | Invoke memory_maintenance agent |
-| | Consolidator | Tools → MemoryRepository (save_facts_batch, mark_session_consolidated) |
+| | Memory | Intent classification → hybrid search → RRF fusion → context assembly |
+| **Consolidation** | Memory / Scheduler | `_consolidate_session()` → write-path agent |
+| | MemoryAgent | Tools → MemoryStorage (save_nodes_batch, extract_and_link_entities, mark_session_consolidated) |
+| **Maintenance** | Scheduler (03:00) | Consolidate + decay + entity enrichment + causal inference |
 
 ---
 
-## 5. Implementation Notes
+## 6. Implementation Notes
 
-### ADR vs current implementation
+### ADR 005 → ADR 008 migration
 
-ADR 005 §11 states that Memory subscribes to:
-- `user.message` via `context.subscribe_event()` (EventBus)
-- `agent_response` via `context.subscribe()` (MessageRouter)
+Memory v2 (ADR 008) replaces the v1 system entirely:
 
-**Current implementation:** Memory subscribes only via `context.subscribe()` to MessageRouter events `user_message` and `agent_response`. User messages reach Memory **indirectly** through the kernel handler → `handle_user_message` → `_emit("user_message")`. This achieves the same hot-path behavior (no direct EventBus subscription for user messages) and keeps the flow simpler: one kernel handler routes all `user.message` events into MessageRouter, and Memory receives from MessageRouter.
+- Flat `memories` table → graph schema (`nodes` + `edges` + `entities`)
+- Satellite extensions (`memory_maintenance`, `memory_reflection`, `ner`) → single `memory` extension
+- `ToolProvider` + `ContextProvider` → `ToolProvider` + `ContextProvider` + `SchedulerProvider`
+- Intent-blind hybrid search → intent-aware retrieval with graph traversal
+- External consolidation agent → internal write-path agent
 
-### Hot path constraints (ADR §6)
+### Hot path constraints
 
-- `save_episode` → INSERT + FTS5 (via triggers). No LLM, no embedding in the hot path.
-- Embeddings and entity extraction run in background (Phase 2+).
+- Episodic node INSERT + FTS5 trigger + temporal edge. No LLM, no blocking waits.
+- Embedding generation runs as a background task (`asyncio.create_task`).
 
-### Extension dependencies
+### Writer queue pattern
 
-- `memory_maintenance` depends on `memory` (manifest `depends_on`).
-- Memory maintenance gets tools via `context.get_extension("memory").get_consolidator_tools()`.
+All writes go through `MemoryStorage._write_queue` (asyncio.Queue) processed by a single writer task. Hot-path writes are fire-and-forget; slow-path and tool writes use awaitable futures.
 
 ---
 
 ## References
 
-- [ADR 005: Simplified Memory System](adr/005-memory.md)
+- [ADR 008: Memory v2](adr/008-memory-v2.md)
+- [Memory System](memory.md)
 - [Event Bus](event_bus.md)
 - [Extensions](extensions.md)

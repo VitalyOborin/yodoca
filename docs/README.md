@@ -39,6 +39,7 @@ Documentation for the assistant4 AI agent platform.
 | [005](adr/005-memory.md) | Simplified Memory System |
 | [006](adr/006-mcp-extension.md) | MCP Extension |
 | [007](adr/007-user-channel-selector.md) | Agent-Driven Channel Selection |
+| [008](adr/008-memory-v2.md) | Memory v2: Graph-Based Cognitive Memory |
 
 ---
 

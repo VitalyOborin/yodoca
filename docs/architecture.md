@@ -85,7 +85,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
                                          ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                      Extensions (sandbox/extensions/<id>/)                       │
-│  cli_channel │ telegram_channel │ memory │ scheduler │ kv │ heartbeat │ ...      │
+│  cli_channel │ telegram_channel │ memory │ scheduler │ kv │ heartbeat │ embedding │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -188,10 +188,9 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow.
 | **Channels** | cli_channel, telegram_channel | ChannelProvider, ServiceProvider | Receive user input; deliver agent responses |
 | **Tools** | kv, scheduler | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, etc.) |
 | **Agents** | builder_agent, simple_agent | AgentProvider | Specialized agents invoked as tools (`integration_mode: tool`) |
-| **Memory** | memory | ToolProvider, ContextProvider | Long-term episodic/semantic memory, hybrid search, context enrichment |
-| **Memory ops** | memory_maintenance, memory_reflection | AgentProvider, SchedulerProvider | Consolidation, decay, entity enrichment, weekly reflection |
+| **Memory** | memory | ToolProvider, ContextProvider, SchedulerProvider | Graph-based cognitive memory: episodes, facts, procedures, opinions. Intent-aware hybrid retrieval, LLM-powered consolidation, Ebbinghaus decay |
 | **Proactive** | heartbeat | SchedulerProvider | Periodic Scout → Orchestrator escalation (every 2 min) |
-| **Infrastructure** | embedding, ner | (internal API) | Embedding generation, named entity recognition for memory |
+| **Infrastructure** | embedding | (internal API) | Embedding generation for memory and other extensions |
 
 ---
 
