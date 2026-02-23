@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. **Supersedes ADR 005.**
+Accepted. Implemented. **Supersedes ADR 005.**
 
 ## Context
 
