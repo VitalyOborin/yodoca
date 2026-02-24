@@ -11,6 +11,8 @@ import sys
 # Paths relative to project root (parent of scripts/)
 MEMORY_DIR = "sandbox/data/memory"  # all files in this dir are removed
 OTHER_FILES = [
+    "sandbox/logs/app.log",
+    "config/settings.yaml",
     "sandbox/data/scheduler/scheduler.db",
     "sandbox/data/event_journal.db",
     "sandbox/data/kv/values.json",

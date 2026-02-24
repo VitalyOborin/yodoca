@@ -1,52 +1,28 @@
-# Application settings (non-secret).
-# LLM: agents (provider + model per agent) and providers (API endpoints, keys) below.
-
-supervisor:
-  restart_file: sandbox/.restart_requested
-  restart_file_check_interval: 5
-
 agents:
   default:
-    provider: openai # openai # lm_studio
-    model: gpt-5-mini # gpt-5-mini # zai-org/glm-4.7-flash
-  orchestrator:
-    provider: lm_studio # openai # lm_studio
-    model: zai-org/glm-4.7-flash # gpt-5.2 # zai-org/glm-4.7-flash
-    instructions: prompts/orchestrator.jinja2
-    max_tokens: 4096  # или больше
-
-providers:
-  openai:
-    type: openai_compatible
-    api_key_secret: OPENAI_API_KEY
-    # base_url omitted => https://api.openai.com/v1
-
-  lm_studio:
-    type: openai_compatible
-    base_url: http://127.0.0.1:1234/v1
-    api_key_literal: lm-studio
-    supports_hosted_tools: false
-
-  anthropic:
-    type: anthropic
-    api_key_secret: ANTHROPIC_API_KEY
-
-  openrouter:
-    type: openai_compatible
-    base_url: https://openrouter.ai/api/v1
-    api_key_secret: OPENROUTER_API_KEY
-    default_headers:
-      HTTP-Referer: https://yodoca.app
-      X-Title: Yodoca
-
+    instructions: prompts/default.jinja2
+    model: gpt-5.2
+    provider: openai
 event_bus:
-  db_path: sandbox/data/event_journal.db   # relative to project root
-  poll_interval: 5.0                       # seconds; lower = faster deferred firing
-  batch_size: 3                            # pending events per dispatch iteration
-
+  batch_size: 3
+  db_path: sandbox/data/event_journal.db
+  poll_interval: 5.0
+extensions:
+  embedding:
+    default_model: text-embedding-3-large
+    provider: openai
 logging:
+  backup_count: 3
   file: sandbox/logs/app.log
   level: INFO
   log_to_console: false
-  max_bytes: 10485760   # 10 MB
-  backup_count: 3
+  max_bytes: 10485760
+providers:
+  openai:
+    api_key_secret: OPENAI_API_KEY
+    type: openai_compatible
+session:
+  timeout_sec: 1800
+supervisor:
+  restart_file: sandbox/.restart_requested
+  restart_file_check_interval: 5

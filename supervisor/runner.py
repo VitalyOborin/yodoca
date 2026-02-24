@@ -10,19 +10,27 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from core.settings import get_setting, load_settings
+from core.config_check import is_configured
+from core.settings import get_setting, load_settings, reload_settings
 
 # Project root: parent of supervisor package
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
-_settings = load_settings()
-_RESTART_FILE = _PROJECT_ROOT / get_setting(
-    _settings, "supervisor.restart_file", "sandbox/.restart_requested"
-)
-_POLL_INTERVAL_SEC = get_setting(
-    _settings, "supervisor.restart_file_check_interval", 5
-)
+# Exit codes from onboarding subprocess (ADR 011)
+_ONBOARDING_SUCCESS = 0
+_ONBOARDING_QUIT = 1
+_ONBOARDING_RETRY = 2
+
+def _get_restart_file() -> Path:
+    settings = load_settings()
+    rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
+    return _PROJECT_ROOT / rel
+
+
+def _get_poll_interval() -> int:
+    settings = load_settings()
+    return get_setting(settings, "supervisor.restart_file_check_interval", 5)
 _AGENT_CMD = [sys.executable, "-m", "core"]
 _MAX_RESTARTS = int(os.environ.get("SUPERVISOR_MAX_RESTARTS", "5"))
 _RESTART_WINDOW_MINUTES = float(os.environ.get("SUPERVISOR_RESTART_WINDOW_MINUTES", "5"))
@@ -51,9 +59,10 @@ def _spawn_agent() -> subprocess.Popen[bytes]:
 
 def _check_restart_requested() -> bool:
     """Check if restart file exists; if so, remove it and return True."""
-    if _RESTART_FILE.exists():
+    restart_file = _get_restart_file()
+    if restart_file.exists():
         try:
-            _RESTART_FILE.unlink()
+            restart_file.unlink()
             return True
         except OSError:
             return True  # Assume restart requested even if unlink failed
@@ -86,10 +95,29 @@ def main() -> None:
         pass  # SIGTERM not available on Windows
 
     while True:
+        restart_file = _get_restart_file()
+        restart_file.unlink(missing_ok=True)
+        reload_settings()
+        load_dotenv(_PROJECT_ROOT / ".env")
+
+        ok, reason = is_configured(project_root=_PROJECT_ROOT)
+        if not ok:
+            _log(f"Configuration incomplete: {reason}")
+            _log("Starting setup wizard...")
+            result = subprocess.run(
+                [sys.executable, "-m", "onboarding"],
+                cwd=str(_PROJECT_ROOT),
+                env=os.environ.copy(),
+            )
+            if result.returncode == _ONBOARDING_QUIT:
+                _log("Setup cancelled. Exiting.")
+                sys.exit(0)
+            continue
+
         child = _spawn_agent()
 
         while True:
-            time.sleep(_POLL_INTERVAL_SEC)
+            time.sleep(_get_poll_interval())
 
             if shutdown_requested:
                 _log("Terminating agent...")

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, WebSearchTool
+from agents import Agent, ModelSettings, WebSearchTool
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.llm import ModelRouter
@@ -40,7 +40,9 @@ def create_orchestrator_agent(
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
     settings = load_settings()
-    instructions_spec = get_setting(settings, "agents.orchestrator.instructions", "")
+    instructions_spec = get_setting(
+        settings, "agents.orchestrator.instructions", "prompts/orchestrator.jinja2"
+    )
     instructions = _resolve_instructions(
         instructions_spec,
         template_vars={"capabilities": capabilities_summary},
@@ -59,5 +61,6 @@ def create_orchestrator_agent(
         name="Orchestrator",
         instructions=instructions,
         model=model,
+        model_settings=ModelSettings(parallel_tool_calls=True),
         tools=tools,
     )

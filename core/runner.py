@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from core.terminal import reset_terminal_for_input
+
 from core.agents.orchestrator import create_orchestrator_agent
 from core.events import EventBus
 from core.tools.channel import make_channel_tools
@@ -94,6 +96,7 @@ async def main_async() -> None:
 
 def main() -> None:
     """Synchronous entry for the AI agent process."""
+    reset_terminal_for_input()
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

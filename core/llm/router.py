@@ -73,7 +73,12 @@ class ModelRouter:
         return cfg.provider if cfg else None
 
     def register_agent_config(self, agent_id: str, config: dict[str, Any]) -> None:
-        """Register agent config from extension manifest (agent_config block)."""
+        """Register agent config from extension manifest (agent_config block).
+
+        settings.yaml takes priority — only register if not already configured.
+        """
+        if agent_id in self._agent_configs:
+            return
         provider_id = config.get("provider")
         if not provider_id:
             return

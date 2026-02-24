@@ -29,6 +29,7 @@ from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
+from core.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +235,12 @@ class Loader:
             )
             agent_model = manifest.agent.model if manifest.agent else ""
             agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
+            settings = load_settings()
+            overrides = settings.get("extensions", {}).get(ext_id, {}) or {}
+            config = {**manifest.config, **overrides}
             ctx = ExtensionContext(
                 extension_id=ext_id,
-                config=manifest.config,
+                config=config,
                 logger=logging.getLogger(f"ext.{ext_id}"),
                 router=router,
                 get_extension=self._get_extension,

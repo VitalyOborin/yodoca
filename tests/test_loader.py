@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,13 +22,20 @@ from core.extensions.manifest import ExtensionManifest
 from core.extensions.router import MessageRouter
 
 
-def _manifest(ext_id: str, depends_on: list[str] | None = None) -> ExtensionManifest:
-    return ExtensionManifest.model_validate({
+def _manifest(
+    ext_id: str,
+    depends_on: list[str] | None = None,
+    config: dict | None = None,
+) -> ExtensionManifest:
+    data: dict = {
         "id": ext_id,
         "name": ext_id.title(),
         "entrypoint": "main:Cls",
         "depends_on": depends_on or [],
-    })
+    }
+    if config is not None:
+        data["config"] = config
+    return ExtensionManifest.model_validate(data)
 
 
 class TestResolveDependencyOrder:
@@ -291,6 +298,77 @@ class TestInitializeAndLifecycle:
         assert len(received_ctx) == 1
         assert getattr(received_ctx[0], "extension_id", None) == "x"
         assert getattr(received_ctx[0], "config", None) == {}
+
+    @pytest.mark.asyncio
+    async def test_initialize_all_merges_settings_overrides_into_config(self) -> None:
+        """get_config resolves: settings.extensions.<id>.<key> → manifest config → default."""
+        received_ctx = []
+
+        class MockExt:
+            async def initialize(self, context: object) -> None:
+                received_ctx.append(context)
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        manifest_with_config = _manifest("x", config={"tick_interval": 30})
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader._manifests = [manifest_with_config]
+        loader._extensions = {"x": MockExt()}
+        loader._state = {"x": ExtensionState.INACTIVE}
+        router = MessageRouter()
+
+        settings_with_override = {"extensions": {"x": {"tick_interval": 120}}}
+        with patch("core.extensions.loader.load_settings", return_value=settings_with_override):
+            await loader.initialize_all(router)
+
+        ctx = received_ctx[0]
+        assert ctx.get_config("tick_interval", 10) == 120  # settings override wins
+
+    @pytest.mark.asyncio
+    async def test_initialize_all_uses_manifest_when_no_settings_override(self) -> None:
+        """When no settings override, get_config returns manifest value, then default."""
+        received_ctx = []
+
+        class MockExt:
+            async def initialize(self, context: object) -> None:
+                received_ctx.append(context)
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        manifest_with_config = _manifest("x", config={"tick_interval": 30})
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader._manifests = [manifest_with_config]
+        loader._extensions = {"x": MockExt()}
+        loader._state = {"x": ExtensionState.INACTIVE}
+        router = MessageRouter()
+
+        settings_no_override = {"extensions": {}}
+        with patch("core.extensions.loader.load_settings", return_value=settings_no_override):
+            await loader.initialize_all(router)
+
+        ctx = received_ctx[0]
+        assert ctx.get_config("tick_interval", 10) == 30  # manifest wins
+        assert ctx.get_config("missing_key", 10) == 10  # default wins
 
     @pytest.mark.asyncio
     async def test_start_all_calls_start_and_sets_active(self) -> None:

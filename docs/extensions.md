@@ -275,7 +275,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | Member | Description |
 |--------|-------------|
 | `extension_id` | Extension id from manifest |
-| `config` | `config` block from manifest |
+| `config` | Merged config: `settings.extensions.<id>` overrides + manifest `config` |
 | `logger` | `logging.getLogger(f"ext.{extension_id}")` |
 | `data_dir` | `sandbox/data/<extension_id>/` (created on access) |
 
@@ -283,7 +283,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 
 | Method | Description |
 |--------|-------------|
-| `get_config(key, default)` | Read from manifest `config` |
+| `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
 | `get_secret(name)` | Read from environment (e.g. `.env`) |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
 
