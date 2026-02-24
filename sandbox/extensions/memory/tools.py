@@ -250,7 +250,7 @@ def build_tools(
             old_fact,
             query_embedding=query_embedding,
             limit=5,
-            node_types=["semantic", "procedural", "opinion"],
+            node_types=["semantic", "procedural", "opinion", "episodic"],
         )
         if not candidates:
             return CorrectResult(
