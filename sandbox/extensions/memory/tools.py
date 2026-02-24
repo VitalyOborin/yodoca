@@ -311,16 +311,23 @@ def build_tools(
 
     @function_tool
     async def confirm_fact(fact_id: str) -> ConfirmResult:
-        """Confirm a fact is accurate. Sets confidence=1.0, decay_rate=0.0."""
-        node = await storage.get_node(fact_id)
+        """Confirm a fact is accurate. Sets confidence=1.0, decay_rate=0.0. fact_id must be a valid UUID."""
+        if not fact_id or not fact_id.strip():
+            return ConfirmResult(node_id=fact_id or "", status="error: no fact_id provided")
+        raw = fact_id.strip()
+        try:
+            uuid.UUID(raw)
+        except (ValueError, TypeError):
+            return ConfirmResult(node_id=raw, status="error: fact_id must be a valid UUID")
+        node = await storage.get_node(raw)
         if not node:
-            return ConfirmResult(node_id=fact_id, status="error: node not found")
+            return ConfirmResult(node_id=raw, status="error: node not found")
         await storage.update_node_fields(
-            fact_id,
+            raw,
             {"confidence": 1.0, "decay_rate": 0.0},
         )
-        logger.info("confirm_fact: %s", fact_id[:8])
-        return ConfirmResult(node_id=fact_id, status="confirmed")
+        logger.info("confirm_fact: %s", raw[:8])
+        return ConfirmResult(node_id=raw, status="confirmed")
 
     @function_tool
     async def get_entity_info(entity_name: str) -> EntityInfoResult:
@@ -377,16 +384,29 @@ def build_tools(
 
     @function_tool
     async def explain_fact(fact_id: str) -> ExplainFactResult:
-        """Explain provenance of a fact: source episodes, superseded facts, linked entities."""
+        """Explain provenance of a fact (where it came from, source episodes).
+        Use this when the user asks 'how do you know X' or 'why do you think Y'.
+        IMPORTANT: If you don't know the fact_id, you MUST use search_memory FIRST
+        to find the fact and its 'id', then call this tool with that id."""
         if not fact_id or not fact_id.strip():
             return ExplainFactResult(status="error: no fact_id provided")
-        chain = await storage.get_provenance_chain(fact_id.strip())
+        raw = fact_id.strip()
+        try:
+            uuid.UUID(raw)
+        except (ValueError, TypeError):
+            return ExplainFactResult(status="error: fact_id must be a valid UUID")
+        chain = await storage.get_provenance_chain(raw)
         if not chain["node"]:
-            return ExplainFactResult(status=f"error: fact '{fact_id}' not found")
+            return ExplainFactResult(status=f"error: fact '{raw}' not found")
         node = chain["node"]
+        source_episodes_list = chain.get("source_episodes", [])
+        if not source_episodes_list and chain.get("supersedes"):
+            old_node_id = chain["supersedes"][0]["id"]
+            old_chain = await storage.get_provenance_chain(old_node_id)
+            source_episodes_list = old_chain.get("source_episodes", [])
         source_episodes = [
             NodeRef(id=ep.get("id", ""), content=_trunc(ep.get("content", "")))
-            for ep in chain.get("source_episodes", [])
+            for ep in source_episodes_list
         ]
         supersedes = [
             NodeRef(id=s.get("id", ""), content=_trunc(s.get("content", "")))
