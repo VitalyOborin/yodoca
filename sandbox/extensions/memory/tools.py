@@ -141,6 +141,7 @@ def build_tools(
     embed_fn: Callable[..., Any] | None,
     token_budget: int = 2000,
     get_maintenance_info: Callable[[], dict] | None = None,
+    dedup_threshold: float = 0.92,
 ) -> list[Any]:
     """Build Orchestrator tools. Phase 2: search, remember, correct, confirm."""
 
@@ -184,12 +185,42 @@ def build_tools(
         """Explicitly save a fact to long-term memory."""
         if not fact or not fact.strip():
             return RememberResult(node_id="", status="error: empty fact")
+        fact_text = fact.strip()
         now = int(time.time())
+
+        # Dedup: search for semantically similar fact before creating new node
+        if embed_fn:
+            query_embedding = await embed_fn(fact_text)
+            if query_embedding:
+                candidates = await storage.vector_search(
+                    query_embedding,
+                    node_types=["semantic"],
+                    limit=3,
+                )
+                if candidates:
+                    # L2 distance -> cosine similarity for unit vectors: sim = 1 - d^2/2
+                    best = candidates[0]
+                    dist = best.get("distance", float("inf"))
+                    similarity = max(0.0, 1.0 - (dist * dist) / 2.0)
+                    if similarity > dedup_threshold:
+                        existing_id = best["id"]
+                        await storage.update_node_fields(
+                            existing_id, {"last_accessed": now}
+                        )
+                        logger.info(
+                            "remember_fact: already_exists node=%s sim=%.3f",
+                            existing_id[:8],
+                            similarity,
+                        )
+                        return RememberResult(
+                            node_id=existing_id, status="already_exists"
+                        )
+
         node_id = str(uuid.uuid4())
         node = {
             "id": node_id,
             "type": "semantic",
-            "content": fact.strip(),
+            "content": fact_text,
             "event_time": now,
             "created_at": now,
             "valid_from": now,
@@ -199,10 +230,10 @@ def build_tools(
         }
         await storage.insert_node_awaitable(node)
         if embed_fn:
-            embedding = await embed_fn(fact.strip())
+            embedding = await embed_fn(fact_text)
             if embedding:
                 await storage.save_embedding(node_id, embedding)
-        logger.info("remember_fact: node=%s len=%d", node_id[:8], len(fact.strip()))
+        logger.info("remember_fact: node=%s len=%d", node_id[:8], len(fact_text))
         return RememberResult(node_id=node_id, status="saved")
 
     @function_tool
@@ -248,7 +279,7 @@ def build_tools(
             "confidence": 1.0,
         }
         await storage.insert_node_awaitable(new_node)
-        storage.insert_edge({
+        await storage.insert_edge_awaitable({
             "source_id": new_node_id,
             "target_id": old_node_id,
             "relation_type": "supersedes",

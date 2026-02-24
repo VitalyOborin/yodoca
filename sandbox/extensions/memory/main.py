@@ -31,6 +31,17 @@ from tools import build_tools
 logger = logging.getLogger(__name__)
 
 
+def _build_embed_fns(embedding_ext: object, dims: int) -> tuple[object | None, object | None]:
+    """Build embed_fn and embed_batch_fn from embedding extension. Returns (embed_fn, embed_batch_fn)."""
+    embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
+    embed_batch_fn = (
+        (lambda texts: embedding_ext.embed_batch(texts, dimensions=dims))
+        if hasattr(embedding_ext, "embed_batch")
+        else None
+    )
+    return embed_fn, embed_batch_fn
+
+
 class MemoryExtension:
     """Graph-based cognitive memory. Phase 1: episodes, FTS5, temporal edges."""
 
@@ -43,6 +54,7 @@ class MemoryExtension:
         self._ctx: object | None = None
         self._current_session_id: str | None = None
         self._token_budget: int = 2000
+        self._dedup_threshold: float = 0.92
         self._last_consolidation_at: str | None = None
         self._last_decay_at: str | None = None
         self._consolidation_pending: set[str] = set()
@@ -99,28 +111,25 @@ class MemoryExtension:
             embed_fn=self._embed_fn,
             token_budget=self._token_budget,
             get_maintenance_info=get_maintenance_info,
+            dedup_threshold=self._dedup_threshold,
         )
 
     async def initialize(self, context: object) -> None:
         self._ctx = context
         self._token_budget = context.get_config("context_token_budget", 2000)
+        self._dedup_threshold = context.get_config("remember_fact_dedup_threshold", 0.92)
         db_path = context.data_dir / "memory.db"
         self._storage = MemoryStorage(db_path)
         await self._storage.initialize()
 
         embedding_ext = context.get_extension("embedding")
         self._embed_fn = None
+        embed_batch_fn = None
         if embedding_ext and embedding_ext.health_check():
             dims = context.get_config("embedding_dimensions", 256)
-            self._embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
+            self._embed_fn, embed_batch_fn = _build_embed_fns(embedding_ext, dims)
 
         if self._embed_fn:
-            embed_batch_fn = None
-            if embedding_ext and hasattr(embedding_ext, "embed_batch"):
-                dims = context.get_config("embedding_dimensions", 256)
-                embed_batch_fn = lambda texts: embedding_ext.embed_batch(
-                    texts, dimensions=dims
-                )
             classifier = EmbeddingIntentClassifier(
                 embed_fn=self._embed_fn,
                 threshold=context.get_config("intent_similarity_threshold", 0.45),
@@ -144,12 +153,6 @@ class MemoryExtension:
         if context.model_router:
             try:
                 model = context.model_router.get_model("memory_agent")
-                embed_batch_fn = None
-                if embedding_ext and hasattr(embedding_ext, "embed_batch"):
-                    dims = context.get_config("embedding_dimensions", 256)
-                    embed_batch_fn = lambda texts: embedding_ext.embed_batch(
-                        texts, dimensions=dims
-                    )
                 write_tools = build_write_path_tools(
                     storage=self._storage,
                     retrieval=self._retrieval,
@@ -274,7 +277,10 @@ class MemoryExtension:
                 if prev_sid not in self._consolidation_pending:
                     self._consolidation_pending.add(prev_sid)
                     logger.info("Session switch: scheduling consolidation for %s", prev_sid)
-                    asyncio.create_task(self._consolidate_session(prev_sid))
+                    task = asyncio.create_task(self._consolidate_session(prev_sid))
+                    task.add_done_callback(
+                        lambda _: self._consolidation_pending.discard(prev_sid)
+                    )
             self._current_session_id = session_id
             self._storage.ensure_session(session_id)
             logger.debug("Active session: %s", session_id)
@@ -313,12 +319,20 @@ class MemoryExtension:
         """Generate embedding for episodic node and save to vec_nodes."""
         if not self._embed_fn or not self._storage:
             return
-        try:
-            embedding = await self._embed_fn(content)
-            if embedding:
-                await self._storage.save_embedding(node_id, embedding)
-        except Exception:
-            logger.exception("Slow-path embedding failed for node %s", node_id[:8])
+        for attempt in range(3):
+            try:
+                embedding = await self._embed_fn(content)
+                if embedding:
+                    await self._storage.save_embedding(node_id, embedding)
+                return
+            except Exception:
+                if attempt == 2:
+                    logger.exception(
+                        "Slow-path embedding failed (all retries) for node %s",
+                        node_id[:8],
+                    )
+                else:
+                    await asyncio.sleep(2**attempt)
 
     async def _on_agent_response(self, data: dict) -> None:
         """Hot path: save agent episode, temporal edge."""
@@ -367,7 +381,10 @@ class MemoryExtension:
                 return
             self._consolidation_pending.add(session_id)
             logger.info("session.completed: scheduling consolidation for %s", session_id)
-            asyncio.create_task(self._consolidate_session(session_id))
+            task = asyncio.create_task(self._consolidate_session(session_id))
+            task.add_done_callback(
+                lambda _: self._consolidation_pending.discard(session_id)
+            )
 
     async def _consolidate_session(self, session_id: str) -> None:
         """Consolidate session via write-path agent."""

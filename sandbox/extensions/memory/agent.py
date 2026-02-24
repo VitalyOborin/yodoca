@@ -17,9 +17,6 @@ class ConsolidationResult:
     """Result of consolidate_session."""
 
     session_id: str
-    facts_extracted: int = 0
-    entities_linked: int = 0
-    conflicts_resolved: int = 0
     status: str = "completed"
 
 
@@ -61,7 +58,7 @@ class MemoryAgent:
             await Runner.run(
                 self._agent,
                 task,
-                max_turns=25,
+                max_turns=15,
             )
             logger.info("Consolidation completed: session=%s", session_id)
             return ConsolidationResult(
