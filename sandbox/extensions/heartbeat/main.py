@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel, Field
 
 from core.extensions.instructions import resolve_instructions
@@ -57,6 +57,7 @@ class HeartbeatExtension:
             name="HeartbeatScout",
             instructions=instructions,
             model=model,
+            model_settings=ModelSettings(parallel_tool_calls=True),
             tools=context.resolved_tools,
             output_type=HeartbeatDecision,
         )
@@ -83,7 +84,7 @@ class HeartbeatExtension:
         enriched = await self._ctx.enrich_prompt(base_prompt, agent_id="heartbeat_scout")
 
         try:
-            result = await Runner.run(self._scout, enriched, max_turns=1)
+            result = await Runner.run(self._scout, enriched, max_turns=10)
             decision: HeartbeatDecision = result.final_output
         except Exception as e:
             logger.warning("heartbeat scout failed: %s", e)
