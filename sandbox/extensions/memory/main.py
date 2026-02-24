@@ -218,6 +218,10 @@ class MemoryExtension:
                 self._last_decay_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             self._last_consolidation_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            await self._storage.set_maintenance_timestamps(
+                last_consolidation=self._last_consolidation_at,
+                last_decay_run=self._last_decay_at,
+            )
 
             enrichment_count = await self._enrich_entities()
             causal_count = await self._infer_causal_edges()

@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS node_entities (
 CREATE INDEX IF NOT EXISTS idx_ne_entity ON node_entities(entity_id);
 
 -- ==========================================================================
+-- Maintenance timestamps (persisted so script-run maintenance is visible to supervisor)
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS maintenance_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- ==========================================================================
 -- Session consolidation tracking
 -- ==========================================================================
 CREATE TABLE IF NOT EXISTS sessions_consolidations (

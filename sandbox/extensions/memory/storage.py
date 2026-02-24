@@ -666,6 +666,42 @@ class MemoryStorage:
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
 
+    async def set_maintenance_timestamps(
+        self,
+        last_consolidation: str | None = None,
+        last_decay_run: str | None = None,
+    ) -> None:
+        """Persist maintenance timestamps so any process (e.g. run_memory_maintenance.py) is visible to others."""
+        upsert_sql = (
+            "INSERT INTO maintenance_metadata (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+        if last_consolidation is not None:
+            future = self._submit_write(
+                upsert_sql, ("last_consolidation", last_consolidation), wait=True
+            )
+            if future:
+                await future
+        if last_decay_run is not None:
+            future = self._submit_write(
+                upsert_sql, ("last_decay_run", last_decay_run), wait=True
+            )
+            if future:
+                await future
+
+    async def get_maintenance_timestamps(self) -> dict[str, str | None]:
+        """Return persisted last_consolidation and last_decay_run (for memory_stats when in-process state is None)."""
+        if self._read_conn is None:
+            return {"last_consolidation": None, "last_decay_run": None}
+        cursor = await self._read_conn.execute(
+            "SELECT key, value FROM maintenance_metadata WHERE key IN ('last_consolidation', 'last_decay_run')"
+        )
+        rows = await cursor.fetchall()
+        out: dict[str, str | None] = {"last_consolidation": None, "last_decay_run": None}
+        for row in rows:
+            out[row[0]] = row[1]
+        return out
+
     async def get_latest_session_id(self) -> str | None:
         """Return the most recent session_id (by first_seen_at). Used to resume after restart."""
         if self._read_conn is None:

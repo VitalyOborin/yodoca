@@ -366,6 +366,12 @@ def build_tools(
             maint = get_maintenance_info()
             last_consolidation = maint.get("last_consolidation")
             last_decay_run = maint.get("last_decay_run")
+        if last_consolidation is None or last_decay_run is None:
+            persisted = await storage.get_maintenance_timestamps()
+            if last_consolidation is None:
+                last_consolidation = persisted.get("last_consolidation")
+            if last_decay_run is None:
+                last_decay_run = persisted.get("last_decay_run")
         return MemoryStatsResult(
             nodes=stats["nodes"],
             edges=stats["edges"],
