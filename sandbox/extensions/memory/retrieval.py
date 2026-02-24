@@ -387,12 +387,21 @@ class MemoryRetrieval:
         )
         return results
 
+    def _normalize_content(self, content: str) -> str:
+        """Normalize for content deduplication: strip and collapse whitespace."""
+        if not content:
+            return ""
+        return " ".join(content.split())
+
     async def assemble_context(
         self,
         results: list[dict[str, Any]],
         token_budget: int = 2000,
     ) -> str:
-        """Format results with budget shares: Facts 40%, Entity profiles 25%, Temporal 25%, Evidence 10%."""
+        """Format results with budget shares: Facts 40%, Entity profiles 25%, Temporal 25%, Evidence 10%.
+
+        Deduplicates by normalized content so duplicate nodes (same text, different id) appear once.
+        """
         if not results:
             return ""
         char_per_token = 4
@@ -407,14 +416,19 @@ class MemoryRetrieval:
         node_ids = [r["id"] for r in results]
 
         sections: list[str] = []
+        seen_fact_content: set[str] = set()
 
         if facts:
             lines = []
             chars = 0
             for r in facts:
                 c = r.get("content", "")
+                key = self._normalize_content(c)
+                if key in seen_fact_content or not key:
+                    continue
                 if chars + len(c) + 4 > budget_facts:
                     break
+                seen_fact_content.add(key)
                 lines.append(f"- {c}")
                 chars += len(c) + 4
             if lines:
@@ -424,24 +438,34 @@ class MemoryRetrieval:
         if entities:
             lines = []
             chars = 0
+            seen_entity_block: set[str] = set()
             for e in entities[:5]:
                 name = e.get("canonical_name", "")
                 summary = e.get("summary") or "(no summary)"
                 block = f"**{name}**: {summary}"
+                key = self._normalize_content(block)
+                if key in seen_entity_block or not key:
+                    continue
                 if chars + len(block) + 2 > budget_entities:
                     break
+                seen_entity_block.add(key)
                 lines.append(block)
                 chars += len(block) + 2
             if lines:
                 sections.append("## Entity profiles\n" + "\n".join(lines))
 
+        seen_temporal_content: set[str] = set()
         if episodic:
             lines = []
             chars = 0
             for r in sorted(episodic, key=lambda x: x.get("event_time", 0)):
                 c = r.get("content", "")
+                key = self._normalize_content(c)
+                if key in seen_temporal_content or not key:
+                    continue
                 if chars + len(c) + 4 > budget_temporal:
                     break
+                seen_temporal_content.add(key)
                 lines.append(f"- {c}")
                 chars += len(c) + 4
             if lines:
@@ -457,8 +481,12 @@ class MemoryRetrieval:
                 chars = 0
                 for ep in sorted(episodes, key=lambda x: x.get("event_time", 0)):
                     c = ep.get("content", "")
+                    key = self._normalize_content(c)
+                    if key in seen_temporal_content or not key:
+                        continue
                     if chars + len(c) + 4 > budget_temporal:
                         break
+                    seen_temporal_content.add(key)
                     lines.append(f"- {c}")
                     chars += len(c) + 4
                 if lines:
@@ -467,6 +495,7 @@ class MemoryRetrieval:
         if facts and budget_evidence > 0:
             evidence_lines = []
             chars = 0
+            seen_evidence: set[str] = set()
             for r in facts[:2]:
                 targets = await self._storage.get_derived_from_targets(r["id"])
                 if targets:
@@ -474,7 +503,11 @@ class MemoryRetrieval:
                     if nodes:
                         src = nodes[0].get("content", "")[:200]
                         block = f"- Source: {src}..."
+                        key = self._normalize_content(block)
+                        if key in seen_evidence or not key:
+                            continue
                         if chars + len(block) + 2 <= budget_evidence:
+                            seen_evidence.add(key)
                             evidence_lines.append(block)
                             chars += len(block) + 2
             if evidence_lines:
@@ -484,10 +517,15 @@ class MemoryRetrieval:
             lines = []
             chars = 0
             max_chars = total_chars
+            seen_fallback: set[str] = set()
             for r in results:
                 c = r.get("content", "")
+                key = self._normalize_content(c)
+                if key in seen_fallback or not key:
+                    continue
                 if chars + len(c) + 4 > max_chars:
                     break
+                seen_fallback.add(key)
                 lines.append(f"- {c}")
                 chars += len(c) + 4
             return "## Relevant memory\n" + "\n".join(lines) if lines else ""

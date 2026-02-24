@@ -193,6 +193,26 @@ class TestMemoryRetrieval:
         assert ctx
         assert "budget" in ctx
 
+    @pytest.mark.asyncio
+    async def test_assemble_context_deduplicates_same_content(self) -> None:
+        """Facts with identical content (different node ids) appear once in output."""
+        storage = MagicMock()
+        storage.get_entities_for_nodes = AsyncMock(return_value=[])
+        storage.get_derived_from_targets = AsyncMock(return_value=[])
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        # Simulate search returning duplicate content from different nodes (e.g. FTS + vector)
+        results = [
+            {"id": "id1", "type": "semantic", "content": "User writes in Python and Go."},
+            {"id": "id2", "type": "semantic", "content": "User writes in Python and Go."},
+            {"id": "id3", "type": "semantic", "content": "User no longer writes in PHP."},
+        ]
+        ctx = await retrieval.assemble_context(results, token_budget=500)
+        assert "## Facts" in ctx
+        # Each fact line should appear exactly once
+        assert ctx.count("User writes in Python and Go.") == 1
+        assert ctx.count("User no longer writes in PHP.") == 1
+
 
 class TestQueryComplexity:
     """classify_query_complexity heuristic."""
