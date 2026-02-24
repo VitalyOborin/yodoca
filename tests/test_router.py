@@ -132,6 +132,76 @@ class TestInvokeAgent:
         assert result == "agent said this"
         mock_runner.run.assert_called_once_with(mock_agent, "hello", session=None)
 
+    @pytest.mark.asyncio
+    async def test_invoke_agent_with_middleware_injects_context_into_system(self) -> None:
+        """When middleware returns context, agent is cloned with extended instructions and original prompt is used."""
+        router = MessageRouter()
+        mock_agent = MagicMock()
+        mock_agent.instructions = "You are helpful."
+        cloned_agent = MagicMock()
+        mock_agent.clone.return_value = cloned_agent
+        result_value = MagicMock()
+        result_value.final_output = "replied"
+
+        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+            return "memory: user likes cats"
+
+        router.set_invoke_middleware(middleware)
+        router.set_agent(mock_agent)
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=result_value)
+            await router.invoke_agent("hello")
+
+        mock_agent.clone.assert_called_once_with(
+            instructions="You are helpful.\n\n---\n\nmemory: user likes cats"
+        )
+        mock_runner.run.assert_called_once_with(cloned_agent, "hello", session=None)
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_with_middleware_empty_context_no_clone(self) -> None:
+        """When middleware returns empty string, no clone; base agent and prompt used."""
+        router = MessageRouter()
+        mock_agent = MagicMock()
+        mock_agent.instructions = "Base."
+        result_value = MagicMock()
+        result_value.final_output = "ok"
+
+        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+            return ""
+
+        router.set_invoke_middleware(middleware)
+        router.set_agent(mock_agent)
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=result_value)
+            await router.invoke_agent("hello")
+
+        mock_agent.clone.assert_not_called()
+        mock_runner.run.assert_called_once_with(mock_agent, "hello", session=None)
+
+    @pytest.mark.asyncio
+    async def test_enrich_prompt_returns_context_plus_prompt(self) -> None:
+        """enrich_prompt returns context + separator + prompt when middleware returns context."""
+        router = MessageRouter()
+
+        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+            return "recall: xyz"
+
+        router.set_invoke_middleware(middleware)
+        result = await router.enrich_prompt("what is x?", agent_id="scout")
+        assert result == "recall: xyz\n\n---\n\nwhat is x?"
+
+    @pytest.mark.asyncio
+    async def test_enrich_prompt_empty_context_returns_prompt_only(self) -> None:
+        """enrich_prompt returns prompt only when middleware returns empty."""
+        router = MessageRouter()
+
+        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+            return ""
+
+        router.set_invoke_middleware(middleware)
+        result = await router.enrich_prompt("hello")
+        assert result == "hello"
+
 
 class TestSubscribeAndEmit:
     """subscribe, unsubscribe, and _emit via handle_user_message."""

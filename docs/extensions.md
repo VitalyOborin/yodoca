@@ -171,7 +171,7 @@ Loader wraps it in `asyncio.create_task()` and cancels on shutdown.
 
 ### `ContextProvider`
 
-Enriches the agent prompt before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
+Enriches agent context before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
 
 ```python
 @property
@@ -179,10 +179,15 @@ def context_priority(self) -> int:
     """Lower value = earlier in chain. Default: 100."""
 
 async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str | None:
-    """Return context string to prepend, or None to skip."""
+    """Return context string to inject, or None to skip."""
 ```
 
-Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and prepends them to the user prompt before `Runner.run()`.
+Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and returns a **context string** (not an enriched user message).
+
+**Two public behaviors:**
+
+- **invoke_agent** / **invoke_agent_streamed**: Context is injected into the **system** role via `agent.clone(instructions=...)`; the user message is unchanged.
+- **enrich_prompt**: Returns a single string `context + separator + prompt` for downstream agents (e.g. Heartbeat Scout) that receive one combined prompt.
 
 **Example:** The `memory` extension implements ContextProvider to inject relevant context via intent-aware hybrid search (FTS5 + vector + graph traversal + RRF).
 
@@ -303,7 +308,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 |--------|-------------|
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
-| `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain without invoking agent |
+| `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents (e.g. Heartbeat Scout). For invoke_agent, context is injected into system role instead. |
 | `on_user_message` | Alias for `router.handle_user_message` (full message cycle) |
 
 ### System Control

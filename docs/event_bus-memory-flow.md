@@ -98,14 +98,20 @@ set_invoke_middleware() chain
     │       → return formatted markdown or None
     │
     ▼
-Enhanced prompt = context + "\n\n---\n\n" + original_prompt
+context = middleware(prompt)  →  empty string if no matches
     │
     ▼
-Runner.run(agent, enhanced_prompt, session=session)
+If context non-empty and agent.instructions is str:
+    agent = agent.clone(instructions=agent.instructions + "\n\n---\n\n" + context)
+    │
+    ▼
+Runner.run(agent, prompt, session=session)
+    → API: system = base instructions + context; user = prompt (unchanged)
 ```
 
 - **Where:** `Loader.wire_context_providers()` builds the middleware; `router.set_invoke_middleware()` registers it.
 - **Memory role:** `get_context()` runs intent-aware hybrid search and returns structured context with budget-allocated sections, or `None` if no matches.
+- **Context injection:** Context goes into the **system** role via `agent.clone(instructions=...)`, not into the user message.
 
 ---
 

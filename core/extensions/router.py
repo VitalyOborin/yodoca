@@ -74,7 +74,12 @@ class MessageRouter:
         self,
         middleware: Callable[[str, str | None], Awaitable[str]],
     ) -> None:
-        """Set middleware to enrich prompt before agent invocation. Called before Runner.run()."""
+        """Set middleware that returns context to inject into the system role.
+
+        The callable receives (prompt, agent_id) and returns a context string. Empty string
+        means no context. The caller injects this into system via agent.clone(instructions=...),
+        not into the user message.
+        """
         self._invoke_middleware = middleware
 
     def set_session(self, session: Any, session_id: str) -> None:
@@ -127,15 +132,22 @@ class MessageRouter:
         """Run agent with prompt; return response. Serialized with other invocations."""
         if not self._agent:
             return "(No agent configured.)"
+        stripped = prompt.strip()
+        context = ""
         if self._invoke_middleware:
-            prompt = await self._invoke_middleware(prompt.strip(), agent_id)
+            context = await self._invoke_middleware(stripped, agent_id) or ""
+        agent = self._agent
+        if context and isinstance(getattr(self._agent, "instructions", None), str):
+            agent = self._agent.clone(
+                instructions=self._agent.instructions + "\n\n---\n\n" + context
+            )
         async with self._lock:
             try:
                 from agents import Runner
 
                 result = await Runner.run(
-                    self._agent,
-                    prompt,
+                    agent,
+                    stripped,
                     session=self._session,
                 )
                 return result.final_output or ""
@@ -156,8 +168,15 @@ class MessageRouter:
         """
         if not self._agent:
             return "(No agent configured.)"
+        stripped = prompt.strip()
+        context = ""
         if self._invoke_middleware:
-            prompt = await self._invoke_middleware(prompt.strip(), agent_id)
+            context = await self._invoke_middleware(stripped, agent_id) or ""
+        agent = self._agent
+        if context and isinstance(getattr(self._agent, "instructions", None), str):
+            agent = self._agent.clone(
+                instructions=self._agent.instructions + "\n\n---\n\n" + context
+            )
 
         response_delta_type = None
         try:
@@ -173,8 +192,8 @@ class MessageRouter:
                 from agents import Runner
 
                 result = Runner.run_streamed(
-                    self._agent,
-                    prompt,
+                    agent,
+                    stripped,
                     session=self._session,
                 )
                 async for event in result.stream_events():
@@ -213,10 +232,18 @@ class MessageRouter:
                 return f"(Error: {e})"
 
     async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
-        """Apply ContextProvider middleware to prompt without invoking agent."""
-        if self._invoke_middleware:
-            return await self._invoke_middleware(prompt.strip(), agent_id)
-        return prompt
+        """Return context + separator + prompt for use as a single prompt by downstream agents.
+
+        Used by extensions (e.g. Heartbeat Scout) that pass the result to their own agent
+        as one message. For invoke_agent, context is injected into system role instead.
+        """
+        stripped = prompt.strip()
+        if not self._invoke_middleware:
+            return stripped
+        context = await self._invoke_middleware(stripped, agent_id) or ""
+        if context:
+            return context + "\n\n---\n\n" + stripped
+        return stripped
 
     async def handle_user_message(
         self, text: str, user_id: str, channel: ChannelProvider

@@ -413,21 +413,25 @@ class Loader:
         return sorted(providers, key=lambda p: p.context_priority)
 
     def wire_context_providers(self, router: MessageRouter) -> None:
-        """Wire ContextProvider chain into router's invoke middleware."""
+        """Wire ContextProvider chain into router's invoke middleware.
+
+        The middleware returns context to inject into the system role (empty string = no context),
+        not an enriched user message. The router uses this for system injection via agent.clone().
+        """
         providers = self._collect_context_providers()
         if not providers:
             return
 
         async def _middleware(prompt: str, agent_id: str | None = None) -> str:
+            """Return context to inject into system role (empty string = no context). Not an enriched user message."""
             parts: list[str] = []
             for provider in providers:
                 ctx = await provider.get_context(prompt, agent_id=agent_id)
                 if ctx:
                     parts.append(ctx)
             if not parts:
-                return prompt
-            header = "\n\n---\n\n".join(parts)
-            return f"{header}\n\n---\n\n{prompt}"
+                return ""
+            return "\n\n---\n\n".join(parts)
 
         router.set_invoke_middleware(_middleware)
 
