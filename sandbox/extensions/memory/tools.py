@@ -144,7 +144,7 @@ def build_tools(
 ) -> list[Any]:
     """Build Orchestrator tools. Phase 2: search, remember, correct, confirm."""
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def search_memory(
         query: str,
         type: str | None = None,
@@ -368,7 +368,7 @@ def build_tools(
             status="ok",
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def weak_facts(threshold: float = 0.3, limit: int = 10) -> WeakFactsResult:
         """List facts with low confidence that may need confirmation or will decay soon."""
         nodes = await storage.get_weak_nodes(threshold=threshold, limit=limit)
@@ -383,7 +383,7 @@ def build_tools(
         ]
         return WeakFactsResult(facts=facts, threshold=threshold)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     async def get_timeline(
         entity_name: str = "",
         after: str = "",

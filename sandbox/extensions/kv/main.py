@@ -3,10 +3,9 @@
 import fnmatch
 import json
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 from agents import function_tool
-from pydantic import Field
 
 _DATA_FILE = "values.json"
 _TEMP_FILE = "values.json.tmp"
@@ -134,10 +133,10 @@ class KvExtension:
             return []
         store = self._store
 
-        @function_tool(name_override="kv_set")
+        @function_tool(name_override="kv_set", strict_mode=False)
         async def kv_set(
-            key: Annotated[str, Field(min_length=1)],
-            value: str = "",
+            key: str,
+            value: Any = "",
         ) -> str:
             """Store a value under key in the persistent key-value store.
 
@@ -145,20 +144,28 @@ class KvExtension:
 
             Args:
                 key: Non-empty key name. Use alphanumeric, underscore, hyphen for best compatibility.
-                value: Value to store. Empty string or omit to delete the key.
+                value: Value to store. Can be string, number, or boolean. Empty string to delete.
             """
             if not key or not key.strip():
                 return "Error: key must be a non-empty string."
+
+            # Если модель передала число (например, 444), конвертируем его в строку
+            if value is not None:
+                value = str(value)
+
+            # Пустая строка расценивается как команда на удаление (None)
             val: str | None = value.strip() if value else None
             if val == "":
                 val = None
+
             await store.set(key.strip(), val)
+            
             if val is None:
                 return f"Key '{key.strip()}' deleted."
             return f"Key '{key.strip()}' set."
 
         @function_tool(name_override="kv_get")
-        async def kv_get(key: Annotated[str, Field(min_length=1)]) -> str:
+        async def kv_get(key: str) -> str:
             """Retrieve value(s) from the persistent key-value store.
 
             Accepts an exact key or a glob pattern with wildcards:

@@ -100,7 +100,7 @@ class SandboxEditor:
 apply_patch_tool = ApplyPatchTool(editor=SandboxEditor())
 
 
-@function_tool(name_override="file")
+@function_tool(name_override="file", strict_mode=False)
 def file(
     action: Literal["read", "write", "delete", "copy", "move", "stat", "list"],
     path: str,
