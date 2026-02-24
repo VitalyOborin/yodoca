@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from core.events.topics import SystemTopics
 from core.extensions.router import MessageRouter
+from core.secrets import get_secret_async
 
 if TYPE_CHECKING:
     from core.events.bus import EventBus
@@ -133,8 +133,8 @@ class ExtensionContext:
             self._event_bus.subscribe(topic, handler, self.extension_id)
 
     async def get_secret(self, name: str) -> str | None:
-        """Get a secret by name from .env."""
-        return os.environ.get(name)
+        """Get a secret by name (keyring or os.environ fallback)."""
+        return await get_secret_async(name)
 
     def get_config(self, key: str, default: Any = None) -> Any:
         """Read a value from the config: block in manifest.yaml."""

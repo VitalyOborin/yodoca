@@ -1,5 +1,6 @@
 """Atomic config write for settings.yaml and .env."""
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -7,8 +8,22 @@ from typing import Any
 import yaml
 from dotenv import dotenv_values
 
+from core.secrets import is_keyring_available, set_secret
 from core.settings import get_default_settings, get_setting, load_settings
 from onboarding.state import WizardState
+
+logger = logging.getLogger(__name__)
+
+
+def _secret_keys_from_providers(providers: dict[str, Any]) -> set[str]:
+    """Keys that are secrets (api_key_secret values from provider configs)."""
+    out: set[str] = set()
+    for cfg in providers.values():
+        if isinstance(cfg, dict):
+            secret = cfg.get("api_key_secret")
+            if secret:
+                out.add(secret)
+    return out
 
 
 def write_config(
@@ -28,7 +43,28 @@ def write_config(
         base["extensions"] = {**(base.get("extensions") or {}), **state.extensions}
     _write_atomic_yaml(settings_path, base)
 
-    _write_env(env_path, state.env_vars)
+    secret_keys = _secret_keys_from_providers(state.providers)
+    if is_keyring_available():
+        for k, v in state.env_vars.items():
+            if k in secret_keys:
+                try:
+                    set_secret(k, v)
+                except Exception as e:
+                    logger.warning("Failed to store %s in keyring: %s. Writing to .env.", k, e)
+                    secret_keys = secret_keys - {k}
+        env_to_write = {
+            k: v
+            for k, v in state.env_vars.items()
+            if k not in secret_keys
+        }
+    else:
+        logger.warning(
+            "Keyring unavailable (headless/CI). Storing secrets in .env. "
+            "Consider using .env for headless deployments."
+        )
+        env_to_write = state.env_vars
+
+    _write_env(env_path, env_to_write, exclude_secrets=secret_keys if is_keyring_available() else set())
 
     settings = load_settings(project_root / "config")
     restart_rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
@@ -54,9 +90,20 @@ def _write_atomic_yaml(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
-def _write_env(env_path: Path, new_vars: dict[str, str]) -> None:
-    """Merge new env vars into .env, preserving existing unrelated keys."""
+def _write_env(
+    env_path: Path,
+    new_vars: dict[str, str],
+    *,
+    exclude_secrets: set[str] | None = None,
+) -> None:
+    """Merge new env vars into .env, preserving existing unrelated keys.
+
+    When exclude_secrets is set, keys in that set are stripped from existing
+    .env before merge (so secrets stay in keyring only).
+    """
+    exclude = exclude_secrets or set()
     existing = dict(dotenv_values(env_path)) if env_path.exists() else {}
+    existing = {k: v for k, v in existing.items() if k not in exclude}
     merged = {**existing, **new_vars}
 
     content = "\n".join(f"{k}={v}" for k, v in merged.items())

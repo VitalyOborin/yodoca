@@ -32,22 +32,46 @@ def test_write_config_creates_settings_and_env(tmp_path: Path) -> None:
     settings_path = tmp_path / "config" / "settings.yaml"
     env_path = tmp_path / ".env"
 
-    write_config(state, settings_path, env_path, tmp_path)
+    with patch("onboarding.config_writer.is_keyring_available", return_value=False):
+        write_config(state, settings_path, env_path, tmp_path)
 
     assert settings_path.exists()
     data = yaml.safe_load(settings_path.read_text())
     assert data["providers"]["openai"]["type"] == "openai_compatible"
     assert data["agents"]["default"]["provider"] == "openai"
-    assert data["agents"]["default"]["model"] == "gpt-5.2"
+    assert data["agents"]["default"]["model"] == "gpt-4o-mini"
     assert data["agents"]["default"]["instructions"] == "prompts/default.jinja2"
     assert "embedding" not in data["agents"]
     assert data["extensions"]["embedding"]["provider"] == "openai"
-    assert data["extensions"]["embedding"]["default_model"] == "text-embedding-3-large"
+    assert data["extensions"]["embedding"]["default_model"] == "text-embedding-3-small"
 
     assert env_path.exists()
     assert "OPENAI_API_KEY=sk-test" in env_path.read_text()
 
     assert (tmp_path / "sandbox" / ".restart_requested").exists()
+
+
+def test_write_config_stores_secrets_in_keyring_when_available(tmp_path: Path) -> None:
+    """When keyring is available, secrets go to keyring, not .env."""
+    state = WizardState(
+        providers={
+            "openai": {"type": "openai_compatible", "api_key_secret": "OPENAI_API_KEY"},
+        },
+        env_vars={"OPENAI_API_KEY": "sk-test"},
+        agents={"default": {"provider": "openai", "model": "gpt-4o-mini"}},
+    )
+    settings_path = tmp_path / "config" / "settings.yaml"
+    env_path = tmp_path / ".env"
+
+    with (
+        patch("onboarding.config_writer.is_keyring_available", return_value=True),
+        patch("onboarding.config_writer.set_secret") as mock_set,
+    ):
+        write_config(state, settings_path, env_path, tmp_path)
+
+    mock_set.assert_called_once_with("OPENAI_API_KEY", "sk-test")
+    content = env_path.read_text() if env_path.exists() else ""
+    assert "OPENAI_API_KEY" not in content or "sk-test" not in content
 
 
 def test_write_config_preserves_existing_env_keys(tmp_path: Path) -> None:

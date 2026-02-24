@@ -27,6 +27,7 @@ dependencies = [
     "aioconsole>=0.8.0",
     "humanize>=4.9.0",
     "questionary>=2.0.0",
+    "keyring>=25.0.0",
 ]
 
 [project.optional-dependencies]

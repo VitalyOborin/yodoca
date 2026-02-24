@@ -1,7 +1,7 @@
 """Tests for core.config_check."""
 
-import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -56,6 +56,22 @@ def test_is_configured_local_provider_ok(tmp_path: Path) -> None:
     }
     (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
     ok, reason = is_configured(project_root=tmp_path)
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_is_configured_with_keyring_secret(tmp_path: Path) -> None:
+    """When provider key is in keyring (not .env), returns True."""
+    (tmp_path / "config").mkdir()
+    settings = {
+        "providers": {
+            "openai": {"type": "openai_compatible", "api_key_secret": "OPENAI_API_KEY"},
+        },
+        "agents": {"default": {"provider": "openai", "model": "gpt-5"}},
+    }
+    (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
+    with patch("core.config_check.secrets.get_secret", return_value="sk-from-keyring"):
+        ok, reason = is_configured(project_root=tmp_path)
     assert ok is True
     assert reason == "ok"
 

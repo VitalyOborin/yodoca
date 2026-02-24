@@ -1,7 +1,6 @@
 """Embedding extension: provider-agnostic embedding generation via ModelRouter."""
 
 import logging
-import os
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -84,17 +83,19 @@ class EmbeddingExtension:
         )
         self._default_dimensions = context.get_config("default_dimensions", 256)
         provider_id = context.get_config("provider")
-        self._client = self._build_client(context, provider_id)
+        self._client = await self._build_client(context, provider_id)
         if not self._client:
             logger.warning(
                 "No embedding-capable provider found, embedding disabled"
             )
 
-    def _build_client(self, context: Any, provider_id: str | None) -> AsyncOpenAI | None:
+    async def _build_client(
+        self, context: Any, provider_id: str | None
+    ) -> AsyncOpenAI | None:
         router = context.model_router
         if router:
             return router.get_provider_client(provider_id)
-        key = os.environ.get("OPENAI_API_KEY")
+        key = await context.get_secret("OPENAI_API_KEY")
         return AsyncOpenAI(api_key=key) if key else None
 
     async def start(self) -> None:

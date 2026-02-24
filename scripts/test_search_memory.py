@@ -7,7 +7,6 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -18,6 +17,8 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from dotenv import load_dotenv
+
+from core import secrets
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
@@ -36,7 +37,7 @@ async def main() -> None:
     from core.settings import load_settings
 
     settings = load_settings()
-    model_router = ModelRouter(settings=settings, secrets_getter=os.environ.get)
+    model_router = ModelRouter(settings=settings, secrets_getter=secrets.get_secret)
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
     loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)

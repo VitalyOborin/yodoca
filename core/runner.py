@@ -1,11 +1,11 @@
 """Entry point for the AI agent process: bootstrap Loader, Router, Agent; extensions run the UI."""
 
 import asyncio
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from core import secrets
 from core.terminal import reset_terminal_for_input
 
 from core.agents.orchestrator import create_orchestrator_agent
@@ -32,7 +32,7 @@ async def main_async() -> None:
 
     model_router = ModelRouter(
         settings=settings,
-        secrets_getter=os.environ.get,
+        secrets_getter=secrets.get_secret,
     )
 
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"

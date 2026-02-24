@@ -14,7 +14,6 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 import time
 from pathlib import Path
@@ -27,6 +26,8 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 from dotenv import load_dotenv
 
+from core import secrets
+
 load_dotenv(_PROJECT_ROOT / ".env")
 
 
@@ -37,7 +38,7 @@ async def main() -> None:
     from core.settings import load_settings
 
     settings = load_settings()
-    model_router = ModelRouter(settings=settings, secrets_getter=os.environ.get)
+    model_router = ModelRouter(settings=settings, secrets_getter=secrets.get_secret)
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
 

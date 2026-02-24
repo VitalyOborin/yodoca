@@ -8,6 +8,8 @@ from pathlib import Path
 import yaml
 from dotenv import dotenv_values
 
+from core import secrets
+
 
 def is_configured(
     settings_path: Path | None = None,
@@ -55,7 +57,9 @@ def is_configured(
         if cfg.get("api_key_literal"):
             return True
         secret = cfg.get("api_key_secret")
-        return bool(secret and env_vars.get(secret))
+        if not secret:
+            return False
+        return bool(secrets.get_secret(secret) or env_vars.get(secret))
 
     default_agent = (settings.get("agents") or {}).get("default")
     if not default_agent or not isinstance(default_agent, dict):
