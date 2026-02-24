@@ -180,11 +180,23 @@ def build_tools(
         logger.info("search_memory: query=%r types=%s results=%d", query[:60], node_types, len(enriched))
         return SearchResult(results=enriched, count=len(enriched))
 
-    @function_tool
-    async def remember_fact(fact: str) -> RememberResult:
-        """Explicitly save a fact to long-term memory."""
+    @function_tool(strict_mode=False)
+    async def remember_fact(fact: str, confidence: float = 1.0) -> RememberResult:
+        """Explicitly save a fact to long-term memory.
+
+        If the user expresses doubt, uncertainty, or uses hedging language
+        (e.g. "maybe", "I think", "probably", "not sure"), set confidence lower.
+        Confident, definitive statements should use the default 1.0.
+
+        Args:
+            fact: The fact text to remember.
+            confidence: Certainty level from 0.0 to 1.0. Default 1.0 (certain).
+                Use 0.7-0.9 for "I think / probably", 0.4-0.6 for "maybe / not sure",
+                0.1-0.3 for vague or unverified claims.
+        """
         if not fact or not fact.strip():
             return RememberResult(node_id="", status="error: empty fact")
+        safe_confidence = max(0.0, min(1.0, float(confidence)))
         fact_text = fact.strip()
         now = int(time.time())
 
@@ -226,7 +238,7 @@ def build_tools(
             "valid_from": now,
             "source_type": "conversation",
             "source_role": "orchestrator",
-            "confidence": 1.0,
+            "confidence": safe_confidence,
         }
         await storage.insert_node_awaitable(node)
         if embed_fn:
