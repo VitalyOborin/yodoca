@@ -42,6 +42,8 @@ Documentation for the assistant4 AI agent platform.
 | [008](adr/008-memory-v2.md) | Memory v2: Graph-Based Cognitive Memory |
 | [009](adr/009-memory-timestamp-output-format.md) | Memory Timestamp Output Format |
 | [010](adr/010-streaming.md) | Streaming Response Delivery |
+| [011](adr/011-onboarding.md) | Onboarding |
+| [012](adr/012-secrets.md) | Secrets Management |
 
 ---
 

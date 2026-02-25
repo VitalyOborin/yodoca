@@ -10,6 +10,7 @@
   </p>
   <p>
     <a href="#quick-start">Quick Start</a> ·
+    <a href="#onboarding">Onboarding</a> ·
     <a href="docs/">Docs</a> ·
     <a href="sandbox/extensions/">Extensions</a>
   </p>
@@ -26,15 +27,15 @@
 
 | Feature | What it means |
 |---|---|
-| 🧠 **Long-term memory** | Hybrid FTS5 + vector (sqlite-vec) + entity search. Survives restarts. Ebbinghaus decay built in. |
-| 💓 **Heartbeat loop** | Scout → Orchestrator escalation every 2 min. Agent acts *between* conversations, not only when you write. |
+| 🧠 **Long-term memory** | Graph-based (nodes, edges, entities). Hybrid FTS5 + vector (sqlite-vec) search. Ebbinghaus decay, nightly consolidation. |
+| 💓 **Heartbeat loop** | Scout → Orchestrator escalation every 10 min. Agent acts *between* conversations, not only when you write. |
 | 🔌 **Extensions-only kernel** | Every feature — channels, memory, agents, schedulers — is an extension. Core has zero user-facing code. |
 | 📦 **Declarative agents** | Define a sub-agent in one `manifest.yaml`. No Python required. |
 | 🔄 **Multi-provider LLM** | OpenAI, Anthropic, LM Studio, OpenRouter — per-agent model routing from config. |
 | 💾 **Zero external deps** | SQLite for events, memory, sessions. No Redis, no Postgres, no cloud. |
 | 🛡 **Supervisor** | Auto-restart on crash, restart-by-file, backoff. Run `python -m supervisor` and forget. |
-
-[License](LICENSE)
+| 🔐 **Secrets** | API keys in OS keyring (Windows Credential Manager, Keychain) or `.env` fallback. |
+| 🧭 **Onboarding** | Guided setup wizard when config is missing. Supervisor launches it automatically. |
 
 AI agent runtime designed for **always-on automation** and **self-extension**.  
 The core stays tiny (nano-kernel); all capabilities live in **extensions** (channels, tools, services, schedulers, even other agents).  
@@ -80,10 +81,12 @@ All functionality lives in extensions under `sandbox/extensions/<extension_id>/`
 Extensions are "typed" by the protocols they implement (capabilities are detected at runtime):
 
 - `ChannelProvider` — receive user messages and send responses (reactive + proactive); CLI, Telegram
+- `StreamingChannelProvider` — incremental response delivery (token-by-token streaming)
 - `ToolProvider` — expose tools/functions to the orchestrator
 - `AgentProvider` — specialized agents invoked as tools (Builder, declarative agents)
 - `ServiceProvider` — background loops (caches, inbox watchers, MCP servers)
 - `SchedulerProvider` — cron-like tasks (reminders, periodic monitors)
+- `ContextProvider` — enrich agent prompt with relevant context before each invocation (e.g. memory retrieval)
 - `SetupProvider` — guided configuration (tokens, secrets, credentials)
 
 ### 4) Durable Event Bus (SQLite journal)
@@ -98,11 +101,12 @@ Delivery is **at-least-once**, so handlers should be idempotent or deduplicate b
 
 ### 5) Memory as an extension
 
-Long-term memory is implemented as an extension, with:
+Long-term memory is a graph-based extension (`memory` + `embedding`):
 
-- fast append-only writes on the hot path
-- background consolidation (summaries, indexing)
-- optional full-text search (and embeddings later, if needed)
+- typed graph schema: nodes (fact / episode / procedure / opinion), edges, entities
+- hybrid retrieval: FTS5 + vector (sqlite-vec) + graph traversal, fused via RRF
+- LLM-powered write path: consolidation, entity enrichment, causal inference
+- Ebbinghaus decay with access reinforcement; nightly maintenance pipeline
 
 ---
 
@@ -111,6 +115,7 @@ Long-term memory is implemented as an extension, with:
 ```
 ┌────────────────────────────────────────┐
 │               SUPERVISOR               │  process watcher
+│  config check → onboarding if needed  │
 │        spawn · monitor · restart       │
 └────────────────────┬───────────────────┘
 │ subprocess
@@ -129,12 +134,15 @@ Long-term memory is implemented as an extension, with:
 ## Features
 
 - Always-on runtime via Supervisor-managed core process
+- **Onboarding wizard** — guided setup when config is missing; Supervisor launches it automatically
+- **Secrets** — API keys in OS keyring (Windows Credential Manager, macOS Keychain) or `.env` fallback
 - Extension system with a minimal, generation-friendly contract (`manifest.yaml` + `main.py`)
 - Channels: CLI + (optional) Telegram; agent can choose channel via `list_channels` / `send_to_channel` tools
 - Durable event bus (SQLite WAL) for asynchronous flows + observability
 - Scheduler extensions for cron-like automation (one-shot and recurring)
-- Memory extension for long-term context (hybrid search, consolidation, decay)
-- Heartbeat loop: Scout → Orchestrator escalation every 2 min
+- **Memory v2** — graph-based cognitive memory (nodes, edges, entities), hybrid FTS5 + vector search, Ebbinghaus decay, nightly consolidation
+- **Embedding extension** — separate provider for memory vector search (OpenAI, OpenRouter, local)
+- Heartbeat loop: Scout → Orchestrator escalation every 10 min
 - Agent-as-extension: Builder agent, declarative agents (manifest-only)
 - Safe restarts initiated by extensions (e.g., after generating new code)
 
@@ -160,13 +168,23 @@ uv sync
 # Or with pip:
 # pip install -e .
 
-# 3) Configure secrets (optional, for certain extensions)
-cp .env.example .env
-# edit .env — add OPENAI_API_KEY, etc.
-
-# 4) Start via Supervisor
+# 3) Start via Supervisor — onboarding runs automatically if config is missing
 uv run python -m supervisor
 ```
+
+On first run, if `config/settings.yaml` is absent or incomplete, the Supervisor launches the **onboarding wizard** interactively. You can also run it manually: `uv run python -m onboarding`.
+
+---
+
+## Onboarding
+
+When you run `python -m supervisor`, it first checks whether the app is configured (`config/settings.yaml` exists, providers have API keys, etc.). If not, it starts the **onboarding wizard** (`python -m onboarding`):
+
+1. **Provider step** — Select LLM providers (OpenAI, Anthropic, OpenRouter, LM Studio), enter API keys, choose models.
+2. **Embedding step** — Memory needs an embedding model; choose one (or reuse the default provider if it supports embeddings).
+3. **Verify step** — Probes each provider to confirm connectivity; you can retry or cancel.
+
+On success, the wizard writes `config/settings.yaml` and stores secrets in the OS keyring (when available) or `.env`. See [docs/secrets.md](docs/secrets.md) for details.
 
 ---
 
@@ -177,7 +195,9 @@ LLM providers and models are configured in `config/settings.yaml`:
 - `agents` — per-agent: `provider`, `model`, optional `instructions`, `temperature`, `max_tokens`
 - `providers` — API definitions: `type` (openai_compatible / anthropic), `base_url`, `api_key_secret` or `api_key_literal`
 
-Secrets live in `.env`; never store API keys in YAML. See [docs/configuration.md](docs/configuration.md) and `config/settings.yaml` for examples.
+Secrets live in the OS keyring (when available) or `.env`; never store API keys in YAML. See [docs/configuration.md](docs/configuration.md), [docs/secrets.md](docs/secrets.md), and `config/settings.yaml` for examples.
+
+To reset everything (config, memory, secrets) and start fresh: `uv run python scripts/reset.py`.
 
 ---
 
@@ -187,6 +207,12 @@ Secrets live in `.env`; never store API keys in YAML. See [docs/configuration.md
 supervisor/              # process watcher (spawn, monitor, restart)
   __main__.py
   runner.py
+
+onboarding/              # setup wizard (providers, embedding, verify)
+  __main__.py
+  wizard.py
+  config_writer.py
+  steps/
 
 core/                    # nano-kernel
   __main__.py
@@ -200,14 +226,21 @@ core/                    # nano-kernel
 sandbox/
   extensions/            # all extensions live here
     cli_channel/         # stdin/stdout REPL
-    telegram_channel/     # Telegram Bot API (aiogram)
-    memory/              # long-term episodic + semantic memory
-    scheduler/           # one-shot and recurring events
-    heartbeat/           # Scout → Orchestrator escalation
+    telegram_channel/    # Telegram Bot API (aiogram)
+    memory/              # graph-based long-term memory (FTS5 + vector + entities)
+    embedding/           # embedding generation for memory search
+    scheduler/            # one-shot and recurring events
+    heartbeat/            # Scout → Orchestrator escalation
     kv/                  # key-value store (secrets, config)
-    builder_agent/        # code-generation agent
+    builder_agent/       # code-generation agent
+    simple_agent/        # declarative sub-agent (manifest-only)
     ...
   data/                  # per-extension private data (SQLite, caches, etc.)
+
+scripts/                 # utilities
+  reset.py               # wipe config, memory, secrets (fresh start)
+  run_memory_maintenance.py  # manual consolidation/decay run
+  heartbeat.py           # standalone heartbeat test
 ```
 
 ---
@@ -226,24 +259,19 @@ sandbox/extensions/<extension_id>/
 
 ```yaml
 id: telegram_channel
-name: Telegram Bot Channel
-version: "1.0.0"
-
-description: >
-  User communication channel via Telegram bot.
-  Receives incoming messages and sends agent responses.
-
+name: Telegram Channel
+version: "0.2.0"
+description: |
+  Telegram Bot API channel via aiogram long-polling.
+  Setup: save secret 'telegram_channel_token' (Bot API token from @BotFather),
+  then call request_restart().
 entrypoint: main:TelegramChannelExtension
-
-setup_instructions: |
-  A bot token from @BotFather is needed for setup.
-
 depends_on:
   - kv
-
 config:
-  parse_mode: MarkdownV2
-
+  token_secret: telegram_channel_token
+  polling_timeout: 10
+  streaming_enabled: true
 enabled: true
 ```
 
@@ -251,10 +279,13 @@ enabled: true
 
 Implement one or more protocols in `main.py`:
 
-- Channel (receive/send)
+- Channel (receive/send messages)
+- StreamingChannel (incremental response delivery)
 - Tool (functions for the agent)
+- Agent (specialized sub-agent invoked as a tool)
 - Service (background loop)
 - Scheduler (cron task)
+- Context (enrich agent prompt before each turn)
 - Setup (configuration flow)
 
 ---
@@ -280,7 +311,7 @@ The event journal provides traceability and debugging:
 This is a **single-user local** system.
 
 - Extensions are trusted code running on your machine.
-- Secrets should be stored in `.env` (or OS keychain later).
+- Secrets are stored in the OS keyring (when available) or `.env`; see [docs/secrets.md](docs/secrets.md).
 - If you plan to run untrusted extensions, add sandboxing/isolation (future work).
 
 ---
@@ -291,8 +322,7 @@ This is a **single-user local** system.
 - Optional WASM sandboxing for untrusted extensions
 - Web UI channel
 - Event retries / dead-letter support
-- Memory: embeddings + retrieval policies (opt-in)
-- MCP extension: bridge to Model Context Protocol servers (web search, filesystem, etc.)
+- MCP extension: bridge to Model Context Protocol servers (web search, filesystem, etc.) — [ADR 006](docs/adr/006-mcp-extension.md)
 
 ---
 
@@ -304,7 +334,8 @@ Detailed docs live in [`docs/`](docs/):
 - [Extensions](docs/extensions.md) — manifest, protocols, creating extensions
 - [Channels](docs/channels.md) — CLI, Telegram, agent channel tools
 - [Memory](docs/memory.md), [Heartbeat](docs/heartbeat.md), [Scheduler](docs/scheduler.md)
-- [ADRs](docs/README.md#architecture-decision-records-adr) — architecture decisions
+- [Secrets](docs/secrets.md) — keyring vs `.env`, onboarding flow
+- [ADRs](docs/adr/) — architecture decisions
 
 ---
 
