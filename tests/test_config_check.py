@@ -36,7 +36,12 @@ def test_is_configured_provider_no_key(tmp_path: Path) -> None:
         "agents": {"default": {"provider": "openai", "model": "gpt-5"}},
     }
     (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
-    ok, reason = is_configured(project_root=tmp_path)
+    # Isolate from real process env and keyring so we truly test "no key" case
+    with (
+        patch("core.config_check.get_current_env", return_value={}),
+        patch("core.config_check.secrets.get_secret", return_value=None),
+    ):
+        ok, reason = is_configured(project_root=tmp_path)
     assert ok is False
     assert "no API key" in reason
 

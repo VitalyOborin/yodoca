@@ -1,6 +1,7 @@
 """Tests for Memory v2 extension."""
 
 import asyncio
+import importlib.util
 import sys
 import time
 from pathlib import Path
@@ -11,6 +12,15 @@ import pytest
 # Add memory extension to path
 _memory_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
 sys.path.insert(0, str(_memory_ext))
+
+# Load MemoryExtension from memory's main.py explicitly (avoid sys.modules["main"] from other extensions)
+_memory_main_spec = importlib.util.spec_from_file_location(
+    "memory_main", _memory_ext / "main.py"
+)
+assert _memory_main_spec and _memory_main_spec.loader
+_memory_main = importlib.util.module_from_spec(_memory_main_spec)
+_memory_main_spec.loader.exec_module(_memory_main)
+MemoryExtension = _memory_main.MemoryExtension
 
 from agent_tools import build_write_path_tools
 from decay import DecayService
@@ -685,8 +695,6 @@ class TestConsolidateSessionIdempotency:
     async def test_consolidate_skips_when_already_done(
         self, storage: MemoryStorage
     ) -> None:
-        from main import MemoryExtension
-
         storage.ensure_session("sess-idem")
         await storage.mark_session_consolidated("sess-idem")
         await asyncio.sleep(0.2)
@@ -705,8 +713,6 @@ class TestConsolidateSessionIdempotency:
         self, storage: MemoryStorage
     ) -> None:
         """Session ID change + session.completed both targeting same session: agent invoked once."""
-        from main import MemoryExtension
-
         storage.ensure_session("sess-dedup")
         await asyncio.sleep(0.2)
 
@@ -1230,8 +1236,6 @@ class TestNightlyMaintenance:
     async def test_execute_task_runs_pipeline(
         self, storage: MemoryStorage, tmp_db
     ) -> None:
-        from main import MemoryExtension
-
         storage.ensure_session("nightly-sess")
         await asyncio.sleep(0.2)
 

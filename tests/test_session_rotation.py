@@ -26,15 +26,20 @@ class TestSessionRotation:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
-        router.configure_session(
-            session_db_path=":memory:",
-            session_timeout=1800,
-            event_bus=mock_event_bus,
-        )
+        # Use distinct time values so configure_session and _rotate_session get different session IDs
+        with patch("core.extensions.router.time") as mock_time:
+            mock_time.time.side_effect = [1000.0, 1001.0]
+            router.configure_session(
+                session_db_path=":memory:",
+                session_timeout=1800,
+                event_bus=mock_event_bus,
+            )
         assert router._session_id is not None
         old_id = router._session_id
 
-        await router._rotate_session()
+        with patch("core.extensions.router.time") as mock_time:
+            mock_time.time.return_value = 1002.0
+            await router._rotate_session()
 
         assert router._session_id != old_id
         mock_event_bus.publish.assert_called_once()

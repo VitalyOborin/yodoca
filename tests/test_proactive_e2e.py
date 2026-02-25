@@ -57,6 +57,13 @@ def _setup_test_extensions(tmp_path: Path, project_root: Path) -> Path:
 async def test_proactive_dispatcher_end_to_end(tmp_path: Path) -> None:
     """task.received -> task_agent.invoke -> notify_user; event journal done; user got response."""
     project_root = Path(__file__).resolve().parent.parent
+    task_source = project_root / "sandbox" / "extensions" / "task_source"
+    task_agent = project_root / "sandbox" / "extensions" / "task_agent"
+    if not task_source.exists() or not task_agent.exists():
+        pytest.skip(
+            "task_source and task_agent extensions not found in sandbox/extensions; "
+            "e2e requires these to be present"
+        )
     extensions_dir = _setup_test_extensions(tmp_path, project_root)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
