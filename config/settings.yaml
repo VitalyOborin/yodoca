@@ -1,7 +1,7 @@
 agents:
   default:
     instructions: prompts/default.jinja2
-    model: gpt-5.2
+    model: gpt-5.2-mini
     provider: openai
 event_bus:
   batch_size: 3

@@ -12,21 +12,27 @@ from onboarding.state import WizardState
 from onboarding.ui import STYLE
 
 _ALL_PROVIDERS = [
-    ("OpenAI (GPT-5.2, GPT-5.1, GPT-5-mini, GPT-4o, ...)", "openai"),
-    ("Anthropic (Claude 4, Haiku, ...)", "anthropic"),
+    ("OpenAI (GPT-5.2, GPT-5.1, GPT-5-mini, ...)", "openai"),
+    ("Anthropic (Opus, Sonnet, Haiku)", "anthropic"),
     ("OpenRouter (200+ models)", "openrouter"),
     ("Local (LM Studio, Ollama, ...)", "lm_studio"),
 ]
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
-    "openai": ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-4o", "gpt-4o-mini"],
-    "anthropic": [
-        "claude-3-5-haiku-20241022",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
+    "openai": [
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-5-mini",
+        "gpt-4o",
+        "gpt-4o-mini"
     ],
-    "openrouter": ["openai/gpt-4o-mini", "openai/gpt-4o", "anthropic/claude-3-5-sonnet"],
-    "lm_studio": ["zai-org/glm-4.7-flash", "local-model"],
+    "anthropic": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+    ],
+    "openrouter": ["openai/gpt-5.2", "openai/gpt-5-mini", "anthropic/claude-sonnet-4-6"],
+    "lm_studio": ["zai-org/glm-4.7-flash", "qwen/qwen3.5-35b-a3b"],
 }
 
 _MANUAL_ENTRY = "__manual__"
