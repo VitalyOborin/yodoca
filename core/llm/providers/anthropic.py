@@ -35,3 +35,12 @@ class AnthropicProvider:
             return True
         except Exception:
             return False
+
+    def get_capability(
+        self,
+        cap: type,
+        config: ProviderConfig,
+        api_key: str | None,
+    ):
+        """Anthropic does not support embedding capability."""
+        return None

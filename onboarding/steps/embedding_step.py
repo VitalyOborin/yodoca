@@ -16,12 +16,18 @@ from onboarding.ui import STYLE
 
 # Embedding models per provider (only openai_compatible providers support embeddings)
 _EMBEDDING_MODELS: dict[str, list[str]] = {
-    "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
+    "openai": [
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+        "text-embedding-ada-002"
+    ],
     "openrouter": [
         "openai/text-embedding-3-small",
         "openai/text-embedding-3-large",
     ],
-    "lm_studio": ["nomic-embed-text", "local-model"],
+    "lm_studio": [
+        "text-embedding-jina-embeddings-v5-text-small-retrieval"
+    ],
 }
 
 _ADD_NEW_PROVIDER = "__add_new__"

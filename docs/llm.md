@@ -117,9 +117,9 @@ Returns a cached or newly built Model instance. Raises `KeyError` if no config f
 
 Register agent config from extension manifest. Called by Loader.
 
-### get_provider_client(provider_id=None) → AsyncOpenAI | None
+### get_capability(cap, provider_id=None) → T | None
 
-Build a raw AsyncOpenAI client for a provider. Used by extensions needing direct API access (e.g. embedding extension). If `provider_id` is None, returns the first openai_compatible provider with a valid key.
+Return a capability instance from a provider that supports it. Extensions use this for provider-agnostic features (e.g. embeddings via `EmbeddingCapability`). If `provider_id` is None, returns the first provider that supports the capability.
 
 ### supports_hosted_tools(agent_id) → bool
 

@@ -1,9 +1,11 @@
 """ModelRouter: bridge from config to Model instances. Core only."""
 
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
+
+T = TypeVar("T")
 from core.llm.providers import AnthropicProvider, OpenAICompatibleProvider
 
 logger = logging.getLogger(__name__)
@@ -121,43 +123,36 @@ class ModelRouter:
         self._cache[agent_id] = model_instance
         return model_instance
 
-    def get_provider_client(
+    def get_capability(
         self,
+        cap: type[T],
         provider_id: str | None = None,
-    ) -> "AsyncOpenAI | None":
-        """Build a raw AsyncOpenAI client for a provider.
+    ) -> T | None:
+        """Return a capability instance from a provider that supports it.
 
         Args:
-            provider_id: Explicit provider ID. None = first openai_compatible with a valid key.
+            cap: Capability protocol type (e.g. EmbeddingCapability).
+            provider_id: Explicit provider ID. None = first provider that supports the capability.
 
         Returns:
-            AsyncOpenAI client or None if provider not found or no key.
-
-        Used by extensions needing direct provider access (e.g., embedding).
+            Capability instance or None if no provider supports it.
         """
-        from openai import AsyncOpenAI
-
         if provider_id:
             candidates = [provider_id]
         else:
-            candidates = [
-                pid
-                for pid, cfg in self._provider_configs.items()
-                if cfg.type == "openai_compatible"
-            ]
+            candidates = list(self._provider_configs.keys())
+
         for pid in candidates:
             pcfg = self._provider_configs.get(pid)
-            if not pcfg or pcfg.type != "openai_compatible":
+            if not pcfg:
+                continue
+            provider = self._providers.get(pcfg.type)
+            if not provider:
                 continue
             key = self._resolve_key(pcfg)
-            if not key:
-                continue
-            return AsyncOpenAI(
-                base_url=pcfg.base_url,
-                api_key=key,
-                default_headers=pcfg.default_headers or None,
-                timeout=30.0,
-            )
+            result = provider.get_capability(cap, pcfg, key)
+            if result is not None:
+                return result
         return None
 
     def supports_hosted_tools(self, agent_id: str) -> bool:

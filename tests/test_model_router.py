@@ -1,10 +1,11 @@
-"""Tests for ModelRouter: config loading, get_model, register_agent_config, supports_hosted_tools."""
+"""Tests for ModelRouter: config loading, get_model, register_agent_config, supports_hosted_tools, get_capability."""
 
 from unittest.mock import MagicMock
 
 import pytest
 
 from core.llm import ModelRouter
+from core.llm.capabilities import EmbeddingCapability
 
 
 def _mock_secrets(key: str) -> str | None:
@@ -13,6 +14,49 @@ def _mock_secrets(key: str) -> str | None:
     if key == "anthropic_api_key":
         return "sk-ant-test"
     return None
+
+
+class TestModelRouterGetCapability:
+    """get_capability resolution."""
+
+    def test_get_capability_returns_embedder_for_openai_compatible(self) -> None:
+        settings = {
+            "providers": {
+                "openai": {"type": "openai_compatible", "api_key_secret": "openai_api_key"},
+            },
+            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
+        }
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
+        embedder = router.get_capability(EmbeddingCapability)
+        assert embedder is not None
+        assert hasattr(embedder, "embed_batch")
+
+    def test_get_capability_returns_none_for_anthropic(self) -> None:
+        settings = {
+            "providers": {
+                "anthropic": {"type": "anthropic", "api_key_secret": "anthropic_api_key"},
+            },
+            "agents": {"default": {"provider": "anthropic", "model": "claude-3-5-sonnet"}},
+        }
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
+        embedder = router.get_capability(EmbeddingCapability)
+        assert embedder is None
+
+    def test_get_capability_with_provider_id(self) -> None:
+        settings = {
+            "providers": {
+                "openai": {"type": "openai_compatible", "api_key_secret": "openai_api_key"},
+                "lm_studio": {
+                    "type": "openai_compatible",
+                    "base_url": "http://127.0.0.1:1234/v1",
+                    "api_key_literal": "lm",
+                },
+            },
+            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
+        }
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
+        embedder = router.get_capability(EmbeddingCapability, provider_id="lm_studio")
+        assert embedder is not None
 
 
 class TestModelRouterConfig:

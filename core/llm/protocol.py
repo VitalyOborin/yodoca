@@ -4,7 +4,9 @@ Core infrastructure: not extensible by extensions.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -41,7 +43,7 @@ class ModelRouterProtocol(Protocol):
     def get_default_provider(self) -> str | None: ...
     def register_agent_config(self, agent_id: str, config: dict[str, Any]) -> None: ...
     def supports_hosted_tools(self, agent_id: str) -> bool: ...
-    def get_provider_client(self, provider_id: str | None = None) -> Any: ...
+    def get_capability(self, cap: type[T], provider_id: str | None = None) -> T | None: ...
 
 
 @runtime_checkable
@@ -63,4 +65,13 @@ class ModelProvider(Protocol):
         self, config: ProviderConfig, api_key: str | None
     ) -> bool:
         """Check provider availability."""
+        ...
+
+    def get_capability(
+        self,
+        cap: type[T],
+        config: ProviderConfig,
+        api_key: str | None,
+    ) -> T | None:
+        """Return a capability instance if this provider supports it, else None."""
         ...
