@@ -22,9 +22,16 @@ def make_secure_input_tool(event_bus):
         encrypted storage. The value never appears in this conversation.
 
         Args:
-            secret_id: Identifier for the secret (e.g. telegram_token).
+            secret_id: Identifier for the secret, using the convention
+                        '{extension_id}_{key}' (e.g. 'telegram_channel_token').
             prompt_message: Message shown to the user.
-            channel_id: Channel to collect input from (default: cli_channel).
+            channel_id: The channel WHERE the user is currently chatting
+                        (where the secure prompt will be displayed).
+                        This is NOT the service the secret is intended for.
+                        Always use the user's current conversation channel.
+                        Example: if chatting via CLI but setting up Telegram,
+                        use 'cli_channel' (not 'telegram_channel').
+                        Default: 'cli_channel'.
         """
         if not _SECRET_ID_PATTERN.match(secret_id):
             return (

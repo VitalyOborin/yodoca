@@ -16,12 +16,16 @@ logger = logging.getLogger(__name__)
 class CliChannelExtension:
     """Extension + ChannelProvider: REPL loop; user input is emitted as user.message events."""
 
+    _RESPONSE_TIMEOUT_SEC = 120
+
     def __init__(self) -> None:
         self.context: "ExtensionContext | None" = None
         self._input_task: asyncio.Task[Any] | None = None
         self._streaming_enabled = True
         self._stream_buffer = ""
         self._intercept_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._response_complete = asyncio.Event()
+        self._response_complete.set()
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self.context = context
@@ -54,9 +58,10 @@ class CliChannelExtension:
     async def on_stream_end(self, user_id: str, full_text: str) -> None:
         if not self._streaming_enabled:
             await self.send_to_user(user_id, self._stream_buffer or full_text)
-            return
-        print()
-        print()
+        else:
+            print()
+            print()
+        self._response_complete.set()
 
     async def start(self) -> None:
         self._input_task = asyncio.create_task(self._input_loop(), name="cli_input_loop")
@@ -78,10 +83,39 @@ class CliChannelExtension:
             return True  # not yet started or cleanly stopped
         return not self._input_task.done()
 
+    async def _emit_user_message(self, text: str) -> None:
+        """Emit user.message and mark a response as pending."""
+        assert self.context is not None
+        self._response_complete.clear()
+        await self.context.emit(
+            "user.message",
+            {
+                "text": text,
+                "user_id": "cli_user",
+                "channel_id": self.context.extension_id,
+            },
+        )
+
     async def _input_loop(self) -> None:
         assert self.context is not None, "initialize() must be called before start()"
         while True:
-            # Drain intercept queue before normal input
+            # Block until the agent finishes its current response so that
+            # any follow-up events (e.g. SECURE_INPUT_REQUEST) published
+            # during that response have time to reach our intercept queue
+            # before we show the next ``>`` prompt.
+            if not self._response_complete.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._response_complete.wait(),
+                        timeout=self._RESPONSE_TIMEOUT_SEC,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for agent response")
+                    self._response_complete.set()
+                # The EventBus dispatch loop delivers SECURE_INPUT_REQUEST
+                # asynchronously; yield briefly so it completes delivery.
+                await asyncio.sleep(0.05)
+
             if not self._intercept_queue.empty():
                 try:
                     req = self._intercept_queue.get_nowait()
@@ -99,14 +133,7 @@ class CliChannelExtension:
             line = line.strip()
             if not line:
                 continue
-            await self.context.emit(
-                "user.message",
-                {
-                    "text": line,
-                    "user_id": "cli_user",
-                    "channel_id": self.context.extension_id,
-                },
-            )
+            await self._emit_user_message(line)
 
     async def _handle_secure_input(self, req: dict[str, Any]) -> None:
         """Collect secret via getpass, store in keyring, emit synthetic confirmation."""
@@ -120,48 +147,28 @@ class CliChannelExtension:
             try:
                 value = await asyncio.to_thread(getpass.getpass, framed)
             except (EOFError, KeyboardInterrupt):
-                await self.context.emit(
-                    "user.message",
-                    {
-                        "text": f"[System] Secret input for '{secret_id}' cancelled by user.",
-                        "user_id": "cli_user",
-                        "channel_id": self.context.extension_id,
-                    },
+                await self._emit_user_message(
+                    f"[System] Secret input for '{secret_id}' cancelled by user."
                 )
                 return
             value = value.strip()
             if not value:
                 continue
             if value.lower() == "cancel":
-                await self.context.emit(
-                    "user.message",
-                    {
-                        "text": f"[System] Secret input for '{secret_id}' cancelled by user.",
-                        "user_id": "cli_user",
-                        "channel_id": self.context.extension_id,
-                    },
+                await self._emit_user_message(
+                    f"[System] Secret input for '{secret_id}' cancelled by user."
                 )
                 return
             try:
                 await self.context.set_secret(secret_id, value)
             except Exception:
                 logger.exception("Failed to store secret %s", secret_id)
-                await self.context.emit(
-                    "user.message",
-                    {
-                        "text": f"[System] Failed to save secret '{secret_id}'. Check keyring availability.",
-                        "user_id": "cli_user",
-                        "channel_id": self.context.extension_id,
-                    },
+                await self._emit_user_message(
+                    f"[System] Failed to save secret '{secret_id}'. Check keyring availability."
                 )
                 return
-            await self.context.emit(
-                "user.message",
-                {
-                    "text": f"[System] Secret '{secret_id}' saved successfully.",
-                    "user_id": "cli_user",
-                    "channel_id": self.context.extension_id,
-                },
+            await self._emit_user_message(
+                f"[System] Secret '{secret_id}' saved successfully."
             )
             return
 

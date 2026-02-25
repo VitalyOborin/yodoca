@@ -1,11 +1,16 @@
 id: telegram_channel
 name: Telegram Channel
 version: "0.2.0"
-description: "Telegram Bot API channel via aiogram long-polling. Receives user messages, delivers agent responses."
+description: |
+  Telegram Bot API channel via aiogram long-polling.
+  Setup requires: secret 'telegram_channel_token' (Bot API token from @BotFather)
+  and KV key 'telegram_channel.chat_id' (numeric Telegram chat ID).
+  After saving both, call request_restart() to activate.
 entrypoint: main:TelegramChannelExtension
 depends_on:
   - kv
 config:
+  token_secret: telegram_channel_token
   polling_timeout: 30        # long-polling timeout in seconds
   streaming_enabled: true
   stream_edit_interval_ms: 500

@@ -10,15 +10,23 @@ from core.events.topics import SystemTopics
 from sandbox.extensions.cli_channel.main import CliChannelExtension
 
 
+def _make_ext() -> tuple[CliChannelExtension, MagicMock]:
+    """Create a CliChannelExtension wired to a mock context."""
+    ext = CliChannelExtension()
+    ctx = MagicMock()
+    ctx.extension_id = "cli_channel"
+    ctx.emit = AsyncMock()
+    ctx.set_secret = AsyncMock()
+    ext.context = ctx
+    return ext, ctx
+
+
 class TestSecureInputRequestHandler:
     """_on_secure_input_request enqueues only when target_channel matches."""
 
     @pytest.mark.asyncio
     async def test_matching_channel_enqueues(self) -> None:
-        ext = CliChannelExtension()
-        ctx = MagicMock()
-        ctx.extension_id = "cli_channel"
-        ext.context = ctx
+        ext, _ = _make_ext()
         event = Event(
             id=1,
             topic=SystemTopics.SECURE_INPUT_REQUEST,
@@ -39,10 +47,7 @@ class TestSecureInputRequestHandler:
 
     @pytest.mark.asyncio
     async def test_non_matching_channel_ignores(self) -> None:
-        ext = CliChannelExtension()
-        ctx = MagicMock()
-        ctx.extension_id = "cli_channel"
-        ext.context = ctx
+        ext, _ = _make_ext()
         event = Event(
             id=1,
             topic=SystemTopics.SECURE_INPUT_REQUEST,
@@ -63,12 +68,7 @@ class TestHandleSecureInput:
 
     @pytest.mark.asyncio
     async def test_cancel_emits_cancellation(self) -> None:
-        ext = CliChannelExtension()
-        ctx = MagicMock()
-        ctx.extension_id = "cli_channel"
-        ctx.emit = AsyncMock()
-        ctx.set_secret = AsyncMock()
-        ext.context = ctx
+        ext, ctx = _make_ext()
         req = {"secret_id": "my_secret", "prompt": "Enter value"}
 
         with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
@@ -82,12 +82,7 @@ class TestHandleSecureInput:
 
     @pytest.mark.asyncio
     async def test_success_stores_and_emits_confirmation(self) -> None:
-        ext = CliChannelExtension()
-        ctx = MagicMock()
-        ctx.extension_id = "cli_channel"
-        ctx.emit = AsyncMock()
-        ctx.set_secret = AsyncMock()
-        ext.context = ctx
+        ext, ctx = _make_ext()
         req = {"secret_id": "telegram_token", "prompt": "Enter token"}
 
         with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
@@ -102,12 +97,7 @@ class TestHandleSecureInput:
 
     @pytest.mark.asyncio
     async def test_empty_then_value_stores_on_second_input(self) -> None:
-        ext = CliChannelExtension()
-        ctx = MagicMock()
-        ctx.extension_id = "cli_channel"
-        ctx.emit = AsyncMock()
-        ctx.set_secret = AsyncMock()
-        ext.context = ctx
+        ext, ctx = _make_ext()
         req = {"secret_id": "x", "prompt": "Enter"}
 
         with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
@@ -116,3 +106,31 @@ class TestHandleSecureInput:
 
         assert to_thread.call_count == 2
         ctx.set_secret.assert_called_once_with("x", "secret123")
+
+
+class TestResponseComplete:
+    """_response_complete gate prevents input() from racing the EventBus."""
+
+    @pytest.mark.asyncio
+    async def test_emit_user_message_clears_response_complete(self) -> None:
+        ext, _ = _make_ext()
+        assert ext._response_complete.is_set()
+        await ext._emit_user_message("hello")
+        assert not ext._response_complete.is_set()
+
+    @pytest.mark.asyncio
+    async def test_on_stream_end_sets_response_complete(self) -> None:
+        ext, _ = _make_ext()
+        ext._response_complete.clear()
+        await ext.on_stream_end("cli_user", "done")
+        assert ext._response_complete.is_set()
+
+    @pytest.mark.asyncio
+    async def test_handle_secure_input_clears_response_complete(self) -> None:
+        """After saving a secret the confirmation emit marks response pending."""
+        ext, _ = _make_ext()
+        req = {"secret_id": "tok", "prompt": "Enter"}
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as to_thread:
+            to_thread.return_value = "secret-val"
+            await ext._handle_secure_input(req)
+        assert not ext._response_complete.is_set()

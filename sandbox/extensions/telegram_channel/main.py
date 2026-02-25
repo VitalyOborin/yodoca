@@ -78,14 +78,22 @@ class TelegramChannelExtension:
         ]
 
     async def apply_config(self, name: str, value: str) -> None:
-        """SetupProvider: save config value to KV."""
+        """SetupProvider: save token to keyring, chat_id to KV."""
         if not self._ctx:
             raise RuntimeError("Extension not initialized")
+        value = (value or "").strip() or None
+        if name == "token":
+            token_key = self._ctx.get_config(
+                "token_secret", f"{self._ctx.extension_id}_token"
+            )
+            if value:
+                await self._ctx.set_secret(token_key, value)
+            return
         kv = self._ctx.get_extension("kv")
         if not kv:
             raise RuntimeError("KV extension not available")
-        key = f"telegram_channel.{name}"
-        await kv.set(key, value.strip() if value else None)
+        key = f"{self._ctx.extension_id}.{name}"
+        await kv.set(key, value)
 
     async def on_setup_complete(self) -> tuple[bool, str]:
         """SetupProvider: verify token and chat_id are set and valid; call Telegram API to confirm token works."""
@@ -94,18 +102,25 @@ class TelegramChannelExtension:
         kv = self._ctx.get_extension("kv")
         if not kv:
             return False, "KV extension not available"
-        token = await kv.get("telegram_channel.token")
-        chat_id = await kv.get("telegram_channel.chat_id")
-        if not token or not token.strip():
+        token_key = self._ctx.get_config(
+            "token_secret", f"{self._ctx.extension_id}_token"
+        )
+        token = await self._ctx.get_secret(token_key)
+        if not token:
+            token = await kv.get(f"{self._ctx.extension_id}.token")
+        token = (token or "").strip()
+        chat_id_raw = await kv.get(f"{self._ctx.extension_id}.chat_id")
+        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
+        if not token:
             return False, "token is required"
-        if not chat_id or not str(chat_id).strip():
+        if not chat_id:
             return False, "chat_id is required"
         try:
-            validate_token(token.strip())
+            validate_token(token)
         except TokenValidationError as e:
             return False, f"Invalid token format: {e}"
         try:
-            bot = Bot(token=token.strip())
+            bot = Bot(token=token)
             try:
                 me = await bot.get_me()
                 display = f"@{me.username}" if me.username else me.first_name
@@ -123,15 +138,20 @@ class TelegramChannelExtension:
                 "Telegram channel requires the KV extension. Add it to depends_on and ensure it is enabled."
             )
 
-        token = await kv.get("telegram_channel.token")
+        token_key = context.get_config("token_secret", f"{context.extension_id}_token")
+        token = await context.get_secret(token_key)
+        if not token:
+            token = await kv.get(f"{context.extension_id}.token")
         if token:
             token = token.strip()
-        chat_id_raw = await kv.get("telegram_channel.chat_id")
+        chat_id_raw = await kv.get(f"{context.extension_id}.chat_id")
         chat_id = str(chat_id_raw).strip() if chat_id_raw else None
 
         if not token or not chat_id:
             context.logger.info(
-                "Telegram channel not configured. Use SetupProvider (get_setup_schema, apply_config, on_setup_complete) or set KV keys 'telegram_channel.token' and 'telegram_channel.chat_id'."
+                "Telegram channel not configured. Use request_secure_input for secret '%s', "
+                "kv_set for 'telegram_channel.chat_id', then request_restart().",
+                token_key,
             )
             self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
             self._stream_edit_interval_ms = int(
