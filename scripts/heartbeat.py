@@ -9,7 +9,7 @@ optionally requests an orchestrator task. Use this script to run a heartbeat
 on demand without waiting for the schedule.
 
 Usage:
-    cd assistant4
+    cd yodoca
     python scripts/heartbeat.py
 """
 

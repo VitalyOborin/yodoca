@@ -1,7 +1,7 @@
 """Test script: invoke Memory v2 hybrid search (FTS5 + vector + graph RRF).
 
 Usage:
-    cd assistant4
+    cd yodoca
     python scripts/test_search_memory.py
     python scripts/test_search_memory.py "custom query here"
 """

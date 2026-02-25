@@ -10,7 +10,7 @@ Pipeline steps:
   4. Infer causal edges between consecutive episodes (LLM)
 
 Usage:
-    cd assistant4
+    cd yodoca
     python scripts/run_memory_maintenance.py [--dry-run]
 
 Options:
