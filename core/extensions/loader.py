@@ -5,9 +5,10 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from core.events import EventBus
+from core.llm import ModelRouterProtocol
 from core.events.models import Event
 from core.events.topics import SystemTopics
 from core.extensions.builtin_context import ActiveChannelContextProvider
@@ -30,7 +31,7 @@ from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
 from core.extensions.scheduler_manager import SchedulerManager
-from core.settings import load_settings
+from core.settings import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,13 @@ class Loader:
         self,
         extensions_dir: Path,
         data_dir: Path,
+        settings: dict[str, Any],
     ) -> None:
         self._extensions_dir = extensions_dir
         self._data_dir = data_dir
+        self._settings = settings
         self._router: MessageRouter | None = None
-        self._model_router: Any = None
+        self._model_router: ModelRouterProtocol | None = None
         self._manifests: list[ExtensionManifest] = []
         self._extensions: dict[str, Extension] = {}
         self._state: dict[str, ExtensionState] = {}
@@ -61,7 +64,7 @@ class Loader:
     def set_shutdown_event(self, event: asyncio.Event) -> None:
         self._shutdown_event = event
 
-    def set_model_router(self, model_router: Any) -> None:
+    def set_model_router(self, model_router: ModelRouterProtocol | None) -> None:
         """Inject ModelRouter for agent model resolution (core/llm)."""
         self._model_router = model_router
 
@@ -135,7 +138,10 @@ class Loader:
             from core.extensions.declarative_agent import DeclarativeAgentAdapter
             return DeclarativeAgentAdapter(manifest)
         ext_dir = self._extensions_dir / manifest.id
-        assert manifest.entrypoint is not None
+        if manifest.entrypoint is None:
+            raise ValueError(
+                f"Extension {manifest.id} must have entrypoint for programmatic extensions"
+            )
         module_name, class_name = manifest.entrypoint.split(":", 1)
         py_path = ext_dir / f"{module_name}.py"
         if not py_path.exists():
@@ -151,9 +157,20 @@ class Loader:
         cls = getattr(mod, class_name)
         return cls()
 
-    def _get_extension(self, ext_id: str) -> Any:
-        """Return extension instance only if in depends_on of current extension (used by context)."""
-        return self._extensions.get(ext_id)
+    def _make_get_extension(self, caller_ext_id: str) -> Callable[[str], Any]:
+        """Return a get_extension callable that enforces depends_on for the caller."""
+        caller_manifest = next(m for m in self._manifests if m.id == caller_ext_id)
+        allowed = set(caller_manifest.depends_on)
+
+        def get_extension(ext_id: str) -> Any:
+            if ext_id not in allowed:
+                raise ValueError(
+                    f"Extension '{caller_ext_id}' cannot access '{ext_id}': "
+                    f"not in depends_on ({allowed})"
+                )
+            return self._extensions.get(ext_id)
+
+        return get_extension
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
         """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
@@ -163,11 +180,19 @@ class Loader:
         for ext_id in manifest.agent.uses_tools:
             if ext_id == "core_tools":
                 from core.tools.provider import CoreToolsProvider
+
                 agent_id = getattr(manifest, "agent_id", None) or manifest.id
-                tools.extend(CoreToolsProvider(
-                    model_router=self._model_router,
-                    agent_id=agent_id,
-                ).get_tools())
+                restart_file_path = (
+                    self._data_dir.parent.parent
+                    / get_setting(self._settings, "supervisor.restart_file", "sandbox/.restart_requested")
+                )
+                tools.extend(
+                    CoreToolsProvider(
+                        model_router=self._model_router,
+                        agent_id=agent_id,
+                        restart_file_path=restart_file_path,
+                    ).get_tools()
+                )
                 continue
             ext = self._extensions.get(ext_id)
             if ext and isinstance(ext, ToolProvider):
@@ -224,15 +249,14 @@ class Loader:
             )
             agent_model = manifest.agent.model if manifest.agent else ""
             agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
-            settings = load_settings()
-            overrides = settings.get("extensions", {}).get(ext_id, {}) or {}
+            overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
             config = {**manifest.config, **overrides}
             ctx = ExtensionContext(
                 extension_id=ext_id,
                 config=config,
                 logger=logging.getLogger(f"ext.{ext_id}"),
                 router=router,
-                get_extension=self._get_extension,
+                get_extension=self._make_get_extension(ext_id),
                 data_dir_path=data_dir_path,
                 shutdown_event=self._shutdown_event,
                 resolved_tools=resolved_tools,

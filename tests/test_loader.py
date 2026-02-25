@@ -22,6 +22,9 @@ from core.extensions.manifest import ExtensionManifest
 from core.extensions.router import MessageRouter
 
 
+_EMPTY_SETTINGS: dict = {"extensions": {}}
+
+
 def _manifest(
     ext_id: str,
     depends_on: list[str] | None = None,
@@ -42,13 +45,13 @@ class TestResolveDependencyOrder:
     """Topological sort and validation of depends_on."""
 
     def test_empty(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = []
         order = loader._resolve_dependency_order()
         assert order == []
 
     def test_no_deps(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("a"), _manifest("b"), _manifest("c")]
         order = loader._resolve_dependency_order()
         ids = [m.id for m in order]
@@ -56,14 +59,14 @@ class TestResolveDependencyOrder:
         # Order may be any topological order; with no deps, all are valid
 
     def test_single_dep(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
         order = loader._resolve_dependency_order()
         ids = [m.id for m in order]
         assert ids.index("b") < ids.index("a")
 
     def test_chain(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [
             _manifest("a", ["b"]),
             _manifest("b", ["c"]),
@@ -74,7 +77,7 @@ class TestResolveDependencyOrder:
         assert ids.index("c") < ids.index("b") < ids.index("a")
 
     def test_cycle_raises(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [
             _manifest("a", ["b"]),
             _manifest("b", ["a"]),
@@ -83,7 +86,7 @@ class TestResolveDependencyOrder:
             loader._resolve_dependency_order()
 
     def test_missing_dep_raises(self) -> None:
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("a", ["missing"])]
         with pytest.raises(ValueError, match="depends on missing"):
             loader._resolve_dependency_order()
@@ -94,7 +97,7 @@ class TestDiscover:
 
     @pytest.mark.asyncio
     async def test_empty_dir(self, tmp_path: Path) -> None:
-        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path)
+        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         await loader.discover()
         assert loader._manifests == []
 
@@ -107,7 +110,7 @@ class TestDiscover:
             "id: sub\nname: Sub\nentrypoint: main:Sub\n",
             encoding="utf-8",
         )
-        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path)
+        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         await loader.discover()
         assert len(loader._manifests) == 1
         assert loader._manifests[0].id == "sub"
@@ -120,7 +123,7 @@ class TestDiscover:
             "id: disabled_ext\nname: Disabled\nentrypoint: main:X\nenabled: false\n",
             encoding="utf-8",
         )
-        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path)
+        loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         await loader.discover()
         assert len(loader._manifests) == 0
 
@@ -136,7 +139,7 @@ class TestLoadAllAndProtocolDetection:
         data_dir = project_root / "sandbox" / "data"
         if not extensions_dir.exists():
             pytest.skip("sandbox/extensions not found")
-        loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+        loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=_EMPTY_SETTINGS)
         await loader.discover()
         await loader.load_all()
         assert len(loader._extensions) >= 1
@@ -150,7 +153,7 @@ class TestLoadAllAndProtocolDetection:
         data_dir = project_root / "sandbox" / "data"
         if not extensions_dir.exists():
             pytest.skip("sandbox/extensions not found")
-        loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+        loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=_EMPTY_SETTINGS)
         router = MessageRouter()
         await loader.discover()
         await loader.load_all()
@@ -184,7 +187,7 @@ class TestProactiveLoop:
             name="Email Agent", description="Triage emails", integration_mode="tool"
         )
 
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [
             self._manifest_with_invoke_agent("email_agent", "email.received"),
         ]
@@ -197,7 +200,7 @@ class TestProactiveLoop:
 
     def test_collect_proactive_subscriptions_skips_non_agent_extensions(self) -> None:
         """Extensions without AgentProvider are skipped for invoke_agent."""
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [
             self._manifest_with_invoke_agent("not_an_agent", "email.received"),
         ]
@@ -221,7 +224,7 @@ class TestProactiveLoop:
             return_value=AgentResponse(status="success", content="Processed email")
         )
 
-        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path)
+        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         loader._router = MessageRouter()
         loader._manifests = [
             self._manifest_with_invoke_agent("email_agent", "email.received"),
@@ -244,7 +247,7 @@ class TestProactiveLoop:
         self, tmp_path: Path
     ) -> None:
         """wire_event_subscriptions registers system topic handlers first."""
-        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path)
+        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         loader._router = MessageRouter()
         loader._manifests = []
         loader._extensions = {}
@@ -289,7 +292,7 @@ class TestInitializeAndLifecycle:
             def health_check(self) -> bool:
                 return True
 
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("x")]
         loader._extensions = {"x": MockExt()}
         loader._state = {"x": ExtensionState.INACTIVE}
@@ -321,15 +324,13 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        settings_with_override = {"extensions": {"x": {"tick_interval": 120}}}
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=settings_with_override)
         loader._manifests = [manifest_with_config]
         loader._extensions = {"x": MockExt()}
         loader._state = {"x": ExtensionState.INACTIVE}
         router = MessageRouter()
-
-        settings_with_override = {"extensions": {"x": {"tick_interval": 120}}}
-        with patch("core.extensions.loader.load_settings", return_value=settings_with_override):
-            await loader.initialize_all(router)
+        await loader.initialize_all(router)
 
         ctx = received_ctx[0]
         assert ctx.get_config("tick_interval", 10) == 120  # settings override wins
@@ -356,15 +357,13 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        settings_no_override = {"extensions": {}}
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=settings_no_override)
         loader._manifests = [manifest_with_config]
         loader._extensions = {"x": MockExt()}
         loader._state = {"x": ExtensionState.INACTIVE}
         router = MessageRouter()
-
-        settings_no_override = {"extensions": {}}
-        with patch("core.extensions.loader.load_settings", return_value=settings_no_override):
-            await loader.initialize_all(router)
+        await loader.initialize_all(router)
 
         ctx = received_ctx[0]
         assert ctx.get_config("tick_interval", 10) == 30  # manifest wins
@@ -390,7 +389,7 @@ class TestInitializeAndLifecycle:
             def health_check(self) -> bool:
                 return True
 
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("x")]
         loader._extensions = {"x": MockExt()}
         loader._state = {"x": ExtensionState.INACTIVE}
@@ -425,7 +424,7 @@ class TestInitializeAndLifecycle:
                 return True
 
         a, b = MockExt("a"), MockExt("b")
-        loader = Loader(extensions_dir=Path("."), data_dir=Path("."))
+        loader = Loader(extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS)
         loader._manifests = [_manifest("a", ["b"]), _manifest("b")]  # load order: b, a
         loader._extensions = {"a": a, "b": b}
         loader._state = {"a": ExtensionState.ACTIVE, "b": ExtensionState.ACTIVE}

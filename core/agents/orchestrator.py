@@ -7,7 +7,7 @@ from agents import Agent, ModelSettings, WebSearchTool
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.llm import ModelRouter
-from core.settings import get_setting, load_settings
+from core.settings import get_setting
 from core.tools import shell_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -33,13 +33,13 @@ def _resolve_instructions(spec: str, template_vars: dict[str, Any] | None = None
 
 def create_orchestrator_agent(
     model_router: ModelRouter,
+    settings: dict[str, Any],
     extension_tools: list[Any] | None = None,
     agent_tools: list[Any] | None = None,
     capabilities_summary: str = "",
     channel_tools: list[Any] | None = None,
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
-    settings = load_settings()
     instructions_spec = get_setting(
         settings, "agents.orchestrator.instructions", "prompts/orchestrator.jinja2"
     )

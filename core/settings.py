@@ -24,6 +24,7 @@ _DEFAULTS: dict[str, Any] = {
         "db_path": "sandbox/data/event_journal.db",
         "poll_interval": 5.0,
         "batch_size": 3,
+        "max_retries": 3,
     },
     "logging": {
         "file": "sandbox/logs/app.log",

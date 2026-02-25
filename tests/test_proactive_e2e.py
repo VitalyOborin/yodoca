@@ -74,7 +74,7 @@ async def test_proactive_dispatcher_end_to_end(tmp_path: Path) -> None:
     shutdown_event = asyncio.Event()
     router = MessageRouter()
 
-    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=settings)
     loader.set_shutdown_event(shutdown_event)
     loader.set_model_router(model_router)
 

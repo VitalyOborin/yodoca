@@ -16,3 +16,4 @@ class Event:
     created_at: float
     correlation_id: str | None = None
     status: str = "pending"
+    retry_count: int = 0

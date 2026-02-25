@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS event_journal (
     source          TEXT    NOT NULL,
     payload         TEXT    NOT NULL,
     status          TEXT    NOT NULL DEFAULT 'pending',
+    retry_count     INTEGER NOT NULL DEFAULT 0,
     created_at      REAL    NOT NULL,
     processed_at    REAL,
     error           TEXT
@@ -42,7 +43,21 @@ class EventJournal:
             await self._conn.execute("PRAGMA synchronous=NORMAL")
             await self._conn.executescript(_SCHEMA)
             await self._conn.commit()
+            await self._migrate_retry_count()
         return self._conn
+
+    async def _migrate_retry_count(self) -> None:
+        """Add retry_count column if missing (migration for existing DBs)."""
+        if self._conn is None:
+            return
+        cursor = await self._conn.execute("PRAGMA table_info(event_journal)")
+        rows = await cursor.fetchall()
+        columns = [row[1] for row in rows]
+        if "retry_count" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE event_journal ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._conn.commit()
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -70,12 +85,14 @@ class EventJournal:
         await conn.commit()
         return cursor.lastrowid or 0
 
-    async def fetch_pending(self, limit: int = 3) -> list[tuple[int, str, str, dict, float, str | None]]:
-        """Fetch pending events by created_at. Returns list of (id, topic, source, payload, created_at, correlation_id)."""
+    async def fetch_pending(
+        self, limit: int = 3
+    ) -> list[tuple[int, str, str, dict, float, str | None, int]]:
+        """Fetch pending events by created_at. Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count)."""
         conn = await self._ensure_conn()
         cursor = await conn.execute(
             """
-            SELECT id, topic, source, payload, created_at, correlation_id
+            SELECT id, topic, source, payload, created_at, correlation_id, retry_count
             FROM event_journal
             WHERE status = 'pending'
             ORDER BY created_at
@@ -84,10 +101,11 @@ class EventJournal:
             (limit,),
         )
         rows = await cursor.fetchall()
-        result: list[tuple[int, str, str, dict, float, str | None]] = []
+        result: list[tuple[int, str, str, dict, float, str | None, int]] = []
         for row in rows:
             payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
-            result.append((row[0], row[1], row[2], payload, row[4], row[5]))
+            retry_count = row[6] if len(row) > 6 else 0
+            result.append((row[0], row[1], row[2], payload, row[4], row[5], retry_count))
         return result
 
     async def mark_processing(self, event_id: int) -> None:
@@ -115,6 +133,29 @@ class EventJournal:
         now = time.time()
         await conn.execute(
             "UPDATE event_journal SET status = 'failed', processed_at = ?, error = ? WHERE id = ?",
+            (now, error, event_id),
+        )
+        await conn.commit()
+
+    async def mark_retry(self, event_id: int) -> None:
+        """Set status to pending and increment retry_count for at-least-once retry."""
+        conn = await self._ensure_conn()
+        await conn.execute(
+            """
+            UPDATE event_journal
+            SET status = 'pending', retry_count = retry_count + 1
+            WHERE id = ?
+            """,
+            (event_id,),
+        )
+        await conn.commit()
+
+    async def mark_dead_letter(self, event_id: int, error: str) -> None:
+        """Mark event as dead_letter after max retries exceeded."""
+        conn = await self._ensure_conn()
+        now = time.time()
+        await conn.execute(
+            "UPDATE event_journal SET status = 'dead_letter', processed_at = ?, error = ? WHERE id = ?",
             (now, error, event_id),
         )
         await conn.commit()

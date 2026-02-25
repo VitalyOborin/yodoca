@@ -21,10 +21,12 @@ class EventBus:
         db_path: Path,
         poll_interval: float = 5.0,
         batch_size: int = 3,
+        max_retries: int = 3,
     ) -> None:
         self._journal = EventJournal(db_path)
         self._poll_interval = poll_interval
         self._batch_size = batch_size
+        self._max_retries = max_retries
         self._wake = asyncio.Event()
         self._subscribers: dict[str, list[tuple[Callable[[Event], Awaitable[None]], str]]] = (
             defaultdict(list)
@@ -96,7 +98,7 @@ class EventBus:
                 break
 
             events = await self._journal.fetch_pending(limit=self._batch_size)
-            for event_id, topic, source, payload, created_at, correlation_id in events:
+            for event_id, topic, source, payload, created_at, correlation_id, retry_count in events:
                 if self._stopped:
                     break
                 await self._deliver(
@@ -108,6 +110,7 @@ class EventBus:
                         created_at=created_at,
                         correlation_id=correlation_id,
                         status="processing",
+                        retry_count=retry_count,
                     ),
                 )
 
@@ -135,6 +138,23 @@ class EventBus:
                 )
 
         if errors:
-            await self._journal.mark_failed(event.id, "; ".join(errors))
+            error_msg = "; ".join(errors)
+            if event.retry_count < self._max_retries:
+                await self._journal.mark_retry(event.id)
+                logger.warning(
+                    "EventBus: retrying event %s (attempt %d/%d): %s",
+                    event.id,
+                    event.retry_count + 1,
+                    self._max_retries,
+                    error_msg,
+                )
+            else:
+                await self._journal.mark_dead_letter(event.id, error_msg)
+                logger.error(
+                    "EventBus: dead-lettered event %s after %d retries: %s",
+                    event.id,
+                    event.retry_count,
+                    error_msg,
+                )
         else:
             await self._journal.mark_done(event.id)

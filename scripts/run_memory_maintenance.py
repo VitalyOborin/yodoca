@@ -63,7 +63,7 @@ async def main() -> None:
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
 
-    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=settings)
     loader.set_model_router(model_router)
     router = MessageRouter()
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from core.events.topics import SystemTopics
+from core.llm import ModelRouterProtocol
 from core.extensions.contract import TurnContext
 from core.extensions.router import MessageRouter
 from core.secrets import get_secret_async, set_secret_async
@@ -30,7 +31,7 @@ class ExtensionContext:
         resolved_tools: list[Any] | None = None,
         resolved_instructions: str = "",
         agent_model: str = "",
-        model_router: Any = None,
+        model_router: ModelRouterProtocol | None = None,
         agent_id: str | None = None,
         event_bus: "EventBus | None" = None,
     ) -> None:
@@ -50,7 +51,7 @@ class ExtensionContext:
         self.on_user_message = self._router.handle_user_message
 
     @property
-    def model_router(self) -> Any:
+    def model_router(self) -> ModelRouterProtocol | None:
         """ModelRouter for get_model(agent_id). None if not set (e.g. legacy runner)."""
         return self._model_router
 

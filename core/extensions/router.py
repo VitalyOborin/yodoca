@@ -108,7 +108,10 @@ class MessageRouter:
         self._session_id = f"orchestrator_{int(time.time())}"
         from agents import SQLiteSession
 
-        assert self._session_db_path is not None
+        if self._session_db_path is None:
+            raise RuntimeError(
+                "Session not configured: call configure_session before invoke"
+            )
         self._session = SQLiteSession(self._session_id, self._session_db_path)
         if self._event_bus:
             await self._event_bus.publish(

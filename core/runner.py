@@ -18,12 +18,6 @@ from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_PROJECT_ROOT / ".env")
-
-# Disable SDK tracing when using non-OpenAI or local endpoints (avoids 401s)
-from agents import set_tracing_disabled
-
-set_tracing_disabled(True)
 
 
 async def main_async() -> None:
@@ -39,7 +33,7 @@ async def main_async() -> None:
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
     shutdown_event = asyncio.Event()
-    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=settings)
     loader.set_shutdown_event(shutdown_event)
     loader.set_model_router(model_router)
     router = MessageRouter()
@@ -48,10 +42,12 @@ async def main_async() -> None:
     db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
     poll_interval = eb_cfg.get("poll_interval", 5.0)
     batch_size = eb_cfg.get("batch_size", 3)
+    max_retries = eb_cfg.get("max_retries", 3)
     event_bus = EventBus(
         db_path=db_path,
         poll_interval=poll_interval,
         batch_size=batch_size,
+        max_retries=max_retries,
     )
     await event_bus.recover()
     loader.set_event_bus(event_bus)
@@ -67,6 +63,7 @@ async def main_async() -> None:
     ]
     agent = create_orchestrator_agent(
         model_router=model_router,
+        settings=settings,
         extension_tools=loader.get_all_tools(),
         agent_tools=loader.get_agent_tools(),
         capabilities_summary=loader.get_capabilities_summary(),
@@ -99,6 +96,10 @@ async def main_async() -> None:
 
 def main() -> None:
     """Synchronous entry for the AI agent process."""
+    load_dotenv(_PROJECT_ROOT / ".env")
+    from agents import set_tracing_disabled
+
+    set_tracing_disabled(True)
     reset_terminal_for_input()
     try:
         asyncio.run(main_async())

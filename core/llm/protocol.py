@@ -34,6 +34,17 @@ class ProviderConfig:
 
 
 @runtime_checkable
+class ModelRouterProtocol(Protocol):
+    """Contract for model resolution. Used by Loader, ExtensionContext, CoreToolsProvider."""
+
+    def get_model(self, agent_id: str) -> Any: ...
+    def get_default_provider(self) -> str | None: ...
+    def register_agent_config(self, agent_id: str, config: dict[str, Any]) -> None: ...
+    def supports_hosted_tools(self, agent_id: str) -> bool: ...
+    def get_provider_client(self, provider_id: str | None = None) -> Any: ...
+
+
+@runtime_checkable
 class ModelProvider(Protocol):
     """Contract for an LLM API provider. Returns SDK-compatible Model instances."""
 
