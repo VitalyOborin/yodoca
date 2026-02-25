@@ -115,18 +115,18 @@ Long-term memory is a graph-based extension (`memory` + `embedding`):
 ```
 ┌────────────────────────────────────────┐
 │               SUPERVISOR               │  process watcher
-│  config check → onboarding if needed  │
+│  config check → onboarding if needed   │
 │        spawn · monitor · restart       │
 └────────────────────┬───────────────────┘
-│ subprocess
+                     │ subprocess
 ┌────────────────────▼───────────────────┐
 │               NANO-KERNEL              │
 │ Loader → MessageRouter → Orchestrator  │
 │        → EventBus (SQLite journal)     │
-└───────────────┬───────────────┬────────┘
-                │
+└──────────┬────────────────────┬────────┘
+           │                    │
   sandbox/extensions/      sandbox/data/
-(channels/tools/etc.)   (per-extension state)
+ (channels/tools/etc.)  (per-extension state)
 ```
 
 ---
@@ -229,8 +229,8 @@ sandbox/
     telegram_channel/    # Telegram Bot API (aiogram)
     memory/              # graph-based long-term memory (FTS5 + vector + entities)
     embedding/           # embedding generation for memory search
-    scheduler/            # one-shot and recurring events
-    heartbeat/            # Scout → Orchestrator escalation
+    scheduler/           # one-shot and recurring events
+    heartbeat/           # Scout → Orchestrator escalation
     kv/                  # key-value store (secrets, config)
     builder_agent/       # code-generation agent
     simple_agent/        # declarative sub-agent (manifest-only)
