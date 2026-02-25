@@ -119,7 +119,8 @@ class MemoryExtension:
         self._token_budget = context.get_config("context_token_budget", 2000)
         self._dedup_threshold = context.get_config("remember_fact_dedup_threshold", 0.92)
         db_path = context.data_dir / "memory.db"
-        self._storage = MemoryStorage(db_path)
+        embedding_dims = context.get_config("embedding_dimensions", 256)
+        self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
         await self._storage.initialize()
 
         embedding_ext = context.get_extension("embedding")

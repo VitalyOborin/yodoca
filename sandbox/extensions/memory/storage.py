@@ -36,8 +36,9 @@ def _escape_fts5_query(q: str) -> str:
 class MemoryStorage:
     """SQLite-backed memory store with async writer queue. WAL mode, single writer."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, embedding_dimensions: int = 256) -> None:
         self._db_path = db_path
+        self._embedding_dimensions = embedding_dimensions
         self._write_conn: aiosqlite.Connection | None = None
         self._read_conn: aiosqlite.Connection | None = None
         self._write_queue: asyncio.Queue[WriteOp] = asyncio.Queue()
@@ -472,7 +473,18 @@ class MemoryStorage:
         ]
 
     def _serialize_embedding(self, embedding: list[float]) -> bytes:
-        """Serialize float list to BLOB for sqlite-vec."""
+        """Serialize float list to BLOB for sqlite-vec. Applies defensive truncation
+        (Matryoshka) when the provider returns more dimensions than expected (e.g.
+        LM Studio ignoring dimensions=256 and returning 1024).
+        """
+        expected_dim = self._embedding_dimensions
+        if len(embedding) > expected_dim:
+            embedding = embedding[:expected_dim]
+        elif len(embedding) < expected_dim:
+            raise ValueError(
+                f"Dimension mismatch: expected {expected_dim}, got {len(embedding)}"
+            )
+
         try:
             import sqlite_vec
 
