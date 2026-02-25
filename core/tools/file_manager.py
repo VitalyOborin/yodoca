@@ -9,41 +9,14 @@ from typing import Literal
 from agents import ApplyPatchTool, apply_diff, function_tool
 from agents.editor import ApplyPatchOperation, ApplyPatchResult
 
-# Sandbox root: canonical path, agent work directory per README
-_SANDBOX_DIR = (Path(__file__).resolve().parent.parent.parent / "sandbox").resolve()
-
-_ACCESS_DENIED_MSG = "Access denied: operations outside sandbox are prohibited."
-
-
-def _resolve_path(path: str) -> Path:
-    """Resolve path relative to sandbox. Rejects any path outside sandbox.
-    Strips redundant sandbox/ prefix if agent passes sandbox/extensions/... ."""
-    candidate = Path(path)
-    target = candidate if candidate.is_absolute() else (_SANDBOX_DIR / candidate)
-    target = target.resolve()
-    try:
-        target.relative_to(_SANDBOX_DIR)
-    except ValueError:
-        raise RuntimeError(f"{_ACCESS_DENIED_MSG} Path: {path}") from None
-    # Strip redundant sandbox/ prefix: if agent passes "sandbox/x", it resolves to
-    # sandbox/sandbox/x — detect and correct
-    redundant = _SANDBOX_DIR / _SANDBOX_DIR.name
-    if not candidate.is_absolute() and target != _SANDBOX_DIR:
-        try:
-            rel = target.relative_to(redundant)
-            corrected = (_SANDBOX_DIR / rel).resolve()
-            corrected.relative_to(_SANDBOX_DIR)  # safety check
-            return corrected
-        except ValueError:
-            pass
-    return target
+from core.tools.sandbox import SANDBOX_DIR, resolve_sandbox_path
 
 
 class SandboxEditor:
     """ApplyPatchEditor implementation scoped to the sandbox directory."""
 
     def __init__(self, root: Path | None = None) -> None:
-        self._root = (root or _SANDBOX_DIR).resolve()
+        self._root = (root or SANDBOX_DIR).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
 
     def create_file(self, operation: ApplyPatchOperation) -> ApplyPatchResult:
@@ -74,26 +47,7 @@ class SandboxEditor:
         return resolved.relative_to(self._root).as_posix()
 
     def _resolve(self, relative: str, ensure_parent: bool = False) -> Path:
-        candidate = Path(relative)
-        target = candidate if candidate.is_absolute() else (self._root / candidate)
-        target = target.resolve()
-        try:
-            target.relative_to(self._root)
-        except ValueError:
-            raise RuntimeError(f"{_ACCESS_DENIED_MSG} Path: {relative}") from None
-        # Strip redundant sandbox/ prefix (same as _resolve_path)
-        redundant = self._root / self._root.name
-        if not candidate.is_absolute() and target != self._root:
-            try:
-                rel = target.relative_to(redundant)
-                corrected = (self._root / rel).resolve()
-                corrected.relative_to(self._root)  # safety check
-                target = corrected
-            except ValueError:
-                pass
-        if ensure_parent:
-            target.parent.mkdir(parents=True, exist_ok=True)
-        return target
+        return resolve_sandbox_path(relative, root=self._root, ensure_parent=ensure_parent)
 
 
 # ApplyPatchTool for atomic patch operations (create, update, delete via diff)
@@ -123,11 +77,11 @@ def file(
         destination: Required for copy and move. Target path.
     """
     try:
-        target = _resolve_path(path)
-        _SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
+        target = resolve_sandbox_path(path)
+        SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
 
         def _rel(p: Path) -> str:
-            return p.relative_to(_SANDBOX_DIR).as_posix()
+            return p.relative_to(SANDBOX_DIR).as_posix()
 
         if action == "read":
             if not target.is_file():
@@ -157,7 +111,7 @@ def file(
         if action == "copy":
             if destination is None:
                 return "Error: destination is required for copy action"
-            dst = _resolve_path(destination)
+            dst = resolve_sandbox_path(destination)
             if not target.exists():
                 return f"Error: source not found: {_rel(target)}"
             if target.is_file():
@@ -170,7 +124,7 @@ def file(
         if action == "move":
             if destination is None:
                 return "Error: destination is required for move action"
-            dst = _resolve_path(destination)
+            dst = resolve_sandbox_path(destination)
             if not target.exists():
                 return f"Error: source not found: {_rel(target)}"
             dst.parent.mkdir(parents=True, exist_ok=True)

@@ -128,12 +128,12 @@ class MessageRouter:
             except Exception as e:
                 logger.exception("Event handler error [%s]: %s", event, e)
 
-    async def invoke_agent(
-        self, prompt: str, turn_context: TurnContext | None = None
-    ) -> str:
-        """Run agent with prompt; return response. Serialized with other invocations."""
-        if not self._agent:
-            return "(No agent configured.)"
+    async def _prepare_agent(
+        self,
+        prompt: str,
+        turn_context: TurnContext | None = None,
+    ) -> tuple[Any, str]:
+        """Run middleware, clone agent with context if needed. Returns (agent, stripped_prompt)."""
         ctx = turn_context or TurnContext(agent_id=self._agent_id)
         stripped = prompt.strip()
         context = ""
@@ -144,6 +144,15 @@ class MessageRouter:
             agent = self._agent.clone(
                 instructions=self._agent.instructions + "\n\n---\n\n" + context
             )
+        return agent, stripped
+
+    async def invoke_agent(
+        self, prompt: str, turn_context: TurnContext | None = None
+    ) -> str:
+        """Run agent with prompt; return response. Serialized with other invocations."""
+        if not self._agent:
+            return "(No agent configured.)"
+        agent, stripped = await self._prepare_agent(prompt, turn_context)
         async with self._lock:
             try:
                 from agents import Runner
@@ -171,16 +180,7 @@ class MessageRouter:
         """
         if not self._agent:
             return "(No agent configured.)"
-        ctx = turn_context or TurnContext(agent_id=self._agent_id)
-        stripped = prompt.strip()
-        context = ""
-        if self._invoke_middleware:
-            context = await self._invoke_middleware(stripped, ctx) or ""
-        agent = self._agent
-        if context and isinstance(getattr(self._agent, "instructions", None), str):
-            agent = self._agent.clone(
-                instructions=self._agent.instructions + "\n\n---\n\n" + context
-            )
+        agent, stripped = await self._prepare_agent(prompt, turn_context)
 
         response_delta_type = None
         try:

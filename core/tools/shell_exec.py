@@ -12,8 +12,8 @@ from agents import (
     ShellTool,
 )
 
-# Sandbox root: agent work directory per README. Commands run ONLY in sandbox.
-_SANDBOX_DIR = (Path(__file__).resolve().parent.parent.parent / "sandbox").resolve()
+from core.tools.sandbox import SANDBOX_DIR
+
 _DEFAULT_TIMEOUT_SECONDS = 60
 
 
@@ -21,7 +21,7 @@ class SandboxShellExecutor:
     """ShellExecutor that runs commands in the sandbox directory only."""
 
     def __init__(self, cwd: Path | None = None) -> None:
-        self._cwd = (cwd or _SANDBOX_DIR).resolve()
+        self._cwd = (cwd or SANDBOX_DIR).resolve()
         self._cwd.mkdir(parents=True, exist_ok=True)
 
     async def __call__(self, request: ShellCommandRequest) -> ShellResult:
