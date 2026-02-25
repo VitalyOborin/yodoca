@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from core.extensions.contract import ChannelProvider, StreamingChannelProvider
+from core.extensions.contract import ChannelProvider, StreamingChannelProvider, TurnContext
 from core.events.topics import SystemTopics
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ class MessageRouter:
         self._channel_descriptions: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
-        self._invoke_middleware: Callable[[str, str | None], Awaitable[str]] | None = None
+        self._invoke_middleware: Callable[[str, TurnContext], Awaitable[str]] | None = None
         self._session: Any = None
         self._session_id: str | None = None
         self._last_message_at: float | None = None
@@ -72,11 +72,11 @@ class MessageRouter:
 
     def set_invoke_middleware(
         self,
-        middleware: Callable[[str, str | None], Awaitable[str]],
+        middleware: Callable[[str, TurnContext], Awaitable[str]],
     ) -> None:
         """Set middleware that returns context to inject into the system role.
 
-        The callable receives (prompt, agent_id) and returns a context string. Empty string
+        The callable receives (prompt, turn_context) and returns a context string. Empty string
         means no context. The caller injects this into system via agent.clone(instructions=...),
         not into the user message.
         """
@@ -128,14 +128,17 @@ class MessageRouter:
             except Exception as e:
                 logger.exception("Event handler error [%s]: %s", event, e)
 
-    async def invoke_agent(self, prompt: str, agent_id: str | None = None) -> str:
+    async def invoke_agent(
+        self, prompt: str, turn_context: TurnContext | None = None
+    ) -> str:
         """Run agent with prompt; return response. Serialized with other invocations."""
         if not self._agent:
             return "(No agent configured.)"
+        ctx = turn_context or TurnContext(agent_id=self._agent_id)
         stripped = prompt.strip()
         context = ""
         if self._invoke_middleware:
-            context = await self._invoke_middleware(stripped, agent_id) or ""
+            context = await self._invoke_middleware(stripped, ctx) or ""
         agent = self._agent
         if context and isinstance(getattr(self._agent, "instructions", None), str):
             agent = self._agent.clone(
@@ -160,7 +163,7 @@ class MessageRouter:
         prompt: str,
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
-        agent_id: str | None = None,
+        turn_context: TurnContext | None = None,
     ) -> str:
         """Run agent with streaming callbacks; return final response.
 
@@ -168,10 +171,11 @@ class MessageRouter:
         """
         if not self._agent:
             return "(No agent configured.)"
+        ctx = turn_context or TurnContext(agent_id=self._agent_id)
         stripped = prompt.strip()
         context = ""
         if self._invoke_middleware:
-            context = await self._invoke_middleware(stripped, agent_id) or ""
+            context = await self._invoke_middleware(stripped, ctx) or ""
         agent = self._agent
         if context and isinstance(getattr(self._agent, "instructions", None), str):
             agent = self._agent.clone(
@@ -231,7 +235,9 @@ class MessageRouter:
                     return full_text + error_chunk
                 return f"(Error: {e})"
 
-    async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
+    async def enrich_prompt(
+        self, prompt: str, turn_context: TurnContext | None = None
+    ) -> str:
         """Return context + separator + prompt for use as a single prompt by downstream agents.
 
         Used by extensions (e.g. Heartbeat Scout) that pass the result to their own agent
@@ -240,13 +246,18 @@ class MessageRouter:
         stripped = prompt.strip()
         if not self._invoke_middleware:
             return stripped
-        context = await self._invoke_middleware(stripped, agent_id) or ""
+        ctx = turn_context or TurnContext(agent_id=self._agent_id)
+        context = await self._invoke_middleware(stripped, ctx) or ""
         if context:
             return context + "\n\n---\n\n" + stripped
         return stripped
 
     async def handle_user_message(
-        self, text: str, user_id: str, channel: ChannelProvider
+        self,
+        text: str,
+        user_id: str,
+        channel: ChannelProvider,
+        channel_id: str,
     ) -> None:
         """Invoke agent with user message, send response via channel. Serialized."""
         now = time.time()
@@ -256,6 +267,13 @@ class MessageRouter:
         ):
             await self._rotate_session()
         self._last_message_at = now
+
+        turn_context = TurnContext(
+            agent_id=self._agent_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            session_id=self._session_id,
+        )
 
         await self._emit(
             "user_message",
@@ -269,10 +287,11 @@ class MessageRouter:
                 on_tool_call=lambda name: channel.on_stream_status(
                     user_id, f"Using: {name}"
                 ),
+                turn_context=turn_context,
             )
             await channel.on_stream_end(user_id, response)
         else:
-            response = await self.invoke_agent(text)
+            response = await self.invoke_agent(text, turn_context)
             await channel.send_to_user(user_id, response)
         await self._emit(
             "agent_response",

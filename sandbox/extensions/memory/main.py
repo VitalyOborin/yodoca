@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
+from core.extensions.contract import TurnContext
 from core.events.topics import SystemTopics
 
 _ext_dir = Path(__file__).resolve().parent
@@ -66,8 +67,7 @@ class MemoryExtension:
     async def get_context(
         self,
         prompt: str,
-        *,
-        agent_id: str | None = None,
+        turn_context: TurnContext,
     ) -> str | None:
         """Return relevant memory context. Hybrid FTS5 + vector with RRF."""
         if not self._retrieval:
@@ -93,7 +93,7 @@ class MemoryExtension:
         )
         logger.debug(
             "get_context: %d results, %d chars (complexity=%s, agent=%s)",
-            len(results), len(context or ""), complexity, agent_id,
+            len(results), len(context or ""), complexity, turn_context.agent_id,
         )
         return context
 

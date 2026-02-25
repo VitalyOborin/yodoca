@@ -80,15 +80,16 @@ Memory integrates via **two subscription mechanisms**:
 
 ## 2. Context Injection (Memory → Agent)
 
-Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Memory implements `ContextProvider` with `context_priority=50`.
+Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Each provider receives `TurnContext` (agent_id, channel_id, user_id, session_id). Built-in `_ActiveChannelContextProvider` (priority 0) injects current channel identity. Memory implements `ContextProvider` with `context_priority=50`.
 
 ```
-MessageRouter.invoke_agent(prompt)
+MessageRouter.invoke_agent(prompt, turn_context)
     │
     ▼
 set_invoke_middleware() chain
     │
-    ├─► Memory.get_context(prompt)
+    ├─► ActiveChannelContextProvider.get_context(prompt, turn_context)  [priority 0]
+    ├─► Memory.get_context(prompt, turn_context)
     │       → classify_query_complexity(prompt)
     │       → embed_fn(prompt)                     [if embedding available]
     │       → intent_classifier.classify(prompt)
@@ -98,7 +99,7 @@ set_invoke_middleware() chain
     │       → return formatted markdown or None
     │
     ▼
-context = middleware(prompt)  →  empty string if no matches
+context = middleware(prompt, turn_context)  →  empty string if no matches
     │
     ▼
 If context non-empty and agent.instructions is str:

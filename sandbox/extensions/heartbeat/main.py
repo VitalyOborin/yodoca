@@ -81,7 +81,12 @@ class HeartbeatExtension:
             return None
 
         base_prompt = str(self._ctx.get_config("prompt", _DEFAULT_PROMPT)).strip()
-        enriched = await self._ctx.enrich_prompt(base_prompt, agent_id="heartbeat_scout")
+        from core.extensions import TurnContext
+
+        enriched = await self._ctx.enrich_prompt(
+            base_prompt,
+            turn_context=TurnContext(agent_id="heartbeat_scout"),
+        )
 
         try:
             result = await Runner.run(self._scout, enriched, max_turns=10)

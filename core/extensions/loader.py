@@ -24,6 +24,7 @@ from core.extensions.contract import (
     ServiceProvider,
     SchedulerProvider,
     ToolProvider,
+    TurnContext,
 )
 from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
@@ -41,6 +42,32 @@ class ExtensionState(Enum):
     INACTIVE = "inactive"
     ACTIVE = "active"
     ERROR = "error"
+
+
+class _ActiveChannelContextProvider:
+    """Built-in ContextProvider that injects current channel identity into the system prompt."""
+
+    def __init__(self, router: MessageRouter) -> None:
+        self._router = router
+
+    @property
+    def context_priority(self) -> int:
+        return 0
+
+    async def get_context(self, prompt: str, turn_context: TurnContext) -> str | None:
+        if not turn_context.channel_id:
+            return None
+        descriptions = self._router.get_channel_descriptions()
+        channel_desc = descriptions.get(turn_context.channel_id) or turn_context.channel_id
+        user_id = turn_context.user_id or "unknown"
+        return (
+            "[Current Session Context]\n"
+            f"Channel: {turn_context.channel_id} ({channel_desc})\n"
+            f"User ID: {user_id}\n\n"
+            f"IMPORTANT: You are currently communicating with the user through the '{turn_context.channel_id}'. "
+            "Any actions, tool calls, or notifications should assume this channel unless the user explicitly requests otherwise. "
+            "Do not ask the user to switch channels if they are already here."
+        )
 
 
 class Loader:
@@ -369,7 +396,7 @@ class Loader:
             if not channel:
                 logger.warning("user.message: unknown channel_id %s", channel_id)
                 return
-            await router.handle_user_message(text, user_id, channel)
+            await router.handle_user_message(text, user_id, channel, channel_id)
 
         event_bus.subscribe("user.message", kernel_user_message_handler, "kernel")
 
@@ -402,14 +429,18 @@ class Loader:
 
             event_bus.subscribe(topic, proactive_handler, "kernel.proactive")
 
-    def _collect_context_providers(self) -> list[ContextProvider]:
-        """Collect ContextProvider extensions (ACTIVE only), sorted by context_priority."""
-        providers = [
+    def _collect_context_providers(self, router: MessageRouter) -> list[ContextProvider]:
+        """Collect ContextProvider extensions (ACTIVE only) plus built-in ActiveChannelContextProvider, sorted by context_priority."""
+        providers: list[ContextProvider] = [
+            _ActiveChannelContextProvider(router),
+        ]
+        ext_providers = [
             ext
             for ext_id, ext in self._extensions.items()
             if isinstance(ext, ContextProvider)
             and self._state.get(ext_id, ExtensionState.INACTIVE) == ExtensionState.ACTIVE
         ]
+        providers.extend(ext_providers)
         return sorted(providers, key=lambda p: p.context_priority)
 
     def wire_context_providers(self, router: MessageRouter) -> None:
@@ -418,15 +449,15 @@ class Loader:
         The middleware returns context to inject into the system role (empty string = no context),
         not an enriched user message. The router uses this for system injection via agent.clone().
         """
-        providers = self._collect_context_providers()
+        providers = self._collect_context_providers(router)
         if not providers:
             return
 
-        async def _middleware(prompt: str, agent_id: str | None = None) -> str:
+        async def _middleware(prompt: str, turn_context: TurnContext) -> str:
             """Return context to inject into system role (empty string = no context). Not an enriched user message."""
             parts: list[str] = []
             for provider in providers:
-                ctx = await provider.get_context(prompt, agent_id=agent_id)
+                ctx = await provider.get_context(prompt, turn_context)
                 if ctx:
                     parts.append(ctx)
             if not parts:

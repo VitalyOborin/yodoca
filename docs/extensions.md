@@ -174,15 +174,21 @@ Loader wraps it in `asyncio.create_task()` and cancels on shutdown.
 Enriches agent context before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
 
 ```python
+from core.extensions.contract import TurnContext
+
 @property
 def context_priority(self) -> int:
     """Lower value = earlier in chain. Default: 100."""
 
-async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str | None:
+async def get_context(self, prompt: str, turn_context: TurnContext) -> str | None:
     """Return context string to inject, or None to skip."""
 ```
 
+`TurnContext` is a frozen dataclass with: `agent_id`, `channel_id`, `user_id`, `session_id`. The kernel passes it on every invocation so providers can tailor context (e.g. filter by channel).
+
 Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and returns a **context string** (not an enriched user message).
+
+**Built-in provider:** `_ActiveChannelContextProvider` (priority 0) injects `[Current Session Context]` with channel identity and narrative instructions so the agent knows which channel the user is on.
 
 **Two public behaviors:**
 

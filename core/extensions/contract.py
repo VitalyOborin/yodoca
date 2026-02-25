@@ -78,6 +78,14 @@ class SchedulerProvider(Protocol):
         Return {'text': '...'} to notify user, or None."""
 
 
+@dataclass(frozen=True)
+class TurnContext:
+    agent_id: str | None = None
+    channel_id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+
+
 @runtime_checkable
 class ContextProvider(Protocol):
     """Extension that enriches agent context before each invocation.
@@ -93,8 +101,7 @@ class ContextProvider(Protocol):
     async def get_context(
         self,
         prompt: str,
-        *,
-        agent_id: str | None = None,
+        turn_context: TurnContext,
     ) -> str | None:
         """Return context string to prepend, or None/empty to skip."""
 

@@ -11,6 +11,7 @@ from core.extensions.contract import (
     SchedulerProvider,
     SetupProvider,
     ToolProvider,
+    TurnContext,
 )
 from core.extensions.loader import Loader
 from core.extensions.manifest import ExtensionManifest, ScheduleEntry, load_manifest
@@ -33,5 +34,6 @@ __all__ = [
     "SchedulerProvider",
     "SetupProvider",
     "ToolProvider",
+    "TurnContext",
     "load_manifest",
 ]

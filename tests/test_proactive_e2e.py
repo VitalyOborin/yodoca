@@ -45,7 +45,9 @@ def _setup_test_extensions(tmp_path: Path, project_root: Path) -> Path:
         "    async def destroy(self): pass\n"
         "    def health_check(self): return True\n"
         "    async def send_to_user(self, user_id, message):\n"
-        "        self.sent.append((user_id, message))\n",
+        "        self.sent.append((user_id, message))\n"
+        "    async def send_message(self, message):\n"
+        "        self.sent.append(('default', message))\n",
         encoding="utf-8",
     )
     return ext_dir

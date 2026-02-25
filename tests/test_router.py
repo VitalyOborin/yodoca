@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.extensions.contract import ChannelProvider, StreamingChannelProvider
+from core.extensions.contract import ChannelProvider, StreamingChannelProvider, TurnContext
 from core.extensions.router import MessageRouter
 
 
@@ -143,7 +143,7 @@ class TestInvokeAgent:
         result_value = MagicMock()
         result_value.final_output = "replied"
 
-        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+        async def middleware(prompt: str, turn_context: TurnContext) -> str:
             return "memory: user likes cats"
 
         router.set_invoke_middleware(middleware)
@@ -158,6 +158,36 @@ class TestInvokeAgent:
         mock_runner.run.assert_called_once_with(cloned_agent, "hello", session=None)
 
     @pytest.mark.asyncio
+    async def test_invoke_agent_middleware_receives_turn_context(self) -> None:
+        """Middleware receives TurnContext with channel_id, user_id, session_id when invoked from handle_user_message."""
+        router = MessageRouter()
+        router.set_channel_descriptions({"cli": "CLI Channel"})
+        router.configure_session(
+            session_db_path=":memory:",
+            session_timeout=1800,
+        )
+        received_context: list[TurnContext] = []
+
+        async def middleware(prompt: str, turn_context: TurnContext) -> str:
+            received_context.append(turn_context)
+            return ""
+
+        router.set_invoke_middleware(middleware)
+        router.set_agent(MagicMock())
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        with patch("agents.Runner") as mock_runner:
+            result_value = MagicMock()
+            result_value.final_output = "ok"
+            mock_runner.run = AsyncMock(return_value=result_value)
+            await router.handle_user_message("hi", "user1", ch, "cli")
+
+        assert len(received_context) == 1
+        assert received_context[0].channel_id == "cli"
+        assert received_context[0].user_id == "user1"
+        assert received_context[0].session_id is not None
+
+    @pytest.mark.asyncio
     async def test_invoke_agent_with_middleware_empty_context_no_clone(self) -> None:
         """When middleware returns empty string, no clone; base agent and prompt used."""
         router = MessageRouter()
@@ -166,7 +196,7 @@ class TestInvokeAgent:
         result_value = MagicMock()
         result_value.final_output = "ok"
 
-        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+        async def middleware(prompt: str, turn_context: TurnContext) -> str:
             return ""
 
         router.set_invoke_middleware(middleware)
@@ -183,11 +213,13 @@ class TestInvokeAgent:
         """enrich_prompt returns context + separator + prompt when middleware returns context."""
         router = MessageRouter()
 
-        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+        async def middleware(prompt: str, turn_context: TurnContext) -> str:
             return "recall: xyz"
 
         router.set_invoke_middleware(middleware)
-        result = await router.enrich_prompt("what is x?", agent_id="scout")
+        result = await router.enrich_prompt(
+            "what is x?", turn_context=TurnContext(agent_id="scout")
+        )
         assert result == "recall: xyz\n\n---\n\nwhat is x?"
 
     @pytest.mark.asyncio
@@ -195,7 +227,7 @@ class TestInvokeAgent:
         """enrich_prompt returns prompt only when middleware returns empty."""
         router = MessageRouter()
 
-        async def middleware(prompt: str, agent_id: str | None = None) -> str:
+        async def middleware(prompt: str, turn_context: TurnContext) -> str:
             return ""
 
         router.set_invoke_middleware(middleware)
@@ -226,7 +258,7 @@ class TestSubscribeAndEmit:
             result_value.final_output = "reply"
             mock_runner.run = AsyncMock(return_value=result_value)
             router.set_agent(MagicMock())
-            await router.handle_user_message("hi", "user1", ch)
+            await router.handle_user_message("hi", "user1", ch, "cli")
         assert len(events_received) == 2
         assert events_received[0][0] == "user_message"
         assert events_received[1][0] == "agent_response"
@@ -269,7 +301,7 @@ class TestStreamingInvocation:
 
         with patch("agents.Runner") as mock_runner:
             mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
-            await router.handle_user_message("hello", "user1", ch)
+            await router.handle_user_message("hello", "user1", ch, "cli")
 
         assert ch.stream_started == ["user1"]
         assert ch.stream_chunks == [("user1", "hi "), ("user1", "world")]
@@ -281,12 +313,13 @@ class TestStreamingInvocation:
     async def test_handle_user_message_non_streaming_unchanged(self) -> None:
         router = MessageRouter()
         ch = MockChannel()
+        router.register_channel("cli", ch)
         router.set_agent(MagicMock())
         with patch("agents.Runner") as mock_runner:
             result = MagicMock()
             result.final_output = "reply"
             mock_runner.run = AsyncMock(return_value=result)
-            await router.handle_user_message("hello", "user2", ch)
+            await router.handle_user_message("hello", "user2", ch, "cli")
         assert ch.sent == [("user2", "reply")]
 
     @pytest.mark.asyncio

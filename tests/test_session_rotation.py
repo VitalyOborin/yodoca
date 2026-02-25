@@ -62,7 +62,7 @@ class TestSessionRotation:
 
         with patch("agents.Runner") as mock_runner_cls:
             mock_runner_cls.run = AsyncMock(return_value=mock_result)
-            await router.handle_user_message("first", "u1", ch)
+            await router.handle_user_message("first", "u1", ch, "cli")
 
         assert mock_event_bus.publish.call_count == 0
 
@@ -70,7 +70,7 @@ class TestSessionRotation:
 
         with patch("agents.Runner") as mock_runner_cls2:
             mock_runner_cls2.run = AsyncMock(return_value=mock_result)
-            await router.handle_user_message("second", "u1", ch)
+            await router.handle_user_message("second", "u1", ch, "cli")
 
         assert mock_event_bus.publish.call_count == 1
 
@@ -92,7 +92,7 @@ class TestSessionRotation:
 
         with patch("agents.Runner") as mock_runner_cls:
             mock_runner_cls.run = AsyncMock(return_value=mock_result)
-            await router.handle_user_message("first", "u1", ch)
-            await router.handle_user_message("second", "u1", ch)
+            await router.handle_user_message("first", "u1", ch, "cli")
+            await router.handle_user_message("second", "u1", ch, "cli")
 
         assert mock_event_bus.publish.call_count == 0

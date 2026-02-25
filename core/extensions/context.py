@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from core.events.topics import SystemTopics
+from core.extensions.contract import TurnContext
 from core.extensions.router import MessageRouter
 from core.secrets import get_secret_async, set_secret_async
 
@@ -83,9 +84,13 @@ class ExtensionContext:
             on_tool_call=on_tool_call,
         )
 
-    async def enrich_prompt(self, prompt: str, agent_id: str | None = None) -> str:
+    async def enrich_prompt(
+        self,
+        prompt: str,
+        turn_context: "TurnContext | None" = None,
+    ) -> str:
         """Apply full ContextProvider chain (memory, etc.) without running the agent."""
-        return await self._router.enrich_prompt(prompt, agent_id)
+        return await self._router.enrich_prompt(prompt, turn_context)
 
     def subscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Subscribe to an internal event (e.g. user_message, agent_response)."""
