@@ -16,9 +16,13 @@ class SystemTopics:
     # Session rotated due to inactivity; triggers consolidation
     SESSION_COMPLETED = "session.completed"
 
+    # Request secure input from a channel (secret collection without LLM exposure)
+    SECURE_INPUT_REQUEST = "system.channel.secure_input_request"
+
 
 # Payload contracts (documentation + runtime validation)
 USER_NOTIFY_PAYLOAD = {"text": "str", "channel_id": "str | None"}
 AGENT_TASK_PAYLOAD = {"prompt": "str", "channel_id": "str | None", "correlation_id": "str | None"}
 AGENT_BACKGROUND_PAYLOAD = {"prompt": "str", "correlation_id": "str | None"}
 SESSION_COMPLETED_PAYLOAD = {"session_id": "str", "reason": "str"}
+SECURE_INPUT_REQUEST_PAYLOAD = {"secret_id": "str", "prompt": "str", "target_channel": "str"}

@@ -19,3 +19,6 @@ events:
   publishes:
     - topic: user.message
       description: "Fires when the user types a message in the CLI (payload: text, user_id, channel_id)"
+  subscribes:
+    - topic: system.channel.secure_input_request
+      description: "Intercept secure input requests targeting this channel"

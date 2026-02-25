@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
@@ -88,7 +88,7 @@ class TelegramChannelExtension:
         await kv.set(key, value.strip() if value else None)
 
     async def on_setup_complete(self) -> tuple[bool, str]:
-        """SetupProvider: verify token and chat_id are set and valid."""
+        """SetupProvider: verify token and chat_id are set and valid; call Telegram API to confirm token works."""
         if not self._ctx:
             return False, "Extension not initialized"
         kv = self._ctx.get_extension("kv")
@@ -103,8 +103,17 @@ class TelegramChannelExtension:
         try:
             validate_token(token.strip())
         except TokenValidationError as e:
-            return False, f"Invalid token: {e}"
-        return True, "Telegram channel configured successfully"
+            return False, f"Invalid token format: {e}"
+        try:
+            bot = Bot(token=token.strip())
+            try:
+                me = await bot.get_me()
+                display = f"@{me.username}" if me.username else me.first_name
+                return True, f"Telegram connected: {display}"
+            finally:
+                await bot.session.close()
+        except Exception:
+            return False, "Telegram API rejected the token"
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context

@@ -113,6 +113,12 @@ set_secret("MY_BOT_TOKEN", "secret-value")
 
 ---
 
+## Extension setup verification
+
+There is no standalone tool for checking Telegram (or other extension) connectivity. Setup verification is done via the **SetupProvider** protocol: when an extension implements `on_setup_complete()`, the orchestrator calls it after configuration is saved. For example, the Telegram channel extension validates the token format and calls the Telegram API (`Bot.get_me()`) inside `on_setup_complete()`, returning a success or sanitized error message. The agent never receives a dedicated "check connection" tool; verification is part of the setup flow.
+
+---
+
 ## Headless / CI / cron environments
 
 If the system keyring is unavailable (e.g. a Docker container or a cron job without a D-Bus session):
