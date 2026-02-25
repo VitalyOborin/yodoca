@@ -4,16 +4,13 @@ import asyncio
 import importlib.util
 import logging
 import sys
-import time
-from enum import Enum
 from pathlib import Path
 from typing import Any
-
-from croniter import croniter
 
 from core.events import EventBus
 from core.events.models import Event
 from core.events.topics import SystemTopics
+from core.extensions.builtin_context import ActiveChannelContextProvider
 from core.extensions.contract import (
     AgentDescriptor,
     AgentInvocationContext,
@@ -21,53 +18,21 @@ from core.extensions.contract import (
     ChannelProvider,
     ContextProvider,
     Extension,
+    ExtensionState,
     ServiceProvider,
     SchedulerProvider,
     ToolProvider,
     TurnContext,
 )
 from core.extensions.context import ExtensionContext
+from core.extensions.health_check import HealthCheckManager
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
+from core.extensions.scheduler_manager import SchedulerManager
 from core.settings import load_settings
 
 logger = logging.getLogger(__name__)
-
-_HEALTH_CHECK_INTERVAL = 30.0
-_CRON_TICK_SEC = 60
-
-
-class ExtensionState(Enum):
-    INACTIVE = "inactive"
-    ACTIVE = "active"
-    ERROR = "error"
-
-
-class _ActiveChannelContextProvider:
-    """Built-in ContextProvider that injects current channel identity into the system prompt."""
-
-    def __init__(self, router: MessageRouter) -> None:
-        self._router = router
-
-    @property
-    def context_priority(self) -> int:
-        return 0
-
-    async def get_context(self, prompt: str, turn_context: TurnContext) -> str | None:
-        if not turn_context.channel_id:
-            return None
-        descriptions = self._router.get_channel_descriptions()
-        channel_desc = descriptions.get(turn_context.channel_id) or turn_context.channel_id
-        user_id = turn_context.user_id or "unknown"
-        return (
-            "[Current Session Context]\n"
-            f"Channel: {turn_context.channel_id} ({channel_desc})\n"
-            f"User ID: {user_id}\n\n"
-            f"IMPORTANT: You are currently communicating with the user through the '{turn_context.channel_id}'. "
-            "Any actions, tool calls, or notifications should assume this channel unless the user explicitly requests otherwise. "
-            "Do not ask the user to switch channels if they are already here."
-        )
 
 
 class Loader:
@@ -88,11 +53,8 @@ class Loader:
         self._tool_providers: list[ToolProvider] = []
         self._agent_providers: dict[str, AgentProvider] = {}
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
-        self._schedulers: dict[str, SchedulerProvider] = {}
-        # Key: "ext_id::task_name" -> next run timestamp
-        self._task_next: dict[str, float] = {}
-        self._cron_task: asyncio.Task[Any] | None = None
-        self._health_task: asyncio.Task[Any] | None = None
+        self._health_manager = HealthCheckManager(self._extensions, self._state)
+        self._scheduler_manager: SchedulerManager | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._event_bus: EventBus | None = None
 
@@ -432,7 +394,7 @@ class Loader:
     def _collect_context_providers(self, router: MessageRouter) -> list[ContextProvider]:
         """Collect ContextProvider extensions (ACTIVE only) plus built-in ActiveChannelContextProvider, sorted by context_priority."""
         providers: list[ContextProvider] = [
-            _ActiveChannelContextProvider(router),
+            ActiveChannelContextProvider(router),
         ]
         ext_providers = [
             ext
@@ -470,18 +432,19 @@ class Loader:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
         self._agent_providers = {}
-        self._schedulers = {}
+        self._scheduler_manager = SchedulerManager(state=self._state, router=router)
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) == ExtensionState.ERROR:
                 continue
+            manifest = next((m for m in self._manifests if m.id == ext_id), None)
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
             if isinstance(ext, AgentProvider):
                 self._agent_providers[ext_id] = ext
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
-            if isinstance(ext, SchedulerProvider):
-                self._schedulers[ext_id] = ext
+            if isinstance(ext, SchedulerProvider) and manifest:
+                self._scheduler_manager.register(ext_id, ext, manifest)
 
         channel_descriptions = {}
         for m in self._manifests:
@@ -504,30 +467,9 @@ class Loader:
             except Exception as e:
                 logger.exception("start failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
-        now = time.time()
-        for ext_id, ext in self._schedulers.items():
-            manifest = next(m for m in self._manifests if m.id == ext_id)
-            if not manifest.schedules:
-                logger.warning(
-                    "SchedulerProvider %s has no schedules in manifest", ext_id
-                )
-                continue
-            for entry in manifest.schedules:
-                key = f"{ext_id}::{entry.task_name}"
-                try:
-                    c = croniter(entry.cron, now)
-                    self._task_next[key] = c.get_next(float)
-                except Exception as e:
-                    logger.warning(
-                        "Invalid cron '%s' for %s/%s: %s",
-                        entry.cron,
-                        ext_id,
-                        entry.task_name,
-                        e,
-                    )
-                    self._task_next[key] = now + 86400
-        self._cron_task = asyncio.create_task(self._cron_loop())
-        self._health_task = asyncio.create_task(self._health_check_loop())
+        if self._scheduler_manager:
+            self._scheduler_manager.start()
+        self._health_manager.start()
 
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
@@ -583,75 +525,11 @@ class Loader:
             sections.append("Available agents:\n" + "\n".join(agent_parts))
         return "\n\n".join(sections) if sections else "No extensions loaded."
 
-    async def _health_check_loop(self) -> None:
-        """Every 30s call health_check(); on False set ERROR and stop()."""
-        while True:
-            await asyncio.sleep(_HEALTH_CHECK_INTERVAL)
-            for ext_id, ext in list(self._extensions.items()):
-                if self._state.get(ext_id) != ExtensionState.ACTIVE:
-                    continue
-                try:
-                    if not ext.health_check():
-                        self._state[ext_id] = ExtensionState.ERROR
-                        await ext.stop()
-                except Exception as e:
-                    logger.exception("health_check failed for %s: %s", ext_id, e)
-                    self._state[ext_id] = ExtensionState.ERROR
-                    await ext.stop()
-
-    async def _cron_loop(self) -> None:
-        """Every minute evaluate SchedulerProvider schedules; call execute_task on match."""
-        while True:
-            await asyncio.sleep(_CRON_TICK_SEC)
-            if not self._router:
-                continue
-            now = time.time()
-            for ext_id, ext in list(self._schedulers.items()):
-                if self._state.get(ext_id) != ExtensionState.ACTIVE:
-                    continue
-                manifest = next(
-                    (m for m in self._manifests if m.id == ext_id), None
-                )
-                if not manifest or not manifest.schedules:
-                    continue
-                for entry in manifest.schedules:
-                    key = f"{ext_id}::{entry.task_name}"
-                    next_run = self._task_next.get(key, 0)
-                    if now < next_run:
-                        continue
-                    try:
-                        result = await ext.execute_task(entry.task_name)
-                        self._task_next[key] = croniter(
-                            entry.cron, next_run
-                        ).get_next(float)
-                        if (
-                            result
-                            and isinstance(result, dict)
-                            and "text" in result
-                        ):
-                            await self._router.notify_user(result["text"])
-                    except Exception as e:
-                        logger.exception(
-                            "Scheduled task %s/%s failed: %s",
-                            ext_id,
-                            entry.task_name,
-                            e,
-                        )
-
     async def shutdown(self) -> None:
         """Stop then destroy all extensions in reverse order."""
-        if self._health_task:
-            self._health_task.cancel()
-            try:
-                await self._health_task
-            except asyncio.CancelledError:
-                pass
-        if self._cron_task:
-            self._cron_task.cancel()
-            try:
-                await self._cron_task
-            except asyncio.CancelledError:
-                pass
+        await self._health_manager.stop()
+        if self._scheduler_manager:
+            await self._scheduler_manager.stop()
         for task in self._service_tasks.values():
             task.cancel()
             try:

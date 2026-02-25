@@ -4,7 +4,16 @@ Loader detects capabilities via isinstance(ext, Protocol). No type field in mani
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
+
+
+class ExtensionState(Enum):
+    """Extension lifecycle state."""
+
+    INACTIVE = "inactive"
+    ACTIVE = "active"
+    ERROR = "error"
 
 
 @runtime_checkable
