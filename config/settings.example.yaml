@@ -1,11 +1,16 @@
 agents:
   default:
     instructions: prompts/default.jinja2
-    model: gpt-5.2-mini
+    model: gpt-5.2
+    provider: openai
+  orchestrator:
+    instructions: prompts/default.jinja2
+    model: gpt-5.2
     provider: openai
 event_bus:
   batch_size: 3
   db_path: sandbox/data/event_journal.db
+  max_retries: 3
   poll_interval: 5.0
 extensions:
   embedding:

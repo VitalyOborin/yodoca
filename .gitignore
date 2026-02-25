@@ -16,3 +16,4 @@ sandbox/.restart_requested
 # SQLite session DB (may contain private conversation data)
 sandbox/data/
 sandbox/logs/
+config/settings.yaml
