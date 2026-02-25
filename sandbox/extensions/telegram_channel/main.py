@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
@@ -50,6 +50,7 @@ class TelegramChannelExtension:
 
     def __init__(self) -> None:
         self._ctx: "ExtensionContext | None" = None
+        self._kv: Any = None
         self._bot: Bot | None = None
         self._dp: Dispatcher | None = None
         self._token: str | None = None
@@ -71,9 +72,9 @@ class TelegramChannelExtension:
             },
             {
                 "name": "chat_id",
-                "description": "Telegram chat ID to receive messages (single-user mode)",
+                "description": "Telegram chat ID (auto-captured from first message if omitted)",
                 "secret": False,
-                "required": True,
+                "required": False,
             },
         ]
 
@@ -96,25 +97,18 @@ class TelegramChannelExtension:
         await kv.set(key, value)
 
     async def on_setup_complete(self) -> tuple[bool, str]:
-        """SetupProvider: verify token and chat_id are set and valid; call Telegram API to confirm token works."""
+        """SetupProvider: verify token is valid via Telegram API. chat_id is optional (auto-captured)."""
         if not self._ctx:
             return False, "Extension not initialized"
-        kv = self._ctx.get_extension("kv")
-        if not kv:
-            return False, "KV extension not available"
         token_key = self._ctx.get_config(
             "token_secret", f"{self._ctx.extension_id}_token"
         )
         token = await self._ctx.get_secret(token_key)
-        if not token:
-            token = await kv.get(f"{self._ctx.extension_id}.token")
+        if not token and self._kv:
+            token = await self._kv.get(f"{self._ctx.extension_id}.token")
         token = (token or "").strip()
-        chat_id_raw = await kv.get(f"{self._ctx.extension_id}.chat_id")
-        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
         if not token:
             return False, "token is required"
-        if not chat_id:
-            return False, "chat_id is required"
         try:
             validate_token(token)
         except TokenValidationError as e:
@@ -132,48 +126,43 @@ class TelegramChannelExtension:
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
-        kv = context.get_extension("kv")
-        if not kv:
+        self._kv = context.get_extension("kv")
+        if not self._kv:
             raise RuntimeError(
                 "Telegram channel requires the KV extension. Add it to depends_on and ensure it is enabled."
             )
-
-        token_key = context.get_config("token_secret", f"{context.extension_id}_token")
-        token = await context.get_secret(token_key)
-        if not token:
-            token = await kv.get(f"{context.extension_id}.token")
-        if token:
-            token = token.strip()
-        chat_id_raw = await kv.get(f"{context.extension_id}.chat_id")
-        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
-
-        if not token or not chat_id:
-            context.logger.info(
-                "Telegram channel not configured. Use request_secure_input for secret '%s', "
-                "kv_set for 'telegram_channel.chat_id', then request_restart().",
-                token_key,
-            )
-            self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
-            self._stream_edit_interval_ms = int(
-                context.get_config("stream_edit_interval_ms", 500)
-            )
-            self._stream_min_chunk_chars = int(context.get_config("stream_min_chunk_chars", 20))
-            self._polling_timeout = int(context.get_config("polling_timeout", 30))
-            self._token = None
-            self._chat_id = None
-            self._bot = None
-            self._dp = None
-            return
 
         self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
         self._stream_edit_interval_ms = int(context.get_config("stream_edit_interval_ms", 500))
         self._stream_min_chunk_chars = int(context.get_config("stream_min_chunk_chars", 20))
         self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
+        token_key = context.get_config("token_secret", f"{context.extension_id}_token")
+        token = await context.get_secret(token_key)
+        if not token:
+            token = await self._kv.get(f"{context.extension_id}.token")
+        if token:
+            token = token.strip()
+
+        if not token:
+            context.logger.info(
+                "Telegram channel: no token. Use request_secure_input for secret '%s', "
+                "then request_restart().",
+                token_key,
+            )
+            self._token = None
+            self._chat_id = None
+            self._bot = None
+            self._dp = None
+            return
+
         try:
             validate_token(token)
         except TokenValidationError as e:
             raise RuntimeError(f"Invalid Telegram bot token: {e}") from e
+
+        chat_id_raw = await self._kv.get(f"{context.extension_id}.chat_id")
+        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
 
         self._token = token
         self._chat_id = chat_id
@@ -186,6 +175,7 @@ class TelegramChannelExtension:
 
         ctx = context
         ext_id = context.extension_id
+        kv = self._kv
 
         async def on_message(message: Message) -> None:
             if not message.text:
@@ -194,6 +184,12 @@ class TelegramChannelExtension:
             if not chat:
                 return
             msg_chat_id = str(chat.id)
+
+            if self._chat_id is None:
+                self._chat_id = msg_chat_id
+                await kv.set(f"{ext_id}.chat_id", msg_chat_id)
+                ctx.logger.info("Telegram channel: auto-saved chat_id=%s", msg_chat_id)
+
             if msg_chat_id != self._chat_id:
                 return
             await ctx.emit(
@@ -202,7 +198,12 @@ class TelegramChannelExtension:
             )
 
         self._dp.message.register(on_message)
-        context.logger.info("Telegram channel initialized (polling, chat_id=%s)", self._chat_id)
+        if chat_id:
+            context.logger.info("Telegram channel initialized (polling, chat_id=%s)", chat_id)
+        else:
+            context.logger.info(
+                "Telegram channel initialized (polling, waiting for first message to capture chat_id)"
+            )
 
     async def start(self) -> None:
         pass

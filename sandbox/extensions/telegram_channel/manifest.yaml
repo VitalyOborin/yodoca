@@ -3,15 +3,15 @@ name: Telegram Channel
 version: "0.2.0"
 description: |
   Telegram Bot API channel via aiogram long-polling.
-  Setup requires: secret 'telegram_channel_token' (Bot API token from @BotFather)
-  and KV key 'telegram_channel.chat_id' (numeric Telegram chat ID).
-  After saving both, call request_restart() to activate.
+  Setup: save secret 'telegram_channel_token' (Bot API token from @BotFather),
+  then call request_restart(). The bot will auto-capture chat_id from the
+  first message the user sends to it in Telegram (/start).
 entrypoint: main:TelegramChannelExtension
 depends_on:
   - kv
 config:
   token_secret: telegram_channel_token
-  polling_timeout: 30        # long-polling timeout in seconds
+  polling_timeout: 10        # long-polling timeout in seconds
   streaming_enabled: true
   stream_edit_interval_ms: 500
   stream_min_chunk_chars: 20
