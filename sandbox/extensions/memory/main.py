@@ -127,8 +127,7 @@ class MemoryExtension:
         self._embed_fn = None
         embed_batch_fn = None
         if embedding_ext and embedding_ext.health_check():
-            dims = context.get_config("embedding_dimensions", 256)
-            self._embed_fn, embed_batch_fn = _build_embed_fns(embedding_ext, dims)
+            self._embed_fn, embed_batch_fn = _build_embed_fns(embedding_ext, embedding_dims)
 
         if self._embed_fn:
             classifier = EmbeddingIntentClassifier(

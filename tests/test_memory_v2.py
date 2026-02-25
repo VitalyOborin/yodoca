@@ -263,6 +263,24 @@ class TestEmbeddingIntentClassifier:
 class TestMemoryStorageVector:
     """MemoryStorage save_embedding and vector_search."""
 
+    def test_serialize_embedding_truncates_oversized(self, tmp_db) -> None:
+        """Matryoshka truncation: provider returns 1024 dims, storage expects 256."""
+        s = MemoryStorage(tmp_db, embedding_dimensions=256)
+        oversized = [0.1] * 1024
+        result = s._serialize_embedding(oversized)
+        # 256 floats × 4 bytes = 1024 bytes
+        assert len(result) == 256 * 4
+
+    def test_serialize_embedding_exact_dim_passes(self, tmp_db) -> None:
+        s = MemoryStorage(tmp_db, embedding_dimensions=256)
+        result = s._serialize_embedding([0.5] * 256)
+        assert len(result) == 256 * 4
+
+    def test_serialize_embedding_undersized_raises(self, tmp_db) -> None:
+        s = MemoryStorage(tmp_db, embedding_dimensions=256)
+        with pytest.raises(ValueError, match="Dimension mismatch"):
+            s._serialize_embedding([0.1] * 128)
+
     @pytest.mark.asyncio
     async def test_save_embedding_and_vector_search(
         self, storage: MemoryStorage

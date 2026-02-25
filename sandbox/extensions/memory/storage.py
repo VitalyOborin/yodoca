@@ -479,6 +479,11 @@ class MemoryStorage:
         """
         expected_dim = self._embedding_dimensions
         if len(embedding) > expected_dim:
+            logger.warning(
+                "Embedding dimension mismatch: provider returned %d, expected %d. "
+                "Truncating to %d (Matryoshka). Check provider 'dimensions' parameter support.",
+                len(embedding), expected_dim, expected_dim,
+            )
             embedding = embedding[:expected_dim]
         elif len(embedding) < expected_dim:
             raise ValueError(
@@ -772,26 +777,32 @@ class MemoryStorage:
         }
 
     async def search_entity_by_alias(self, alias: str) -> dict[str, Any] | None:
-        """Search entities by alias in JSON aliases field."""
+        """Search entities by alias (case-insensitive, full Unicode support).
+
+        SQLite LIKE is case-insensitive for ASCII only, so Cyrillic and other
+        non-ASCII characters require Python-side comparison after fetching
+        candidates that have a non-empty aliases field.
+        """
         if self._read_conn is None:
             return None
-        escaped = alias.replace('"', '""')
-        pattern = f'%"{escaped}"%'
+        alias_lower = alias.lower()
         cursor = await self._read_conn.execute(
-            "SELECT id, canonical_name, type, aliases, summary, mention_count FROM entities WHERE aliases LIKE ?",
-            (pattern,),
+            "SELECT id, canonical_name, type, aliases, summary, mention_count"
+            " FROM entities WHERE aliases IS NOT NULL AND aliases != '[]' AND aliases != ''",
         )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "canonical_name": row[1],
-            "type": row[2],
-            "aliases": json.loads(row[3]) if row[3] else [],
-            "summary": row[4],
-            "mention_count": row[5],
-        }
+        rows = await cursor.fetchall()
+        for row in rows:
+            aliases: list[str] = json.loads(row[3]) if row[3] else []
+            if any(a.lower() == alias_lower for a in aliases):
+                return {
+                    "id": row[0],
+                    "canonical_name": row[1],
+                    "type": row[2],
+                    "aliases": aliases,
+                    "summary": row[4],
+                    "mention_count": row[5],
+                }
+        return None
 
     async def link_node_entity(self, node_id: str, entity_id: str) -> None:
         """Link node to entity via node_entities junction. Awaitable."""
