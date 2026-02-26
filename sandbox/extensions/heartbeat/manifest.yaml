@@ -18,11 +18,6 @@ agent:
     - memory
     - kv
 
-agent_config:
-  heartbeat_scout:
-    provider: openai
-    model: gpt-5-mini
-
 config:
   prompt: |
     Review the memory context above. Are there any pending user requests,

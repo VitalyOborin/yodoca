@@ -47,12 +47,12 @@ class HeartbeatExtension:
             extension_dir=ext_dir,
         )
         model = (
-            context.model_router.get_model("heartbeat_scout")
+            context.model_router.get_model(context.agent_id)
             if context.model_router
             else None
         )
         if not model:
-            raise RuntimeError("heartbeat: model_router or heartbeat_scout config required")
+            raise RuntimeError("heartbeat: model_router or agent config required")
         self._scout = Agent(
             name="HeartbeatScout",
             instructions=instructions,
@@ -85,7 +85,7 @@ class HeartbeatExtension:
 
         enriched = await self._ctx.enrich_prompt(
             base_prompt,
-            turn_context=TurnContext(agent_id="heartbeat_scout"),
+            turn_context=TurnContext(agent_id=self._ctx.agent_id),
         )
 
         try:
