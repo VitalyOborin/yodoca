@@ -307,7 +307,7 @@ class Loader:
         async def on_agent_task(event: Event) -> None:
             prompt = event.payload.get("prompt", "")
             channel_id = event.payload.get("channel_id")
-            response = await router.invoke_agent(prompt)
+            response = await router.invoke_agent_background(prompt)
             if response:
                 await router.notify_user(response, channel_id)
 
@@ -329,7 +329,7 @@ class Loader:
                 },
             )
             try:
-                await router.invoke_agent(prompt)
+                await router.invoke_agent_background(prompt)
                 duration_ms = int((_time.perf_counter() - started_at) * 1000)
                 logger.info(
                     "agent loop: done",

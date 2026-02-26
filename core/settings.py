@@ -25,6 +25,8 @@ _DEFAULTS: dict[str, Any] = {
         "poll_interval": 5.0,
         "batch_size": 3,
         "max_retries": 3,
+        "busy_timeout": 5000,
+        "stale_timeout": 300,
     },
     "logging": {
         "file": "sandbox/logs/app.log",

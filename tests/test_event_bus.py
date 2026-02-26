@@ -1,10 +1,13 @@
-"""Tests for EventBus: publish, subscribe, recover, retry/dead-letter."""
+"""Tests for EventBus: publish, subscribe, recover, retry/dead-letter, claim, watchdog."""
 
 import asyncio
+import time
 from pathlib import Path
+
 import pytest
 
 from core.events import EventBus
+from core.events.journal import EventJournal
 from core.events.models import Event
 
 
@@ -56,6 +59,116 @@ class TestEventBusPublishSubscribe:
         await event_bus.stop()
 
 
+class TestEventBusClaimPending:
+    """Atomic claim_pending."""
+
+    @pytest.mark.asyncio
+    async def test_claim_pending_atomically_marks_processing(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        conn = await journal._ensure_conn()
+        now = time.time()
+        await conn.execute(
+            """
+            INSERT INTO event_journal (topic, source, payload, status, created_at)
+            VALUES ('a', 'b', '{}', 'pending', ?)
+            """,
+            (now,),
+        )
+        await conn.commit()
+
+        events = await journal.claim_pending(limit=5)
+        assert len(events) == 1
+        assert events[0][1] == "a"
+        assert events[0][2] == "b"
+
+        cursor = await conn.execute(
+            "SELECT status, processing_since FROM event_journal"
+        )
+        row = (await cursor.fetchone()) or (None, None)
+        assert row[0] == "processing"
+        assert row[1] is not None
+        await journal.close()
+
+    @pytest.mark.asyncio
+    async def test_claim_pending_returns_empty_when_none_pending(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        await journal._ensure_conn()
+        events = await journal.claim_pending(limit=5)
+        assert events == []
+        await journal.close()
+
+
+class TestEventBusRecoverStale:
+    """Watchdog recover_stale: stale -> pending or dead_letter."""
+
+    @pytest.mark.asyncio
+    async def test_recover_stale_resets_to_pending_when_retry_under_max(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        conn = await journal._ensure_conn()
+        now = time.time()
+        stale_time = now - 400  # 400 seconds ago
+        await conn.execute(
+            """
+            INSERT INTO event_journal (topic, source, payload, status, created_at,
+                processing_since, retry_count)
+            VALUES ('x', 'y', '{}', 'processing', ?, ?, 0)
+            """,
+            (now, stale_time),
+        )
+        await conn.commit()
+
+        reset_count, dead_count = await journal.recover_stale(
+            stale_threshold=300, max_retries=3
+        )
+        assert reset_count == 1
+        assert dead_count == 0
+
+        cursor = await conn.execute(
+            "SELECT status, retry_count FROM event_journal"
+        )
+        row = (await cursor.fetchone()) or (None, None)
+        assert row[0] == "pending"
+        assert row[1] == 1
+        await journal.close()
+
+    @pytest.mark.asyncio
+    async def test_recover_stale_dead_letters_when_retry_at_max(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        conn = await journal._ensure_conn()
+        now = time.time()
+        stale_time = now - 400
+        await conn.execute(
+            """
+            INSERT INTO event_journal (topic, source, payload, status, created_at,
+                processing_since, retry_count)
+            VALUES ('x', 'y', '{}', 'processing', ?, ?, 3)
+            """,
+            (now, stale_time),
+        )
+        await conn.commit()
+
+        reset_count, dead_count = await journal.recover_stale(
+            stale_threshold=300, max_retries=3
+        )
+        assert reset_count == 0
+        assert dead_count == 1
+
+        cursor = await conn.execute(
+            "SELECT status FROM event_journal"
+        )
+        row = await cursor.fetchone()
+        assert row[0] == "dead_letter"
+        await journal.close()
+
+
 class TestEventBusRecover:
     """Recovery of processing events."""
 
@@ -63,8 +176,6 @@ class TestEventBusRecover:
     async def test_recover_resets_processing_to_pending(
         self, db_path: Path
     ) -> None:
-        import time
-
         bus = EventBus(db_path=db_path, poll_interval=0.1, batch_size=5)
         await bus.recover()
 
@@ -73,10 +184,10 @@ class TestEventBusRecover:
         now = time.time()
         await conn.execute(
             """
-            INSERT INTO event_journal (topic, source, payload, status, created_at)
-            VALUES ('x', 'y', '{}', 'processing', ?)
+            INSERT INTO event_journal (topic, source, payload, status, created_at, processing_since)
+            VALUES ('x', 'y', '{}', 'processing', ?, ?)
             """,
-            (now,),
+            (now, now),
         )
         await conn.commit()
 

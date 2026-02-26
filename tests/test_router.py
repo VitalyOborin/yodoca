@@ -1,6 +1,7 @@
 """Tests for MessageRouter: channels, invoke_agent, notify_user, subscribe."""
 
 import asyncio
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -404,3 +405,52 @@ class TestStreamingInvocation:
             "right:1",
             "right:2",
         ]
+
+
+class TestInvokeAgentBackgroundLockSplit:
+    """invoke_agent_background does not block invoke_agent (user path)."""
+
+    @pytest.mark.asyncio
+    async def test_background_and_user_invoke_run_in_parallel(self) -> None:
+        """Background and user invocations use separate locks; they run concurrently."""
+        router = MessageRouter()
+        router.set_agent(MagicMock())
+        router.configure_session(
+            session_db_path=":memory:",
+            session_timeout=60,
+        )
+
+        user_done = asyncio.Event()
+        background_done = asyncio.Event()
+
+        async def slow_run(agent, prompt, session=None) -> SimpleNamespace:
+            if "background" in prompt:
+                await asyncio.sleep(0.05)
+                background_done.set()
+                return SimpleNamespace(final_output="bg")
+            await asyncio.sleep(0.05)
+            user_done.set()
+            return SimpleNamespace(final_output="user")
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(side_effect=slow_run)
+
+
+            async def run_background() -> str:
+                return await router.invoke_agent_background("background")
+
+            async def run_user() -> str:
+                return await router.invoke_agent("user")
+
+            start = time.perf_counter()
+            tasks = [
+                asyncio.create_task(run_background()),
+                asyncio.create_task(run_user()),
+            ]
+            results = await asyncio.gather(*tasks)
+            elapsed = time.perf_counter() - start
+
+        assert results == ["bg", "user"]
+        assert user_done.is_set()
+        assert background_done.is_set()
+        assert elapsed < 0.12  # If parallel, ~0.05s; if serial, ~0.1s

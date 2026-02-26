@@ -57,7 +57,7 @@ The Event Bus provides:
 | topic          | text | Event topic (e.g. `reminder.due`, `user.message`) |
 | source         | text | Extension ID that published                       |
 | payload        | text | JSON-serialized payload                           |
-| status         | text | `pending` → `processing` → `done` \| `failed`    |
+| status         | text | `pending` → `processing` → `done` \| `failed`     |
 | created_at     | real | Unix timestamp                                    |
 | processed_at   | real | Set when done/failed                              |
 | error          | text | Error message if failed                           |

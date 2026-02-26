@@ -26,7 +26,8 @@ class MessageRouter:
         self._agent_id: str = "orchestrator"
         self._channels: dict[str, ChannelProvider] = {}
         self._channel_descriptions: dict[str, str] = {}
-        self._lock = asyncio.Lock()
+        self._user_lock = asyncio.Lock()
+        self._background_lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
         self._invoke_middleware: Callable[[str, TurnContext], Awaitable[str]] | None = None
         self._session: Any = None
@@ -152,11 +153,11 @@ class MessageRouter:
     async def invoke_agent(
         self, prompt: str, turn_context: TurnContext | None = None
     ) -> str:
-        """Run agent with prompt; return response. Serialized with other invocations."""
+        """Run agent with prompt; return response. Serialized with other user invocations."""
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        async with self._lock:
+        async with self._user_lock:
             try:
                 from agents import Runner
 
@@ -194,7 +195,7 @@ class MessageRouter:
             response_delta_type = None
 
         full_text = ""
-        async with self._lock:
+        async with self._user_lock:
             try:
                 from agents import Runner
 
@@ -229,6 +230,105 @@ class MessageRouter:
                 return result.final_output or full_text
             except Exception as e:
                 logger.exception("Agent streaming invocation failed: %s", e)
+                if full_text:
+                    error_chunk = f"\n(Error: {e})"
+                    try:
+                        await on_chunk(error_chunk)
+                    except Exception:
+                        logger.exception("Error callback failed while reporting stream error")
+                    return full_text + error_chunk
+                return f"(Error: {e})"
+
+    def _get_background_session(self) -> Any:
+        """Ephemeral session for background invocations; does not share user conversation history."""
+        if self._session_db_path is None:
+            return None
+        from agents import SQLiteSession
+
+        session_id = f"background_{int(time.time())}"
+        return SQLiteSession(session_id, self._session_db_path)
+
+    async def invoke_agent_background(
+        self, prompt: str, turn_context: TurnContext | None = None
+    ) -> str:
+        """Run agent with prompt; uses background lock and ephemeral session.
+        Does not block user messages. Used by EventBus handlers (system.agent.task, system.agent.background)."""
+        if not self._agent:
+            return "(No agent configured.)"
+        agent, stripped = await self._prepare_agent(prompt, turn_context)
+        session = self._get_background_session()
+        async with self._background_lock:
+            try:
+                from agents import Runner
+
+                result = await Runner.run(
+                    agent,
+                    stripped,
+                    session=session,
+                )
+                return result.final_output or ""
+            except Exception as e:
+                logger.exception("Agent background invocation failed: %s", e)
+                return f"(Error: {e})"
+
+    async def invoke_agent_background_streamed(
+        self,
+        prompt: str,
+        on_chunk: Callable[[str], Awaitable[None]],
+        on_tool_call: Callable[[str], Awaitable[None]] | None = None,
+        turn_context: TurnContext | None = None,
+    ) -> str:
+        """Run agent with streaming; uses background lock and ephemeral session.
+        Does not block user messages."""
+        if not self._agent:
+            return "(No agent configured.)"
+        agent, stripped = await self._prepare_agent(prompt, turn_context)
+        session = self._get_background_session()
+
+        response_delta_type = None
+        try:
+            from openai.types.responses import ResponseTextDeltaEvent
+
+            response_delta_type = ResponseTextDeltaEvent
+        except Exception:
+            response_delta_type = None
+
+        full_text = ""
+        async with self._background_lock:
+            try:
+                from agents import Runner
+
+                result = Runner.run_streamed(
+                    agent,
+                    stripped,
+                    session=session,
+                )
+                async for event in result.stream_events():
+                    if event.type == "raw_response_event":
+                        event_data = event.data
+                        delta: str | None = None
+                        if response_delta_type is not None and isinstance(
+                            event_data, response_delta_type
+                        ):
+                            delta = event_data.delta
+                        elif hasattr(event_data, "delta"):
+                            delta = event_data.delta
+                        if delta is not None:
+                            full_text += delta
+                            await on_chunk(delta)
+                    elif (
+                        event.type == "run_item_stream_event"
+                        and getattr(getattr(event, "item", None), "type", None)
+                        == "tool_call_item"
+                    ):
+                        event_item = getattr(event, "item", None)
+                        raw_item = getattr(event_item, "raw_item", None)
+                        tool_name = getattr(raw_item, "name", "tool")
+                        if on_tool_call:
+                            await on_tool_call(str(tool_name))
+                return result.final_output or full_text
+            except Exception as e:
+                logger.exception("Agent background streaming failed: %s", e)
                 if full_text:
                     error_chunk = f"\n(Error: {e})"
                     try:

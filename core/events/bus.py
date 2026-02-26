@@ -22,17 +22,22 @@ class EventBus:
         poll_interval: float = 5.0,
         batch_size: int = 3,
         max_retries: int = 3,
+        busy_timeout: int = 5000,
+        stale_timeout: float = 300.0,
     ) -> None:
-        self._journal = EventJournal(db_path)
+        self._journal = EventJournal(db_path, busy_timeout=busy_timeout)
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._max_retries = max_retries
+        self._stale_timeout = stale_timeout
         self._wake = asyncio.Event()
         self._subscribers: dict[str, list[tuple[Callable[[Event], Awaitable[None]], str]]] = (
             defaultdict(list)
         )
         self._dispatch_task: asyncio.Task[None] | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
         self._stopped = False
+        self._watchdog_interval = 30.0
 
     async def publish(
         self,
@@ -56,15 +61,23 @@ class EventBus:
         self._subscribers[topic].append((handler, subscriber_id))
 
     async def start(self) -> None:
-        """Start the dispatch loop as an asyncio Task."""
+        """Start the dispatch loop and watchdog as asyncio Tasks."""
         self._stopped = False
         self._dispatch_task = asyncio.create_task(self._dispatch_loop())
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         logger.info("EventBus dispatch loop started")
 
     async def stop(self) -> None:
         """Graceful shutdown: wait for current handlers to finish."""
         self._stopped = True
         self._wake.set()
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+            self._watchdog_task = None
         if self._dispatch_task:
             self._dispatch_task.cancel()
             try:
@@ -74,6 +87,28 @@ class EventBus:
             self._dispatch_task = None
         await self._journal.close()
         logger.info("EventBus stopped")
+
+    async def _watchdog_loop(self) -> None:
+        """Periodically recover stale events stuck in 'processing'."""
+        while not self._stopped:
+            try:
+                await asyncio.sleep(self._watchdog_interval)
+            except asyncio.CancelledError:
+                break
+            if self._stopped:
+                break
+            try:
+                reset_count, dead_count = await self._journal.recover_stale(
+                    self._stale_timeout, self._max_retries
+                )
+                if reset_count or dead_count:
+                    logger.info(
+                        "EventBus watchdog: reset %d stale, dead-lettered %d",
+                        reset_count,
+                        dead_count,
+                    )
+            except Exception as e:
+                logger.exception("EventBus watchdog failed: %s", e)
 
     async def recover(self) -> int:
         """Call once at startup. Reset 'processing' -> 'pending'."""
@@ -97,7 +132,7 @@ class EventBus:
             if self._stopped:
                 break
 
-            events = await self._journal.fetch_pending(limit=self._batch_size)
+            events = await self._journal.claim_pending(limit=self._batch_size)
             for event_id, topic, source, payload, created_at, correlation_id, retry_count in events:
                 if self._stopped:
                     break
@@ -115,9 +150,9 @@ class EventBus:
                 )
 
     async def _deliver(self, event: Event) -> None:
-        """Deliver event to handlers; mark done or failed."""
+        """Deliver event to handlers; mark done or failed.
+        Event was already claimed (status=processing) by claim_pending; no mark_processing here."""
         handlers = self._subscribers.get(event.topic, [])
-        await self._journal.mark_processing(event.id)
 
         if not handlers:
             await self._journal.mark_done(event.id)

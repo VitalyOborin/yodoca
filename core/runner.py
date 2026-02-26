@@ -43,11 +43,15 @@ async def main_async() -> None:
     poll_interval = eb_cfg.get("poll_interval", 5.0)
     batch_size = eb_cfg.get("batch_size", 3)
     max_retries = eb_cfg.get("max_retries", 3)
+    busy_timeout = eb_cfg.get("busy_timeout", 5000)
+    stale_timeout = eb_cfg.get("stale_timeout", 300)
     event_bus = EventBus(
         db_path=db_path,
         poll_interval=poll_interval,
         batch_size=batch_size,
         max_retries=max_retries,
+        busy_timeout=busy_timeout,
+        stale_timeout=stale_timeout,
     )
     await event_bus.recover()
     loader.set_event_bus(event_bus)
