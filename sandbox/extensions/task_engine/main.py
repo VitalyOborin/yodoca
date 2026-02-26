@@ -27,7 +27,7 @@ from subtasks import MAX_SUBTASK_DEPTH, get_subtask_depth, try_resume_parent, up
 from task_queries import cancel_task as query_cancel_task
 from task_queries import get_task_status as query_get_task_status
 from task_queries import list_active_tasks as query_list_active_tasks
-from tools import build_tools
+from task_engine_tools import build_tools
 from worker import (
     claim_next_task,
     execute_task,
