@@ -13,6 +13,7 @@ agent:
   model: gpt-5.2-codex # mistralai/codestral-22b-v0.1 # gpt-5.2-codex
   uses_tools:
     - core_tools
+    - web_search
   limits:
     max_turns: 20
 

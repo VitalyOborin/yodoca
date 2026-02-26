@@ -22,9 +22,10 @@ def build_tools(ext: Any) -> list[Any]:
         Use when:
         - The task requires multiple steps (research, generation, analysis)
         - The task should run in the background while the user continues chatting
-        - The task needs a specialized agent (image_agent, code_agent, etc.)
+        - The task needs a specialized agent
 
-        Returns task_id for tracking.
+        agent_id: 'orchestrator' (default, general-purpose) or 'builder_agent'
+        (creates new extensions). Returns task_id for tracking.
         """
         return await ext.submit_task(goal, agent_id, priority, parent_task_id, max_steps)
 

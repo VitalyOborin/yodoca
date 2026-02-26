@@ -11,6 +11,7 @@ description: |
 
 depends_on:
   - kv
+  - builder_agent
 
 config:
   tick_sec: 1.0
@@ -20,7 +21,8 @@ config:
   default_max_steps: 20
   step_timeout_sec: 120
   retention_days: 30
-  agent_extensions: []
+  agent_extensions:
+    - builder_agent
 
 schedules:
   - name: task_cleanup

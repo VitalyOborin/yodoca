@@ -69,9 +69,8 @@ class TaskEngineExtension:
             try:
                 provider = context.get_extension(ext_id)
                 if provider and hasattr(provider, "get_agent_descriptor"):
-                    descriptor = provider.get_agent_descriptor()
-                    self._agent_registry[descriptor.name] = provider
-                    logger.info("task_engine: registered agent %s (%s)", descriptor.name, ext_id)
+                    self._agent_registry[ext_id] = provider
+                    logger.info("task_engine: registered agent '%s' (ext=%s)", ext_id, ext_id)
             except Exception as e:
                 logger.warning("task_engine: could not load agent %s: %s", ext_id, e)
 
