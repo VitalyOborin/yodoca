@@ -1,27 +1,31 @@
 id: heartbeat
 name: Heartbeat
-version: "2.0.0"
+version: "3.0.0"
 
 entrypoint: main:HeartbeatExtension
 
 description: |
-  Periodic scout: checks memory for actionable items, escalates to Orchestrator
-  when needed. Uses lightweight model for cost efficiency.
+  Periodic scout: checks memory and active tasks, creates background tasks via
+  TaskEngine when work is detected. Uses lightweight model for cost efficiency.
 
 depends_on:
   - memory
   - kv
+  - task_engine
 
 agent:
   model: gpt-5-mini
   uses_tools:
     - memory
     - kv
+    - task_engine
 
 config:
   prompt: |
-    Review the memory context above. Are there any pending user requests,
-    unfinished tasks, reminders, or follow-ups that need attention right now?
+    Review the memory context above and check active tasks.
+    Are there any pending user requests, unfinished tasks,
+    stalled background work, reminders, or follow-ups
+    that need attention right now?
 
 schedules:
   - name: agent_loop

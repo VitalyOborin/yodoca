@@ -15,21 +15,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PROMPT = (
-    "Review the memory context above. Are there any pending user requests, "
-    "unfinished tasks, reminders, or follow-ups that need attention right now?"
+    "Review the memory context above and check active tasks. "
+    "Are there any pending user requests, unfinished tasks, "
+    "stalled background work, reminders, or follow-ups that need attention right now?"
 )
+
+
+class TaskSpec(BaseModel):
+    """Task specification for submit_task action."""
+
+    goal: str = Field(description="Task description for the agent")
+    agent_id: str = Field(default="orchestrator", description="Which agent should handle it")
+    priority: int = Field(default=5, description="1-10, higher = more urgent")
 
 
 class HeartbeatDecision(BaseModel):
     """Structured output from Scout. Required by output_type."""
 
-    action: Literal["noop", "done", "escalate"] = Field(
-        description="noop: nothing to do. done: task handled. escalate: needs orchestrator."
-    )
-    reason: str = Field(
-        default="",
-        description="Brief explanation. For escalate: task description for orchestrator.",
-    )
+    action: Literal["noop", "submit_task", "alert"] = Field(...)
+    reason: str = Field(default="", description="Brief explanation")
+    task: TaskSpec | None = Field(default=None, description="Required when action=submit_task")
 
 
 class HeartbeatExtension:
@@ -102,10 +107,22 @@ class HeartbeatExtension:
         match decision.action:
             case "noop":
                 logger.debug("heartbeat: noop")
-            case "done":
-                logger.info("heartbeat: done — %s", (decision.reason or "")[:120])
-            case "escalate":
-                logger.info("heartbeat: escalate → %s", (decision.reason or "")[:120])
-                await self._ctx.request_agent_task(decision.reason)
+            case "submit_task":
+                if not decision.task:
+                    logger.warning("heartbeat: submit_task without task spec")
+                    return None
+                task_engine = self._ctx.get_extension("task_engine")
+                if not task_engine:
+                    logger.error("heartbeat: task_engine not available")
+                    return None
+                result = await task_engine.submit_task(
+                    goal=decision.task.goal,
+                    agent_id=decision.task.agent_id,
+                    priority=decision.task.priority,
+                )
+                logger.info("heartbeat: created task %s -- %s", result.task_id, (decision.reason or "")[:120])
+            case "alert":
+                logger.info("heartbeat: alert -- %s", (decision.reason or "")[:120])
+                return {"text": decision.reason}
 
         return None

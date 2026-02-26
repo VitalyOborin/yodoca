@@ -85,6 +85,10 @@ class ExtensionContext:
             on_tool_call=on_tool_call,
         )
 
+    async def invoke_agent_background(self, prompt: str) -> str:
+        """Run the Orchestrator in background mode (separate lock, ephemeral session). Returns response."""
+        return await self._router.invoke_agent_background(prompt)
+
     async def enrich_prompt(
         self,
         prompt: str,

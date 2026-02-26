@@ -1,0 +1,40 @@
+id: task_engine
+name: Task Engine
+version: "2.0.0"
+
+entrypoint: main:TaskEngineExtension
+
+description: |
+  Multi-step task execution engine. Manages async agent work:
+  submit, track, cancel tasks. Provides background worker with
+  ReAct agent loop, checkpointing, retry, and subtask delegation.
+
+depends_on:
+  - kv
+
+config:
+  tick_sec: 1.0
+  max_concurrent_tasks: 3
+  lease_ttl_sec: 90
+  max_retries: 5
+  default_max_steps: 20
+  step_timeout_sec: 120
+  retention_days: 30
+  agent_extensions: []
+
+schedules:
+  - name: task_cleanup
+    cron: "0 4 * * *"
+    task: cleanup_old_tasks
+    description: "Delete completed/failed tasks older than retention_days"
+
+events:
+  publishes:
+    - topic: task.submitted
+      description: "New task submitted to the queue"
+    - topic: task.completed
+      description: "Task finished (done or failed)"
+    - topic: task.progress
+      description: "Task made progress (step completed)"
+
+enabled: true
