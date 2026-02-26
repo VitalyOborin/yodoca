@@ -42,7 +42,7 @@ LLM model configuration per agent. See [llm.md](llm.md) for details.
 | `agents.<id>.max_tokens` | Optional |
 | `agents.<id>.extra` | Optional dict of extra kwargs passed to the provider |
 
-Extensions register per-agent model configs via manifest `agent_config` block (e.g. `heartbeat_scout`). Loader calls `model_router.register_agent_config()` for each entry.
+Extensions register per-agent model configs via manifest `agent_config` block. Loader calls `model_router.register_agent_config()` for each entry.
 
 Built-in defaults (`core/settings.py`): orchestrator → `provider: openai, model: gpt-5`. The YAML values deep-merge over these.
 

@@ -29,7 +29,7 @@ This means that in a headless deployment (Docker, CI, cron) you can still use `.
 Synchronous lookup. Use in:
 - `ModelRouter` initialization (`secrets_getter=secrets.get_secret`)
 - `core/config_check.py` (`is_configured`)
-- standalone scripts (`heartbeat.py`, `run_memory_maintenance.py`, etc.)
+- standalone scripts (`run_memory_maintenance.py`, etc.)
 
 ### `get_secret_async(name: str) -> str | None`
 

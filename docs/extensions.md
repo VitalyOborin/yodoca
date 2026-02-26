@@ -193,7 +193,7 @@ Wired by `loader.wire_context_providers()` after `start_all()`. The middleware c
 **Two public behaviors:**
 
 - **invoke_agent** / **invoke_agent_streamed**: Context is injected into the **system** role via `agent.clone(instructions=...)`; the user message is unchanged.
-- **enrich_prompt**: Returns a single string `context + separator + prompt` for downstream agents (e.g. Heartbeat Scout) that receive one combined prompt.
+- **enrich_prompt**: Returns a single string `context + separator + prompt` for downstream agents that receive one combined prompt.
 
 **Example:** The `memory` extension implements ContextProvider to inject relevant context via intent-aware hybrid search (FTS5 + vector + graph traversal + RRF).
 
@@ -314,7 +314,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 |--------|-------------|
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
-| `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents (e.g. Heartbeat Scout). For invoke_agent, context is injected into system role instead. |
+| `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents. For invoke_agent, context is injected into system role instead. |
 | `on_user_message` | Alias for `router.handle_user_message` (full message cycle) |
 
 ### System Control
@@ -538,4 +538,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `heartbeat`, `embedding`, `builder_agent`, `simple_agent`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `embedding`, `builder_agent`, `simple_agent`

@@ -84,4 +84,4 @@ The extension subscribes to `task.completed` to run subtask resume and to notify
 ## Integration
 
 - **Orchestrator**: add `task_engine` to the agent’s `uses_tools` in the manifest so it gets `submit_task`, `get_task_status`, `list_active_tasks`, `cancel_task`, `request_human_review`, `respond_to_review`.
-- **Heartbeat**: can call `task_engine.submit_task(goal, agent_id, priority)` to create background tasks from the Scout’s “submit_task” decision instead of escalating synchronously.
+- **Scheduler**: schedule recurring or one-shot events with topic system.agent.task to create tasks on a timer via the EventBus.

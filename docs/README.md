@@ -20,7 +20,6 @@ Documentation for the assistant4 AI agent platform.
 | Document | Description |
 |----------|-------------|
 | [memory.md](memory.md) | Memory system: layers, extensions, database, search, tools |
-| [heartbeat.md](heartbeat.md) | Agent loop: Scout → Orchestrator escalation |
 | [channels.md](channels.md) | Channel providers: CLI, Telegram |
 | [scheduler.md](scheduler.md) | Scheduler extension: one-shot and recurring events |
 | [llm.md](llm.md) | Model routing, providers, configuration |

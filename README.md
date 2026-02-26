@@ -28,7 +28,6 @@
 | Feature | What it means |
 |---|---|
 | 🧠 **Long-term memory** | Graph-based (nodes, edges, entities). Hybrid FTS5 + vector (sqlite-vec) search. Ebbinghaus decay, nightly consolidation. |
-| 💓 **Heartbeat loop** | Scout → Orchestrator escalation every 10 min. Agent acts *between* conversations, not only when you write. |
 | 🔌 **Extensions-only kernel** | Every feature — channels, memory, agents, schedulers — is an extension. Core has zero user-facing code. |
 | 📦 **Declarative agents** | Define a sub-agent in one `manifest.yaml`. No Python required. |
 | 🔄 **Multi-provider LLM** | OpenAI, Anthropic, LM Studio, OpenRouter — per-agent model routing from config. |
@@ -142,7 +141,7 @@ Long-term memory is a graph-based extension (`memory` + `embedding`):
 - Scheduler extensions for cron-like automation (one-shot and recurring)
 - **Memory v2** — graph-based cognitive memory (nodes, edges, entities), hybrid FTS5 + vector search, Ebbinghaus decay, nightly consolidation
 - **Embedding extension** — separate provider for memory vector search (OpenAI, OpenRouter, local)
-- Heartbeat loop: Scout → Orchestrator escalation every 10 min
+- **Task Engine** — durable multi-step background tasks with checkpointing, retries, subtasks, and human review
 - Agent-as-extension: Builder agent, declarative agents (manifest-only)
 - Safe restarts initiated by extensions (e.g., after generating new code)
 
@@ -230,7 +229,7 @@ sandbox/
     memory/              # graph-based long-term memory (FTS5 + vector + entities)
     embedding/           # embedding generation for memory search
     scheduler/           # one-shot and recurring events
-    heartbeat/           # Scout → Orchestrator escalation
+    task_engine/         # durable background tasks with retries
     kv/                  # key-value store (secrets, config)
     builder_agent/       # code-generation agent
     simple_agent/        # declarative sub-agent (manifest-only)
@@ -240,7 +239,6 @@ sandbox/
 scripts/                 # utilities
   reset.py               # wipe config, memory, secrets (fresh start)
   run_memory_maintenance.py  # manual consolidation/decay run
-  heartbeat.py           # standalone heartbeat test
 ```
 
 ---
@@ -333,7 +331,7 @@ Detailed docs live in [`docs/`](docs/):
 - [Architecture](docs/architecture.md) — bootstrap flow, components, protocols
 - [Extensions](docs/extensions.md) — manifest, protocols, creating extensions
 - [Channels](docs/channels.md) — CLI, Telegram, agent channel tools
-- [Memory](docs/memory.md), [Heartbeat](docs/heartbeat.md), [Scheduler](docs/scheduler.md)
+- [Memory](docs/memory.md), [Scheduler](docs/scheduler.md), [Task Engine](docs/task_engine.md)
 - [Secrets](docs/secrets.md) — keyring vs `.env`, onboarding flow
 - [ADRs](docs/adr/) — architecture decisions
 

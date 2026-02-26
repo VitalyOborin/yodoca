@@ -96,14 +96,14 @@ Claude models via Anthropic API.
 Extensions with `agent_config` in manifest register their agent IDs with ModelRouter during `initialize_all`:
 
 ```yaml
-# sandbox/extensions/heartbeat/manifest.yaml
+# sandbox/extensions/builder_agent/manifest.yaml
 agent_config:
-  heartbeat_scout:
+  builder:
     provider: openai
-    model: gpt-5-mini
+    model: gpt-5
 ```
 
-Then `model_router.get_model("heartbeat_scout")` resolves correctly.
+Then `model_router.get_model("builder")` resolves correctly.
 
 ---
 

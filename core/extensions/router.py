@@ -343,8 +343,8 @@ class MessageRouter:
     ) -> str:
         """Return context + separator + prompt for use as a single prompt by downstream agents.
 
-        Used by extensions (e.g. Heartbeat Scout) that pass the result to their own agent
-        as one message. For invoke_agent, context is injected into system role instead.
+        Extensions that run their own Agent pass the result as one message.
+        For invoke_agent, context is injected into system role instead.
         """
         stripped = prompt.strip()
         if not self._invoke_middleware:

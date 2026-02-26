@@ -28,7 +28,7 @@ class ChannelProvider(Protocol):
         All addressing (user_id, chat_id, etc.) is internal to the channel."""
 ```
 
-Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and registers channels in MessageRouter. When the kernel handles `user.message`, it resolves `channel_id` → ChannelProvider, invokes the agent, and calls `channel.send_to_user(user_id, response)` on the originating channel. For proactive delivery (e.g. heartbeat escalation, scheduled reminders), the kernel calls `channel.send_message(text)` — the channel handles addressing internally.
+Defined in `core/extensions/contract.py`. Loader detects via `isinstance` and registers channels in MessageRouter. When the kernel handles `user.message`, it resolves `channel_id` → ChannelProvider, invokes the agent, and calls `channel.send_to_user(user_id, response)` on the originating channel. For proactive delivery (e.g. scheduled reminders, task notifications), the kernel calls `channel.send_message(text)` — the channel handles addressing internally.
 
 ---
 

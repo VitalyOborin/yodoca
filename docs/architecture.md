@@ -10,7 +10,7 @@ assistant4 is an **AI agent platform** built around an extensible kernel. The sy
 
 **Key principles:**
 
-- **Extensions only** — All user-facing features (channels, memory, heartbeat, scheduler) are extensions. Core provides the kernel.
+- **Extensions only** — All user-facing features (channels, memory, scheduler) are extensions. Core provides the kernel.
 - **Event-driven** — Event Bus for durable pub/sub; MessageRouter for hot-path user→agent→channel flow.
 - **Protocol-based** — Extensions declare capabilities via `@runtime_checkable` Protocol classes (`core/extensions/contract.py`), detected at load time with `isinstance`. No manifest field needed.
 
@@ -85,7 +85,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
                                          ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                      Extensions (sandbox/extensions/<id>/)                       │
-│  cli_channel │ telegram_channel │ memory │ scheduler │ kv │ heartbeat │ embedding │
+│  cli_channel │ telegram_channel │ memory │ scheduler │ kv │ embedding │ task_engine │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -200,7 +200,7 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 | **Tools** | kv, scheduler | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, etc.) |
 | **Agents** | builder_agent, simple_agent | AgentProvider | Specialized agents invoked as tools (`integration_mode: tool`) |
 | **Memory** | memory | ToolProvider, ContextProvider, SchedulerProvider | Graph-based cognitive memory: episodes, facts, procedures, opinions. Intent-aware hybrid retrieval, LLM-powered consolidation, Ebbinghaus decay |
-| **Proactive** | heartbeat | SchedulerProvider | Periodic Scout → Orchestrator escalation (every 2 min) |
+| **Background work** | task_engine | ToolProvider, ServiceProvider | Durable multi-step task execution with checkpointing, retries, subtasks, and human review |
 | **Infrastructure** | embedding | (internal API) | Embedding generation for memory and other extensions |
 
 ---
@@ -211,7 +211,6 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 - [event_bus.md](event_bus.md) — Event Bus
 - [event_bus-memory-flow.md](event_bus-memory-flow.md) — Detailed message flow
 - [memory.md](memory.md) — Memory system
-- [heartbeat.md](heartbeat.md) — Agent loop
 - [llm.md](llm.md) — Model routing
 - [channels.md](channels.md) — Channel extensions
 - [scheduler.md](scheduler.md) — Scheduler extension

@@ -137,7 +137,7 @@ Update a recurring schedule: change `cron`, `every_seconds`, `until_iso`, or `st
 
 ## Relation to Loader Cron Loop
 
-The Loader has a separate **cron loop** for `SchedulerProvider` extensions (e.g. Heartbeat, memory_maintenance). That loop evaluates **manifest-defined** schedules (`schedules` in manifest.yaml) and calls `execute_task(task_name)`.
+The Loader has a separate **cron loop** for `SchedulerProvider` extensions (e.g. memory). That loop evaluates **manifest-defined** schedules (`schedules` in manifest.yaml) and calls `execute_task(task_name)`.
 
 The **Scheduler extension** is different: it runs its own **ServiceProvider** tick loop and stores schedules in its database. It does **not** use the Loader's cron — it is fully autonomous.
 
