@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agent_task (
     schedule_at   REAL,
     leased_by     TEXT,
     lease_exp     REAL,
+    -- strftime('%s') gives second precision; unixepoch('subsec') needs SQLite 3.38+
     created_at    REAL    DEFAULT (cast(strftime('%s','now') as real)),
     updated_at    REAL    DEFAULT (cast(strftime('%s','now') as real))
 );
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS task_step (
     tokens_used      INTEGER,
     duration_ms      INTEGER,
     error_code       TEXT,
+    -- see agent_task comment on strftime vs unixepoch
     created_at       REAL DEFAULT (cast(strftime('%s','now') as real))
 );
 

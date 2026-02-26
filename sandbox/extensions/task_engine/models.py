@@ -47,13 +47,6 @@ class CancelTaskResult(BaseModel):
     message: str
 
 
-class FinishTaskResult(BaseModel):
-    """Result of finish_task tool (injected into agent loop)."""
-
-    finished: bool = True
-    result: str = ""
-
-
 # --- Internal dataclasses (DB row mapping) ---
 
 
