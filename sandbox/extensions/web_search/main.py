@@ -21,6 +21,7 @@ from interfaces import (
 )
 from providers.duckduckgo import DuckDuckGoSearchProvider
 from providers.jina import JinaReadProvider
+from providers.perplexity import PerplexitySearchProvider
 from providers.searxng import SearXngSearchProvider
 from providers.tavily import TavilyProvider
 
@@ -101,8 +102,15 @@ class WebSearchExtension:
         if name == "searxng":
             base_url = self._ctx.get_config("searxng_base_url", "http://localhost:8080")
             return SearXngSearchProvider(base_url=base_url)
+        if name == "perplexity":
+            api_key = await self._ctx.get_secret("PERPLEXITY_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "PERPLEXITY_API_KEY secret not set. Use configure_extension to provide it."
+                )
+            return PerplexitySearchProvider(api_key=api_key)
         raise ValueError(
-            f"Unknown search_provider: {name}. Supports: duckduckgo, tavily, searxng"
+            f"Unknown search_provider: {name}. Supports: duckduckgo, tavily, searxng, perplexity"
         )
 
     async def _create_read_provider(self, name: str) -> Any:
@@ -113,7 +121,7 @@ class WebSearchExtension:
         raise ValueError(f"Unknown read_provider: {name}. Supports: jina, tavily")
 
     def get_setup_schema(self) -> list[dict]:
-        """SetupProvider: schema for Tavily API key onboarding."""
+        """SetupProvider: schema for API key onboarding."""
         return [
             {
                 "name": "tavily_api_key",
@@ -121,35 +129,67 @@ class WebSearchExtension:
                 "secret": True,
                 "required": False,
             },
+            {
+                "name": "perplexity_api_key",
+                "description": "Perplexity API key (get one at perplexity.ai/account/api)",
+                "secret": True,
+                "required": False,
+            },
         ]
 
     async def apply_config(self, name: str, value: str) -> None:
-        """SetupProvider: save Tavily API key to keyring."""
+        """SetupProvider: save API keys to keyring."""
         if not self._ctx:
             raise RuntimeError("Extension not initialized")
         if name == "tavily_api_key":
             await self._ctx.set_secret("TAVILY_API_KEY", (value or "").strip())
+        elif name == "perplexity_api_key":
+            await self._ctx.set_secret("PERPLEXITY_API_KEY", (value or "").strip())
 
     async def on_setup_complete(self) -> tuple[bool, str]:
-        """SetupProvider: verify Tavily API key when Tavily provider is used."""
+        """SetupProvider: verify API keys when respective providers are used."""
         if not self._ctx:
             return False, "Extension not initialized"
         search_name = self._ctx.get_config("search_provider", "duckduckgo")
         read_name = self._ctx.get_config("read_provider", "jina")
-        needs_tavily = search_name == "tavily" or read_name == "tavily"
-        if not needs_tavily:
-            return True, "No Tavily key needed for current providers."
-        api_key = await self._ctx.get_secret("TAVILY_API_KEY")
-        if not api_key:
-            return False, "TAVILY_API_KEY is required when using Tavily provider."
-        try:
-            from tavily import AsyncTavilyClient
 
-            client = AsyncTavilyClient(api_key=api_key)
-            await client.search("test", max_results=1)
-            return True, "Tavily API key is valid."
-        except Exception as e:
-            return False, f"Tavily API key validation failed: {e}"
+        needs_tavily = search_name == "tavily" or read_name == "tavily"
+        if needs_tavily:
+            api_key = await self._ctx.get_secret("TAVILY_API_KEY")
+            if not api_key:
+                return False, "TAVILY_API_KEY is required when using Tavily provider."
+            try:
+                from tavily import AsyncTavilyClient
+
+                client = AsyncTavilyClient(api_key=api_key)
+                await client.search("test", max_results=1)
+            except Exception as e:
+                return False, f"Tavily API key validation failed: {e}"
+
+        needs_perplexity = search_name == "perplexity"
+        if needs_perplexity:
+            api_key = await self._ctx.get_secret("PERPLEXITY_API_KEY")
+            if not api_key:
+                return False, "PERPLEXITY_API_KEY is required when using Perplexity provider."
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r = await client.post(
+                        "https://api.perplexity.ai/search",
+                        json={"query": "test", "max_results": 1},
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    r.raise_for_status()
+            except Exception as e:
+                return False, f"Perplexity API key validation failed: {e}"
+
+        if not needs_tavily and not needs_perplexity:
+            return True, "No API keys needed for current providers."
+        return True, "API key(s) validated successfully."
 
     async def start(self) -> None:
         pass

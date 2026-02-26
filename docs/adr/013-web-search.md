@@ -33,6 +33,7 @@ These tasks have different providers, different failure modes, and different cos
 | DuckDuckGo (`ddgs`) | Python library, metasearch (DDG and others) | No | Free, no registration. Unreliable under rate limiting. Good as a fallback. |
 | Tavily | Cloud API for LLM agents | Yes (free tier) | SOTA for agent search. Returns search results and can extract page content. |
 | SearXNG | Self-hosted meta-search | No (self-hosted) | Aggregates Google, Bing, DDG. Requires Docker container. Unlimited. |
+| Perplexity | Cloud Search API | Yes | Real-time ranked results, domain/language/recency filters. Separate from Sonar chat models. |
 
 **Read/extraction providers:**
 
@@ -136,7 +137,7 @@ description: |
 enabled: true
 
 config:
-  search_provider: duckduckgo    # duckduckgo | tavily | searxng
+  search_provider: duckduckgo    # duckduckgo | tavily | searxng | perplexity
   read_provider: jina            # jina | tavily | crawl4ai
   max_page_length: 15000
 ```
@@ -170,6 +171,7 @@ sandbox/extensions/web_search/
     ├── __init__.py
     ├── duckduckgo.py        # DuckDuckGoSearchProvider (SearchProvider)
     ├── jina.py              # JinaReadProvider (ReadProvider)
+    ├── perplexity.py        # PerplexitySearchProvider (SearchProvider)
     ├── tavily.py            # TavilyProvider (SearchProvider + ReadProvider)
     └── searxng.py           # SearXngSearchProvider (SearchProvider)
 ```

@@ -11,7 +11,7 @@ description: |
 enabled: true
 
 config:
-  search_provider: duckduckgo  # duckduckgo | tavily | searxng
+  search_provider: duckduckgo  # duckduckgo | tavily | searxng | perplexity
   read_provider: jina         # jina | tavily
   max_page_length: 15000
   searxng_base_url: "http://localhost:8080"  # only used when search_provider=searxng
