@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from core.llm import ModelRouterProtocol
-from core.tools import apply_patch_tool, file, make_restart_tool, shell_tool
+from core.tools import apply_patch_tool, file, make_restart_tool
 
 
 class CoreToolsProvider:
     """Exposes core tools for declarative agents.
 
-    Pass model_router + agent_id so hosted-only tools (WebSearchTool, ShellTool)
+    Pass model_router + agent_id so hosted-only tools (WebSearchTool)
     are omitted when the agent's provider does not support them.
     Pass restart_file_path for the request_restart tool.
     """
@@ -31,7 +31,7 @@ class CoreToolsProvider:
             tools.append(make_restart_tool(self._restart_file_path))
         if self._supports_hosted():
             from agents import WebSearchTool
-            tools.extend([shell_tool, WebSearchTool()])
+            tools.extend([WebSearchTool()])
         return tools
 
     def _supports_hosted(self) -> bool:

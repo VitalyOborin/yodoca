@@ -135,14 +135,15 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 
 - **Location:** `core/tools/`
 - **Role:** Built-in tools available to the Orchestrator and declarative agents via `CoreToolsProvider`.
-- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `list_channels` / `send_to_channel` (channel selection; see [channels.md](channels.md)), `shell_tool` (shell execution; hosted-only), `WebSearchTool` (web search; hosted-only).
-- **Hosted-only gating:** `shell_tool` and `WebSearchTool` are included only when the agent's provider supports OpenAI hosted tools (`supports_hosted_tools` in provider config).
+- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `list_channels` / `send_to_channel` (channel selection; see [channels.md](channels.md)), `WebSearchTool` (web search; hosted-only).
+- **Shell execution:** Provided by the `shell_exec` extension (`sandbox/extensions/shell_exec/`), not by core. Config: `containered`, `timeout_seconds`, `max_output_length`.
+- **Hosted-only gating:** `WebSearchTool` is included only when the agent's provider supports OpenAI hosted tools (`supports_hosted_tools` in provider config).
 
 ### Orchestrator
 
 - **Location:** `core/agents/orchestrator.py`
 - **Role:** Main AI agent. Created via `create_orchestrator_agent()` factory with:
-  - **core tools** — from `CoreToolsProvider` (file, shell, restart, web search)
+  - **core tools** — from `CoreToolsProvider` (file, restart, web search)
   - **extension tools** — from ToolProvider extensions (`loader.get_all_tools()`)
   - **agent tools** — from AgentProvider extensions in `tool` mode (`loader.get_agent_tools()`)
   - **capabilities_summary** — natural-language summary injected into the prompt template

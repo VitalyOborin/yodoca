@@ -1,0 +1,18 @@
+id: shell_exec
+name: Shell Executor
+version: "1.0.0"
+
+entrypoint: main:ShellExecExtension
+
+description: |
+  Executes terminal commands and scripts. Provides the agent with a local shell.
+  Supports stateful CWD tracking across invocations. Phase 1: unsafe local execution.
+
+enabled: true
+
+config:
+  containered: false   # Reserved for Phase 2 (DockerExecutor)
+  timeout_seconds: 60
+  max_output_length: 8000
+  # Start directory for shell; relative to sandbox root. Default: extension data dir (data/shell_exec)
+  cwd: "data/shell_exec"

@@ -8,7 +8,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.llm import ModelRouter
 from core.settings import get_setting
-from core.tools import shell_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -50,7 +49,7 @@ def create_orchestrator_agent(
     model = model_router.get_model("orchestrator")
     tools: list[Any] = []
     if model_router.supports_hosted_tools("orchestrator"):
-        tools.extend([WebSearchTool(), shell_tool])
+        tools.extend([WebSearchTool()])
     if extension_tools:
         tools.extend(extension_tools)
     if agent_tools:
