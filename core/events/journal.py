@@ -80,7 +80,7 @@ class EventJournal:
             INSERT INTO event_journal (topic, source, payload, correlation_id, status, created_at)
             VALUES (?, ?, ?, ?, 'pending', ?)
             """,
-            (topic, source, json.dumps(payload), correlation_id, now),
+            (topic, source, json.dumps(payload, ensure_ascii=False), correlation_id, now),
         )
         await conn.commit()
         return cursor.lastrowid or 0
