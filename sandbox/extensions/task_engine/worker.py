@@ -349,7 +349,7 @@ async def execute_task(
     db: Any,
     ctx: Any,
     task: TaskRecord,
-    get_agent: Any,
+    get_agent: Callable[[str], AgentProvider | None],
     worker_id: str,
     lease_ttl: float,
     max_retries: int,

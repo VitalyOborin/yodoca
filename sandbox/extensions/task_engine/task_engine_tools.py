@@ -40,7 +40,8 @@ def build_tools(ext: Any) -> list[Any]:
 
     @function_tool
     async def cancel_task(task_id: str, reason: str = "") -> CancelTaskResult:
-        """Cancel a running or pending task."""
+        """Cancel a running or pending task.
+        Cancellation takes effect between steps; the current step (if any) completes first."""
         return await ext._cancel_task(task_id, reason)
 
     @function_tool
