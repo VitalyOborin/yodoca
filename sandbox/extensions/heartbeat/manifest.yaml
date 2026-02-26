@@ -14,7 +14,6 @@ depends_on:
   - task_engine
 
 agent:
-  model: gpt-5-mini
   uses_tools:
     - memory
     - kv
@@ -33,4 +32,4 @@ schedules:
     task: emit_heartbeat
     description: "Wake Scout for proactive background check every 2 minutes"
 
-enabled: true
+enabled: false

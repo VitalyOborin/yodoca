@@ -4,6 +4,11 @@ import json
 from dataclasses import asdict, dataclass, field
 
 
+def json_dumps_unicode(obj: object) -> str:
+    """Serialize to JSON for DB storage; Unicode is stored as-is (no \\uXXXX escaping)."""
+    return json.dumps(obj, ensure_ascii=False)
+
+
 @dataclass
 class TaskState:
     """Explicit state for a task. Serialized to JSON and stored in agent_task.checkpoint."""
@@ -19,7 +24,7 @@ class TaskState:
 
     def to_json(self) -> str:
         """Serialize to JSON for checkpoint storage."""
-        return json.dumps(asdict(self), ensure_ascii=False)
+        return json_dumps_unicode(asdict(self))
 
     @classmethod
     def from_json(cls, data: str) -> "TaskState":

@@ -22,6 +22,7 @@ OTHER_FILES = [
     "config/settings.yaml",
     "sandbox/data/scheduler/scheduler.db",
     "sandbox/data/event_journal.db",
+    "sandbox/data/task_engine/task_engine.db",
     "sandbox/data/kv/values.json",
 ]
 SETTINGS_FILE = "config/settings.yaml"

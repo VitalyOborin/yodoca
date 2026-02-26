@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 from core.extensions.contract import AgentInvocationContext, AgentProvider
 
 from models import StepRecord, TaskRecord
-from state import TaskState
+from state import TaskState, json_dumps_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +310,7 @@ async def _run_step(
     await save_step(db, step_record)
     logger.info(
         "task_step: %s",
-        json.dumps(
+        json_dumps_unicode(
             {
                 "task_id": task.task_id,
                 "step": step_num,
@@ -320,8 +320,7 @@ async def _run_step(
                 "duration_ms": duration_ms,
                 "agent_id": task.agent_id,
                 "run_id": task.run_id,
-            },
-            ensure_ascii=False,
+            }
         ),
     )
 
@@ -388,7 +387,7 @@ async def execute_task(
 
         await conn.execute(
             "UPDATE agent_task SET status = 'done', result = ?, error = NULL, updated_at = ? WHERE task_id = ?",
-            (json.dumps(result), time.time(), task.task_id),
+            (json_dumps_unicode(result), time.time(), task.task_id),
         )
         await conn.commit()
         await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "done", "result": result})

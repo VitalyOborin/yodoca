@@ -20,6 +20,7 @@ from models import (
     TaskStatusResult,
 )
 from schema import TaskEngineDb
+from state import json_dumps_unicode
 from cleanup import cleanup_old_tasks
 from hitl import request_human_review as hitl_request_human_review
 from hitl import respond_to_review as hitl_respond_to_review
@@ -201,7 +202,7 @@ class TaskEngineExtension:
             INSERT INTO agent_task (task_id, parent_id, run_id, agent_id, status, priority, payload, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
             """,
-            (task_id, parent_task_id, run_id, agent_id, priority, json.dumps(payload), now, now),
+            (task_id, parent_task_id, run_id, agent_id, priority, json_dumps_unicode(payload), now, now),
         )
 
         if parent_task_id:
