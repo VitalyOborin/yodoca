@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, ModelSettings, WebSearchTool
+from agents import Agent, ModelSettings
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.llm import ModelRouter
@@ -12,7 +12,9 @@ from core.settings import get_setting
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def _resolve_instructions(spec: str, template_vars: dict[str, Any] | None = None) -> str:
+def _resolve_instructions(
+    spec: str, template_vars: dict[str, Any] | None = None
+) -> str:
     """Resolve instructions from config: file path (with optional Jinja2) or literal string."""
     if not spec or not spec.strip():
         return ""
@@ -48,8 +50,6 @@ def create_orchestrator_agent(
     )
     model = model_router.get_model("orchestrator")
     tools: list[Any] = []
-    if model_router.supports_hosted_tools("orchestrator"):
-        tools.extend([WebSearchTool()])
     if extension_tools:
         tools.extend(extension_tools)
     if agent_tools:

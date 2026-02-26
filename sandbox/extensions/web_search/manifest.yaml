@@ -1,0 +1,17 @@
+id: web_search
+name: Web Search & Reader
+version: "1.0.0"
+
+entrypoint: main:WebSearchExtension
+
+description: |
+  Searches the internet and reads web pages.
+  Provides web_search and open_page tools.
+
+enabled: true
+
+config:
+  search_provider: duckduckgo  # duckduckgo | tavily | searxng
+  read_provider: jina         # jina | tavily
+  max_page_length: 15000
+  searxng_base_url: "http://localhost:8080"  # only used when search_provider=searxng

@@ -30,7 +30,7 @@ These tasks have different providers, different failure modes, and different cos
 
 | Provider | Type | API key | Notes |
 |---|---|---|---|
-| DuckDuckGo (`duckduckgo-search`) | Python library, scrapes DDG HTML | No | Free, no registration. Unreliable under rate limiting. Good as a fallback. |
+| DuckDuckGo (`ddgs`) | Python library, metasearch (DDG and others) | No | Free, no registration. Unreliable under rate limiting. Good as a fallback. |
 | Tavily | Cloud API for LLM agents | Yes (free tier) | SOTA for agent search. Returns search results and can extract page content. |
 | SearXNG | Self-hosted meta-search | No (self-hosted) | Aggregates Google, Bing, DDG. Requires Docker container. Unlimited. |
 
@@ -278,7 +278,7 @@ This approach keeps citation state inside tool results and avoids cross-extensio
 | Risk | Severity | Mitigation |
 |---|---|---|
 | **DuckDuckGo IP ban** | Medium | Rate limiting in provider, configurable delay between requests. Tavily as upgrade path. |
-| **DuckDuckGo ToS / compliance** | Medium | `duckduckgo-search` is an unofficial scraper, not a sanctioned API. DDG may change HTML structure or block scraping at any time. Acceptable for a free-tier fallback; should not be the only provider in production. |
+| **DuckDuckGo ToS / compliance** | Medium | `ddgs` is an unofficial metasearch library, not a sanctioned API. DDG may change HTML structure or block scraping at any time. Acceptable for a free-tier fallback; should not be the only provider in production. |
 | **Jina service outage** | Low | Graceful error in `ReadResult.error`; agent informed, can retry or skip. |
 | **Page content exceeds context window** | Medium | `max_page_length` config truncates content. Default 15,000 chars. `truncated` flag in result informs the agent. |
 | **SSRF via `open_page`** | Medium | The LLM controls the `url` parameter. Without validation it could target `http://localhost`, `http://169.254.169.254` (cloud metadata), `file://`, or internal network addresses — leaking local data or environment metadata. Mitigation: URL validation in `main.py` before dispatching to any `ReadProvider` — reject non-HTTP(S) schemes, resolve DNS and reject private/loopback IP ranges (RFC 1918, link-local, localhost). Applies uniformly to all providers. |
