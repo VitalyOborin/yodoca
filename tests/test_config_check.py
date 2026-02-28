@@ -19,7 +19,10 @@ def test_is_configured_missing_settings(tmp_path: Path) -> None:
 def test_is_configured_empty_providers(tmp_path: Path) -> None:
     """When providers is empty, returns False."""
     (tmp_path / "config").mkdir()
-    settings = {"providers": {}, "agents": {"default": {"provider": "openai", "model": "gpt-5"}}}
+    settings = {
+        "providers": {},
+        "agents": {"default": {"provider": "openai", "model": "gpt-5"}},
+    }
     (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
     ok, reason = is_configured(project_root=tmp_path)
     assert ok is False

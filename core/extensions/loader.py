@@ -136,6 +136,7 @@ class Loader:
         """Dynamic import or declarative adapter. Declarative agents need no main.py."""
         if manifest.agent and not manifest.entrypoint:
             from core.extensions.declarative_agent import DeclarativeAgentAdapter
+
             return DeclarativeAgentAdapter(manifest)
         ext_dir = self._extensions_dir / manifest.id
         if manifest.entrypoint is None:
@@ -174,9 +175,8 @@ class Loader:
 
     def _get_restart_file_path(self) -> Path:
         """Restart flag file path from supervisor.restart_file setting (project-root-relative)."""
-        return (
-            self._data_dir.parent.parent
-            / get_setting(self._settings, "supervisor.restart_file", "sandbox/.restart_requested")
+        return self._data_dir.parent.parent / get_setting(
+            self._settings, "supervisor.restart_file", "sandbox/.restart_requested"
         )
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
@@ -203,7 +203,9 @@ class Loader:
                 tools.extend(ext.get_tools())
         return tools
 
-    def _resolve_agent_instructions(self, manifest: ExtensionManifest, ext_id: str) -> str:
+    def _resolve_agent_instructions(
+        self, manifest: ExtensionManifest, ext_id: str
+    ) -> str:
         """Resolve instructions from extension-local prompt.jinja2 and/or agent.instructions.
 
         Agent extensions may have prompt.jinja2 in extension/<id>/. If present, it is used.
@@ -247,12 +249,18 @@ class Loader:
                 continue
             manifest = next(m for m in self._manifests if m.id == ext_id)
             data_dir_path = self._data_dir / ext_id
-            resolved_tools = self._resolve_agent_tools(manifest) if manifest.agent else []
+            resolved_tools = (
+                self._resolve_agent_tools(manifest) if manifest.agent else []
+            )
             resolved_instructions = (
-                self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
+                self._resolve_agent_instructions(manifest, ext_id)
+                if manifest.agent
+                else ""
             )
             agent_model = manifest.agent.model if manifest.agent else ""
-            agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
+            agent_id = getattr(manifest, "agent_id", None) or (
+                ext_id if manifest.agent else None
+            )
             overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
             config = {**manifest.config, **overrides}
             ctx = ExtensionContext(
@@ -381,7 +389,9 @@ class Loader:
             user_id = event.payload.get("user_id", "default")
             channel_id = event.payload.get("channel_id")
             if not text or not channel_id:
-                logger.warning("user.message missing text or channel_id: %s", event.payload)
+                logger.warning(
+                    "user.message missing text or channel_id: %s", event.payload
+                )
                 return
             channel = router.get_channel(channel_id)
             if not channel:
@@ -396,13 +406,20 @@ class Loader:
         for topic, ext_id in proactive_map.items():
             agent = self._agent_providers.get(ext_id)
             if not agent:
-                logger.debug("Proactive topic %s: ext %s is not AgentProvider, skip", topic, ext_id)
+                logger.debug(
+                    "Proactive topic %s: ext %s is not AgentProvider, skip",
+                    topic,
+                    ext_id,
+                )
                 continue
 
             async def proactive_handler(
                 event: Event, _topic: str = topic, _agent: AgentProvider = agent
             ) -> None:
-                task = event.payload.get("prompt") or f"Background event '{_topic}': {event.payload}"
+                task = (
+                    event.payload.get("prompt")
+                    or f"Background event '{_topic}': {event.payload}"
+                )
                 context = AgentInvocationContext(correlation_id=event.correlation_id)
                 try:
                     response = await _agent.invoke(task, context)
@@ -420,7 +437,9 @@ class Loader:
 
             event_bus.subscribe(topic, proactive_handler, "kernel.proactive")
 
-    def _collect_context_providers(self, router: MessageRouter) -> list[ContextProvider]:
+    def _collect_context_providers(
+        self, router: MessageRouter
+    ) -> list[ContextProvider]:
         """Collect ContextProvider extensions (ACTIVE only) plus built-in ActiveChannelContextProvider, sorted by context_priority."""
         providers: list[ContextProvider] = [
             ActiveChannelContextProvider(router),
@@ -429,7 +448,8 @@ class Loader:
             ext
             for ext_id, ext in self._extensions.items()
             if isinstance(ext, ContextProvider)
-            and self._state.get(ext_id, ExtensionState.INACTIVE) == ExtensionState.ACTIVE
+            and self._state.get(ext_id, ExtensionState.INACTIVE)
+            == ExtensionState.ACTIVE
         ]
         providers.extend(ext_providers)
         return sorted(providers, key=lambda p: p.context_priority)
@@ -478,7 +498,9 @@ class Loader:
         channel_descriptions = {}
         for m in self._manifests:
             if m.id in [
-                eid for eid, e in self._extensions.items() if isinstance(e, ChannelProvider)
+                eid
+                for eid, e in self._extensions.items()
+                if isinstance(e, ChannelProvider)
             ]:
                 channel_descriptions[m.id] = m.name
         router.set_channel_descriptions(channel_descriptions)
@@ -492,7 +514,9 @@ class Loader:
                 await ext.start()
                 self._state[ext_id] = ExtensionState.ACTIVE
                 if isinstance(ext, ServiceProvider):
-                    self._service_tasks[ext_id] = asyncio.create_task(ext.run_background())
+                    self._service_tasks[ext_id] = asyncio.create_task(
+                        ext.run_background()
+                    )
             except Exception as e:
                 logger.exception("start failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
@@ -538,7 +562,10 @@ class Loader:
         tool_parts: list[str] = []
         agent_parts: list[str] = []
         for m in self._manifests:
-            if m.id not in self._extensions or self._state.get(m.id) == ExtensionState.ERROR:
+            if (
+                m.id not in self._extensions
+                or self._state.get(m.id) == ExtensionState.ERROR
+            ):
                 continue
             if not m.description:
                 continue

@@ -18,7 +18,9 @@ class ActiveChannelContextProvider:
         if not turn_context.channel_id:
             return None
         descriptions = self._router.get_channel_descriptions()
-        channel_desc = descriptions.get(turn_context.channel_id) or turn_context.channel_id
+        channel_desc = (
+            descriptions.get(turn_context.channel_id) or turn_context.channel_id
+        )
         user_id = turn_context.user_id or "unknown"
         return (
             "[Current Session Context]\n"

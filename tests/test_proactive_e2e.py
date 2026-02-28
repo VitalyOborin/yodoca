@@ -113,7 +113,9 @@ async def test_proactive_dispatcher_end_to_end(tmp_path: Path) -> None:
         await loader.shutdown()
 
     # Assert 1: task_agent.invoke was called (Runner.run called with task containing payload)
-    assert mock_runner.run.called, "Runner.run (via task_agent.invoke) should have been called"
+    assert mock_runner.run.called, (
+        "Runner.run (via task_agent.invoke) should have been called"
+    )
     call_args = mock_runner.run.call_args
     assert call_args is not None
     task_passed = call_args[0][1] if len(call_args[0]) > 1 else str(call_args)
@@ -134,7 +136,9 @@ async def test_proactive_dispatcher_end_to_end(tmp_path: Path) -> None:
     )
 
     # Assert 3: user received response via channel
-    assert len(recording_channel_ext.sent) >= 1, "User should have received message via channel"
-    assert any(
-        "Task completed" in msg for _, msg in recording_channel_ext.sent
-    ), f"Expected 'Task completed' in channel output, got: {recording_channel_ext.sent}"
+    assert len(recording_channel_ext.sent) >= 1, (
+        "User should have received message via channel"
+    )
+    assert any("Task completed" in msg for _, msg in recording_channel_ext.sent), (
+        f"Expected 'Task completed' in channel output, got: {recording_channel_ext.sent}"
+    )

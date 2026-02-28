@@ -2,6 +2,7 @@
 
 STRICT RESTRICTION: All operations are allowed ONLY within the sandbox directory.
 Any path outside sandbox is rejected. No exceptions."""
+
 import shutil
 from pathlib import Path
 from typing import Literal
@@ -47,7 +48,9 @@ class SandboxEditor:
         return resolved.relative_to(self._root).as_posix()
 
     def _resolve(self, relative: str, ensure_parent: bool = False) -> Path:
-        return resolve_sandbox_path(relative, root=self._root, ensure_parent=ensure_parent)
+        return resolve_sandbox_path(
+            relative, root=self._root, ensure_parent=ensure_parent
+        )
 
 
 # ApplyPatchTool for atomic patch operations (create, update, delete via diff)
@@ -145,7 +148,9 @@ def file(
         if action == "list":
             if not target.is_dir():
                 return f"Error: not a directory: {_rel(target)}"
-            items = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            items = sorted(
+                target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
+            )
             lines = [f"{'[DIR]' if p.is_dir() else '     '} {p.name}" for p in items]
             return "\n".join(lines) if lines else "(empty)"
 

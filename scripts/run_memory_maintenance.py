@@ -87,7 +87,9 @@ async def main() -> None:
         await print_stats(mem_ext._storage)
 
         if dry_run:
-            print("[dry-run] Skipping maintenance pipeline. Use without --dry-run to execute.")
+            print(
+                "[dry-run] Skipping maintenance pipeline. Use without --dry-run to execute."
+            )
             return
 
         print("Running nightly maintenance pipeline...")

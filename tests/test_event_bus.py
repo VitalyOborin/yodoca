@@ -129,9 +129,7 @@ class TestEventBusRecoverStale:
         assert reset_count == 1
         assert dead_count == 0
 
-        cursor = await conn.execute(
-            "SELECT status, retry_count FROM event_journal"
-        )
+        cursor = await conn.execute("SELECT status, retry_count FROM event_journal")
         row = (await cursor.fetchone()) or (None, None)
         assert row[0] == "pending"
         assert row[1] == 1
@@ -161,9 +159,7 @@ class TestEventBusRecoverStale:
         assert reset_count == 0
         assert dead_count == 1
 
-        cursor = await conn.execute(
-            "SELECT status FROM event_journal"
-        )
+        cursor = await conn.execute("SELECT status FROM event_journal")
         row = await cursor.fetchone()
         assert row[0] == "dead_letter"
         await journal.close()
@@ -173,9 +169,7 @@ class TestEventBusRecover:
     """Recovery of processing events."""
 
     @pytest.mark.asyncio
-    async def test_recover_resets_processing_to_pending(
-        self, db_path: Path
-    ) -> None:
+    async def test_recover_resets_processing_to_pending(self, db_path: Path) -> None:
         bus = EventBus(db_path=db_path, poll_interval=0.1, batch_size=5)
         await bus.recover()
 
@@ -226,9 +220,7 @@ class TestEventBusRetryAndDeadLetter:
         assert call_count >= 2
 
         conn = await event_bus._journal._ensure_conn()
-        cursor = await conn.execute(
-            "SELECT status, retry_count FROM event_journal"
-        )
+        cursor = await conn.execute("SELECT status, retry_count FROM event_journal")
         rows = await cursor.fetchall()
         assert len(rows) == 1
         status, retry_count = rows[0]

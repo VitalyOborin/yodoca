@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.extensions.contract import ChannelProvider, StreamingChannelProvider, TurnContext
+from core.extensions.contract import (
+    ChannelProvider,
+    StreamingChannelProvider,
+    TurnContext,
+)
 from core.extensions.router import MessageRouter
 
 
@@ -72,7 +76,9 @@ class TestMessageRouterRegisterAndNotify:
         # (tested in test_notify_user_*)
 
     @pytest.mark.asyncio
-    async def test_notify_user_no_channels(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_notify_user_no_channels(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         router = MessageRouter()
         await router.notify_user("hello")
         # Should not raise; logs warning
@@ -108,7 +114,10 @@ class TestMessageRouterRegisterAndNotify:
     def test_set_and_get_channel_descriptions(self) -> None:
         router = MessageRouter()
         router.set_channel_descriptions({"cli": "CLI Channel", "tg": "Telegram"})
-        assert router.get_channel_descriptions() == {"cli": "CLI Channel", "tg": "Telegram"}
+        assert router.get_channel_descriptions() == {
+            "cli": "CLI Channel",
+            "tg": "Telegram",
+        }
 
 
 class TestInvokeAgent:
@@ -134,7 +143,9 @@ class TestInvokeAgent:
         mock_runner.run.assert_called_once_with(mock_agent, "hello", session=None)
 
     @pytest.mark.asyncio
-    async def test_invoke_agent_with_middleware_injects_context_into_system(self) -> None:
+    async def test_invoke_agent_with_middleware_injects_context_into_system(
+        self,
+    ) -> None:
         """When middleware returns context, agent is cloned with extended instructions and original prompt is used."""
         router = MessageRouter()
         mock_agent = MagicMock()
@@ -286,13 +297,19 @@ class TestStreamingInvocation:
         router.set_agent(MagicMock())
         tool_call = _FakeStreamEvent(
             type="run_item_stream_event",
-            item=SimpleNamespace(type="tool_call_item", raw_item=SimpleNamespace(name="calculator")),
+            item=SimpleNamespace(
+                type="tool_call_item", raw_item=SimpleNamespace(name="calculator")
+            ),
         )
 
         async def stream_events() -> None:
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("hi "))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("hi ")
+            )
             yield tool_call
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("world"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("world")
+            )
 
         def fake_streamed(*_args, **_kwargs) -> SimpleNamespace:
             return SimpleNamespace(
@@ -333,7 +350,9 @@ class TestStreamingInvocation:
             chunks.append(chunk)
 
         async def stream_events() -> None:
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("partial"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("partial")
+            )
             raise RuntimeError("stream broken")
 
         def fake_streamed(*_args, **_kwargs) -> SimpleNamespace:
@@ -365,14 +384,22 @@ class TestStreamingInvocation:
             await asyncio.sleep(0)
 
         async def stream_events_left() -> None:
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("a"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("a")
+            )
             await asyncio.sleep(0.05)
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("b"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("b")
+            )
 
         async def stream_events_right() -> None:
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("1"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("1")
+            )
             await asyncio.sleep(0.05)
-            yield _FakeStreamEvent(type="raw_response_event", data=_FakeResponseTextDeltaEvent("2"))
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("2")
+            )
 
         calls = 0
 
@@ -390,11 +417,15 @@ class TestStreamingInvocation:
         with patch("agents.Runner") as mock_runner:
             mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
             task1 = asyncio.create_task(
-                router.invoke_agent_streamed("first", on_chunk=lambda chunk: on_chunk_left(chunk))
+                router.invoke_agent_streamed(
+                    "first", on_chunk=lambda chunk: on_chunk_left(chunk)
+                )
             )
             await asyncio.sleep(0.01)
             task2 = asyncio.create_task(
-                router.invoke_agent_streamed("second", on_chunk=lambda chunk: on_chunk_right(chunk))
+                router.invoke_agent_streamed(
+                    "second", on_chunk=lambda chunk: on_chunk_right(chunk)
+                )
             )
             results = await asyncio.gather(task1, task2)
 
@@ -434,7 +465,6 @@ class TestInvokeAgentBackgroundLockSplit:
 
         with patch("agents.Runner") as mock_runner:
             mock_runner.run = AsyncMock(side_effect=slow_run)
-
 
             async def run_background() -> str:
                 return await router.invoke_agent_background("background")

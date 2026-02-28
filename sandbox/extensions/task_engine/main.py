@@ -24,7 +24,12 @@ from state import json_dumps_unicode
 from cleanup import cleanup_old_tasks
 from hitl import request_human_review as hitl_request_human_review
 from hitl import respond_to_review as hitl_respond_to_review
-from subtasks import MAX_SUBTASK_DEPTH, get_subtask_depth, try_resume_parent, update_parent_checkpoint
+from subtasks import (
+    MAX_SUBTASK_DEPTH,
+    get_subtask_depth,
+    try_resume_parent,
+    update_parent_checkpoint,
+)
 from task_queries import cancel_task as query_cancel_task
 from task_queries import get_task_status as query_get_task_status
 from task_queries import list_active_tasks as query_list_active_tasks
@@ -70,7 +75,9 @@ class TaskEngineExtension:
                 provider = context.get_extension(ext_id)
                 if provider and hasattr(provider, "get_agent_descriptor"):
                     self._agent_registry[ext_id] = provider
-                    logger.info("task_engine: registered agent '%s' (ext=%s)", ext_id, ext_id)
+                    logger.info(
+                        "task_engine: registered agent '%s' (ext=%s)", ext_id, ext_id
+                    )
             except Exception as e:
                 logger.warning("task_engine: could not load agent %s: %s", ext_id, e)
 
@@ -97,13 +104,17 @@ class TaskEngineExtension:
             return 0
         return await get_subtask_depth(self._db, task_id)
 
-    async def _update_parent_checkpoint(self, parent_task_id: str, child_task_id: str) -> None:
+    async def _update_parent_checkpoint(
+        self, parent_task_id: str, child_task_id: str
+    ) -> None:
         """Append child task_id to parent's pending_subtasks in checkpoint."""
         if not self._db:
             return
         await update_parent_checkpoint(self._db, parent_task_id, child_task_id)
 
-    async def _notify_task_completed(self, task_id: str, status: str, payload: dict) -> None:
+    async def _notify_task_completed(
+        self, task_id: str, status: str, payload: dict
+    ) -> None:
         """Emit system.user.notify for top-level task completion."""
         if not self._ctx:
             return
@@ -119,16 +130,22 @@ class TaskEngineExtension:
             summary = f"Task {task_id[:8]}... failed: {error}"
         await self._ctx.notify_user(summary)
 
-    async def _request_human_review(self, task_id: str, question: str) -> SubmitTaskResult:
+    async def _request_human_review(
+        self, task_id: str, question: str
+    ) -> SubmitTaskResult:
         """Pause task and ask user for input."""
         if not self._db or not self._ctx:
-            return SubmitTaskResult(task_id=task_id, status="error", message="Not initialized")
+            return SubmitTaskResult(
+                task_id=task_id, status="error", message="Not initialized"
+            )
         return await hitl_request_human_review(self._db, self._ctx, task_id, question)
 
     async def _respond_to_review(self, task_id: str, response: str) -> SubmitTaskResult:
         """Resume task with user's response."""
         if not self._db:
-            return SubmitTaskResult(task_id=task_id, status="error", message="Not initialized")
+            return SubmitTaskResult(
+                task_id=task_id, status="error", message="Not initialized"
+            )
         return await hitl_respond_to_review(self._db, task_id, response)
 
     async def execute_task(self, task_name: str) -> dict[str, Any] | None:
@@ -169,7 +186,9 @@ class TaskEngineExtension:
         max_steps: int | None = None,
     ) -> SubmitTaskResult:
         if not self._db or not self._ctx:
-            return SubmitTaskResult(task_id="", status="error", message="Extension not initialized")
+            return SubmitTaskResult(
+                task_id="", status="error", message="Extension not initialized"
+            )
 
         if agent_id != "orchestrator" and agent_id not in self._agent_registry:
             return SubmitTaskResult(
@@ -191,7 +210,8 @@ class TaskEngineExtension:
         run_id = str(uuid.uuid4())
         payload = {
             "goal": goal,
-            "max_steps": max_steps or int(self._ctx.get_config("default_max_steps", 20)),
+            "max_steps": max_steps
+            or int(self._ctx.get_config("default_max_steps", 20)),
             "source": "orchestrator",
         }
         conn = await self._db.ensure_conn()
@@ -201,7 +221,16 @@ class TaskEngineExtension:
             INSERT INTO agent_task (task_id, parent_id, run_id, agent_id, status, priority, payload, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
             """,
-            (task_id, parent_task_id, run_id, agent_id, priority, json_dumps_unicode(payload), now, now),
+            (
+                task_id,
+                parent_task_id,
+                run_id,
+                agent_id,
+                priority,
+                json_dumps_unicode(payload),
+                now,
+                now,
+            ),
         )
 
         if parent_task_id:
@@ -216,14 +245,30 @@ class TaskEngineExtension:
 
         await conn.commit()
 
-        await self._ctx.emit("task.submitted", {"task_id": task_id, "agent_id": agent_id, "goal": goal, "priority": priority})
-        return SubmitTaskResult(task_id=task_id, status="pending", message=f"Task {task_id} queued")
+        await self._ctx.emit(
+            "task.submitted",
+            {
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "goal": goal,
+                "priority": priority,
+            },
+        )
+        return SubmitTaskResult(
+            task_id=task_id, status="pending", message=f"Task {task_id} queued"
+        )
 
     async def _get_task_status(self, task_id: str) -> TaskStatusResult:
         if not self._db:
             return TaskStatusResult(
-                task_id=task_id, status="error", agent_id="", goal="", step=0, max_steps=0,
-                attempt_no=0, error="Extension not initialized",
+                task_id=task_id,
+                status="error",
+                agent_id="",
+                goal="",
+                step=0,
+                max_steps=0,
+                attempt_no=0,
+                error="Extension not initialized",
             )
         return await query_get_task_status(self._db, task_id)
 
@@ -235,7 +280,9 @@ class TaskEngineExtension:
     async def _cancel_task(self, task_id: str, reason: str = "") -> CancelTaskResult:
         """Cancel a task. Works on pending, running, waiting, and human_review tasks."""
         if not self._db:
-            return CancelTaskResult(task_id=task_id, status="error", message="Extension not initialized")
+            return CancelTaskResult(
+                task_id=task_id, status="error", message="Extension not initialized"
+            )
         return await query_cancel_task(self._db, task_id, reason)
 
     async def run_background(self) -> None:

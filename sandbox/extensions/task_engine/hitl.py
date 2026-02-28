@@ -11,7 +11,9 @@ from state import TaskState
 logger = logging.getLogger(__name__)
 
 
-async def request_human_review(db: Any, ctx: Any, task_id: str, question: str) -> SubmitTaskResult:
+async def request_human_review(
+    db: Any, ctx: Any, task_id: str, question: str
+) -> SubmitTaskResult:
     """Pause task and ask user for input."""
     conn = await db.ensure_conn()
     cursor = await conn.execute(
@@ -21,16 +23,26 @@ async def request_human_review(db: Any, ctx: Any, task_id: str, question: str) -
     )
     await conn.commit()
     if not cursor.rowcount:
-        return SubmitTaskResult(task_id=task_id, status="error", message="Task not running")
+        return SubmitTaskResult(
+            task_id=task_id, status="error", message="Task not running"
+        )
     cur = await conn.execute(
         "SELECT checkpoint, payload FROM agent_task WHERE task_id = ?", (task_id,)
     )
     row = await cur.fetchone()
     if row:
         checkpoint_raw, payload_raw = row[0], row[1]
-        payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+        payload = (
+            json.loads(payload_raw)
+            if isinstance(payload_raw, str)
+            else (payload_raw or {})
+        )
         try:
-            state = TaskState.from_json(checkpoint_raw) if checkpoint_raw else TaskState(goal=payload.get("goal", ""))
+            state = (
+                TaskState.from_json(checkpoint_raw)
+                if checkpoint_raw
+                else TaskState(goal=payload.get("goal", ""))
+            )
         except Exception:
             state = TaskState(goal=payload.get("goal", ""))
         state.context = dict(state.context)
@@ -42,7 +54,9 @@ async def request_human_review(db: Any, ctx: Any, task_id: str, question: str) -
         await conn.commit()
 
     await ctx.notify_user(f"Task {task_id[:8]}... needs your input: {question}")
-    return SubmitTaskResult(task_id=task_id, status="human_review", message="Task paused for review")
+    return SubmitTaskResult(
+        task_id=task_id, status="human_review", message="Task paused for review"
+    )
 
 
 async def respond_to_review(db: Any, task_id: str, response: str) -> SubmitTaskResult:
@@ -54,12 +68,20 @@ async def respond_to_review(db: Any, task_id: str, response: str) -> SubmitTaskR
     )
     row = await cur.fetchone()
     if not row:
-        return SubmitTaskResult(task_id=task_id, status="error", message="Task not in human_review")
+        return SubmitTaskResult(
+            task_id=task_id, status="error", message="Task not in human_review"
+        )
 
     checkpoint_raw, payload_raw = row[0], row[1]
-    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    payload = (
+        json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    )
     try:
-        state = TaskState.from_json(checkpoint_raw) if checkpoint_raw else TaskState(goal=payload.get("goal", ""))
+        state = (
+            TaskState.from_json(checkpoint_raw)
+            if checkpoint_raw
+            else TaskState(goal=payload.get("goal", ""))
+        )
     except Exception:
         state = TaskState(goal=payload.get("goal", ""))
     state.context = dict(state.context)
@@ -71,4 +93,6 @@ async def respond_to_review(db: Any, task_id: str, response: str) -> SubmitTaskR
         (state.to_json(), time.time(), task_id),
     )
     await conn.commit()
-    return SubmitTaskResult(task_id=task_id, status="pending", message="Task resumed with user response")
+    return SubmitTaskResult(
+        task_id=task_id, status="pending", message="Task resumed with user response"
+    )

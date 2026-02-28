@@ -91,11 +91,7 @@ class ShellExecExtension:
         if len(text) <= self._max_output:
             return text
         half = self._max_output // 2
-        return (
-            text[:half]
-            + "\n...[TRUNCATED]...\n"
-            + text[-half:]
-        )
+        return text[:half] + "\n...[TRUNCATED]...\n" + text[-half:]
 
     _CWD_MARKER = "__SHELL_EXEC_CWD__"
 

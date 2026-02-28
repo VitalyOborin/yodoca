@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-_embed_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "embedding"
+_embed_ext = (
+    Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "embedding"
+)
 sys.path.insert(0, str(_embed_ext))
 
 from main import EmbeddingExtension
@@ -16,9 +18,7 @@ from main import EmbeddingExtension
 def mock_embedder():
     """Mock EmbeddingCapability with embed_batch."""
     embedder = MagicMock()
-    embedder.embed_batch = AsyncMock(
-        return_value=[[0.1] * 256, [0.2] * 256]
-    )
+    embedder.embed_batch = AsyncMock(return_value=[[0.1] * 256, [0.2] * 256])
     return embedder
 
 

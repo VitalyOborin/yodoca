@@ -88,7 +88,12 @@ class MemoryAgent:
             f"based on these related facts:\n{context}\n\n"
             f"Call update_entity_summary with entity_id='{entity_id}' and your generated summary."
         )
-        logger.info("Enriching entity: %s (%s), %d contents", entity_name, entity_type, len(related_contents))
+        logger.info(
+            "Enriching entity: %s (%s), %d contents",
+            entity_name,
+            entity_type,
+            len(related_contents),
+        )
         try:
             await Runner.run(self._agent, task, max_turns=3)
             logger.info("Entity enriched: %s", entity_name)
@@ -106,8 +111,8 @@ class MemoryAgent:
         lines = []
         for i, (prev, curr) in enumerate(episode_pairs[:20], 1):
             lines.append(
-                f"Pair {i}: Episode A (id={prev['id']}): \"{prev.get('content', '')[:200]}\" "
-                f"-> Episode B (id={curr['id']}): \"{curr.get('content', '')[:200]}\""
+                f'Pair {i}: Episode A (id={prev["id"]}): "{prev.get("content", "")[:200]}" '
+                f'-> Episode B (id={curr["id"]}): "{curr.get("content", "")[:200]}"'
             )
         task = (
             "Analyze these consecutive episode pairs. For each pair where A clearly caused B, "
@@ -117,7 +122,9 @@ class MemoryAgent:
         logger.info("Causal inference started: %d pairs", len(episode_pairs))
         try:
             await Runner.run(self._causal_agent, task, max_turns=5)
-            logger.info("Causal inference completed: %d pairs analyzed", len(episode_pairs))
+            logger.info(
+                "Causal inference completed: %d pairs analyzed", len(episode_pairs)
+            )
             return len(episode_pairs)
         except Exception:
             logger.exception("Causal inference failed")

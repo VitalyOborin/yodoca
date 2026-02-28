@@ -55,10 +55,12 @@ class TestListChannelsLogic:
         ch = MockChannel()
         router.register_channel("cli_channel", ch)
         router.register_channel("telegram_channel", ch)
-        router.set_channel_descriptions({
-            "cli_channel": "CLI Channel",
-            "telegram_channel": "Telegram Channel",
-        })
+        router.set_channel_descriptions(
+            {
+                "cli_channel": "CLI Channel",
+                "telegram_channel": "Telegram Channel",
+            }
+        )
         ids = router.get_channel_ids()
         assert "cli_channel" in ids
         assert "telegram_channel" in ids
@@ -119,10 +121,12 @@ class TestListChannelsToolOutput:
         ch = MockChannel()
         router.register_channel("cli_channel", ch)
         router.register_channel("telegram_channel", ch)
-        router.set_channel_descriptions({
-            "cli_channel": "CLI Channel",
-            "telegram_channel": "Telegram Channel",
-        })
+        router.set_channel_descriptions(
+            {
+                "cli_channel": "CLI Channel",
+                "telegram_channel": "Telegram Channel",
+            }
+        )
         tools = make_channel_tools(router)
         list_tool = _get_tool_by_name(tools, "list_channels")
         result = await list_tool.on_invoke_tool(

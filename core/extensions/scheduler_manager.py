@@ -93,14 +93,10 @@ class SchedulerManager:
                         continue
                     try:
                         result = await ext.execute_task(entry.task_name)
-                        self._task_next[key] = croniter(
-                            entry.cron, next_run
-                        ).get_next(float)
-                        if (
-                            result
-                            and isinstance(result, dict)
-                            and "text" in result
-                        ):
+                        self._task_next[key] = croniter(entry.cron, next_run).get_next(
+                            float
+                        )
+                        if result and isinstance(result, dict) and "text" in result:
                             await self._router.notify_user(result["text"])
                     except Exception as e:
                         logger.exception(

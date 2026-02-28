@@ -19,15 +19,13 @@ _EMBEDDING_MODELS: dict[str, list[str]] = {
     "openai": [
         "text-embedding-3-small",
         "text-embedding-3-large",
-        "text-embedding-ada-002"
+        "text-embedding-ada-002",
     ],
     "openrouter": [
         "openai/text-embedding-3-small",
         "openai/text-embedding-3-large",
     ],
-    "lm_studio": [
-        "text-embedding-jina-embeddings-v5-text-small-retrieval"
-    ],
+    "lm_studio": ["text-embedding-jina-embeddings-v5-text-small-retrieval"],
 }
 
 _ADD_NEW_PROVIDER = "__add_new__"
@@ -53,7 +51,10 @@ def run_embedding_step(state: WizardState) -> bool:
         model = _select_embedding_model(provider_id)
         if model is None:
             return False
-        state.extensions["embedding"] = {"provider": provider_id, "default_model": model}
+        state.extensions["embedding"] = {
+            "provider": provider_id,
+            "default_model": model,
+        }
         return True
 
     use_same = (
@@ -90,7 +91,9 @@ def _choose_or_add_embedding_provider(
     choices: list[Choice] = [Choice(_label(p), p) for p in embedding_capable]
     remaining = get_provider_choices_not_in_state(state)
     # Only show "Add new provider" for types that support embeddings
-    remaining_embedding = [(lbl, pid) for lbl, pid in remaining if pid in _EMBEDDING_MODELS]
+    remaining_embedding = [
+        (lbl, pid) for lbl, pid in remaining if pid in _EMBEDDING_MODELS
+    ]
     if remaining_embedding:
         choices.append(Choice("Add new provider...", _ADD_NEW_PROVIDER))
 

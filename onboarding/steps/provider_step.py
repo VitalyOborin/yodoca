@@ -19,19 +19,17 @@ _ALL_PROVIDERS = [
 ]
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
-    "openai": [
-        "gpt-5.2",
-        "gpt-5.1",
-        "gpt-5-mini",
-        "gpt-4o",
-        "gpt-4o-mini"
-    ],
+    "openai": ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-4o", "gpt-4o-mini"],
     "anthropic": [
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-6",
         "claude-opus-4-6",
     ],
-    "openrouter": ["openai/gpt-5.2", "openai/gpt-5-mini", "anthropic/claude-sonnet-4-6"],
+    "openrouter": [
+        "openai/gpt-5.2",
+        "openai/gpt-5-mini",
+        "anthropic/claude-sonnet-4-6",
+    ],
     "lm_studio": ["zai-org/glm-4.7-flash", "qwen/qwen3.5-35b-a3b"],
 }
 
@@ -51,7 +49,9 @@ def run_provider_step(state: WizardState) -> bool:
         if not remaining:
             break
 
-        prompt = "Select a provider:" if not state.providers else "Select another provider:"
+        prompt = (
+            "Select a provider:" if not state.providers else "Select another provider:"
+        )
         choice = questionary.select(prompt, choices=remaining, style=STYLE).ask()
         if choice is None:
             return False

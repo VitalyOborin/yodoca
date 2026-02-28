@@ -38,7 +38,9 @@ def _reset_windows_console() -> None:
         if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
             return
 
-        sane = mode.value | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT
+        sane = (
+            mode.value | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT
+        )
         kernel32.SetConsoleMode(handle, sane)
     except Exception:
         pass

@@ -4,11 +4,17 @@ from typing import Any
 
 from agents import function_tool
 
-from models import ActiveTasksResult, CancelTaskResult, SubmitTaskResult, TaskStatusResult
+from models import (
+    ActiveTasksResult,
+    CancelTaskResult,
+    SubmitTaskResult,
+    TaskStatusResult,
+)
 
 
 def build_tools(ext: Any) -> list[Any]:
     """Build the six task engine tools that delegate to the extension."""
+
     @function_tool
     async def submit_task(
         goal: str,
@@ -27,7 +33,9 @@ def build_tools(ext: Any) -> list[Any]:
         agent_id: 'orchestrator' (default, general-purpose) or 'builder_agent'
         (creates new extensions). Returns task_id for tracking.
         """
-        return await ext.submit_task(goal, agent_id, priority, parent_task_id, max_steps)
+        return await ext.submit_task(
+            goal, agent_id, priority, parent_task_id, max_steps
+        )
 
     @function_tool
     async def get_task_status(task_id: str) -> TaskStatusResult:
@@ -58,4 +66,11 @@ def build_tools(ext: Any) -> list[Any]:
         Call when the user replies to a human_review question."""
         return await ext._respond_to_review(task_id, response)
 
-    return [submit_task, get_task_status, list_active_tasks, cancel_task, request_human_review, respond_to_review]
+    return [
+        submit_task,
+        get_task_status,
+        list_active_tasks,
+        cancel_task,
+        request_human_review,
+        respond_to_review,
+    ]

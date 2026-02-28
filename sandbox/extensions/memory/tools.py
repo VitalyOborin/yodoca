@@ -160,7 +160,9 @@ def build_tools(
         """
         if type and type not in ("episodic", "semantic", "procedural", "opinion"):
             return SearchResult(results=[], count=0)
-        node_types = [type] if type else ["episodic", "semantic", "procedural", "opinion"]
+        node_types = (
+            [type] if type else ["episodic", "semantic", "procedural", "opinion"]
+        )
         query_embedding = None
         if embed_fn:
             query_embedding = await embed_fn(query)
@@ -177,7 +179,12 @@ def build_tools(
             event_before=event_before,
         )
         enriched = [{**r, **_format_event_time(r.get("event_time"))} for r in results]
-        logger.info("search_memory: query=%r types=%s results=%d", query[:60], node_types, len(enriched))
+        logger.info(
+            "search_memory: query=%r types=%s results=%d",
+            query[:60],
+            node_types,
+            len(enriched),
+        )
         return SearchResult(results=enriched, count=len(enriched))
 
     @function_tool(strict_mode=False)
@@ -291,13 +298,15 @@ def build_tools(
             "confidence": 1.0,
         }
         await storage.insert_node_awaitable(new_node)
-        await storage.insert_edge_awaitable({
-            "source_id": new_node_id,
-            "target_id": old_node_id,
-            "relation_type": "supersedes",
-            "valid_from": now,
-            "created_at": now,
-        })
+        await storage.insert_edge_awaitable(
+            {
+                "source_id": new_node_id,
+                "target_id": old_node_id,
+                "relation_type": "supersedes",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
         if embed_fn:
             embedding = await embed_fn(new_fact.strip())
             if embedding:
@@ -313,12 +322,16 @@ def build_tools(
     async def confirm_fact(fact_id: str) -> ConfirmResult:
         """Confirm a fact is accurate. Sets confidence=1.0, decay_rate=0.0. fact_id must be a valid UUID."""
         if not fact_id or not fact_id.strip():
-            return ConfirmResult(node_id=fact_id or "", status="error: no fact_id provided")
+            return ConfirmResult(
+                node_id=fact_id or "", status="error: no fact_id provided"
+            )
         raw = fact_id.strip()
         try:
             uuid.UUID(raw)
         except (ValueError, TypeError):
-            return ConfirmResult(node_id=raw, status="error: fact_id must be a valid UUID")
+            return ConfirmResult(
+                node_id=raw, status="error: fact_id must be a valid UUID"
+            )
         node = await storage.get_node(raw)
         if not node:
             return ConfirmResult(node_id=raw, status="error: node not found")
@@ -336,14 +349,23 @@ def build_tools(
             return EntityInfoResult(status="error: no entity name provided")
         entity = await _resolve_entity(storage, entity_name)
         if not entity:
-            return EntityInfoResult(status=f"error: entity not found for '{entity_name}'")
+            return EntityInfoResult(
+                status=f"error: entity not found for '{entity_name}'"
+            )
         nodes = await storage.entity_nodes_for_entity(
             entity["id"],
             node_types=["semantic", "procedural", "opinion", "episodic"],
             limit=20,
         )
-        facts = [n.get("content", "") for n in nodes if n["type"] in ("semantic", "procedural", "opinion")][:10]
-        episodes = sorted([n for n in nodes if n["type"] == "episodic"], key=lambda x: x.get("event_time", 0))[:10]
+        facts = [
+            n.get("content", "")
+            for n in nodes
+            if n["type"] in ("semantic", "procedural", "opinion")
+        ][:10]
+        episodes = sorted(
+            [n for n in nodes if n["type"] == "episodic"],
+            key=lambda x: x.get("event_time", 0),
+        )[:10]
         timeline = [ep.get("content", "") for ep in episodes]
         return EntityInfoResult(
             entity_id=entity["id"],
@@ -423,7 +445,9 @@ def build_tools(
             for s in chain.get("superseded_by", [])
         ]
         entities = [
-            EntityRef(canonical_name=ent.get("canonical_name", ""), type=ent.get("type", ""))
+            EntityRef(
+                canonical_name=ent.get("canonical_name", ""), type=ent.get("type", "")
+            )
             for ent in chain.get("entities", [])
         ]
         return ExplainFactResult(
@@ -444,7 +468,8 @@ def build_tools(
         facts = [
             WeakFact(
                 id=n.get("id", ""),
-                content=(n.get("content", "") or "")[:60] + ("..." if len(n.get("content", "") or "") > 60 else ""),
+                content=(n.get("content", "") or "")[:60]
+                + ("..." if len(n.get("content", "") or "") > 60 else ""),
                 confidence=n.get("confidence", 0.0),
                 last_accessed=n.get("last_accessed"),
             )
@@ -467,9 +492,13 @@ def build_tools(
             if entity:
                 entity_id = entity["id"]
             else:
-                return TimelineResult(status=f"error: no entity found for '{entity_name}'")
+                return TimelineResult(
+                    status=f"error: no entity found for '{entity_name}'"
+                )
         event_after = parse_time_expression(after) if after and after.strip() else None
-        event_before = parse_time_expression(before) if before and before.strip() else None
+        event_before = (
+            parse_time_expression(before) if before and before.strip() else None
+        )
         results = await storage.get_timeline(
             entity_id=entity_id,
             event_after=event_after,
@@ -477,7 +506,9 @@ def build_tools(
             limit=limit,
         )
         if not results:
-            return TimelineResult(status="error: no events found for the given criteria")
+            return TimelineResult(
+                status="error: no events found for the given criteria"
+            )
         events = []
         for r in results:
             fmt = _format_event_time(r.get("event_time"))
@@ -485,7 +516,9 @@ def build_tools(
             content = (r.get("content", "") or "")[:200]
             if len(r.get("content", "") or "") > 200:
                 content += "..."
-            events.append(TimelineEvent(id=r.get("id", ""), timestamp=ts, content=content))
+            events.append(
+                TimelineEvent(id=r.get("id", ""), timestamp=ts, content=content)
+            )
         return TimelineResult(events=events, count=len(events), status="ok")
 
     @function_tool
@@ -501,7 +534,9 @@ def build_tools(
             node_types=["semantic", "procedural", "opinion", "episodic"],
         )
         if not candidates:
-            return ForgetResult(status=f"error: no memory found matching '{fact[:100]}'")
+            return ForgetResult(
+                status=f"error: no memory found matching '{fact[:100]}'"
+            )
         node = candidates[0]
         node_id = node["id"]
         content_snippet = (node.get("content", "") or "")[:100]
@@ -509,7 +544,9 @@ def build_tools(
             content_snippet += "..."
         await storage.soft_delete_node(node_id)
         logger.info("forget_fact: deleted node=%s", node_id[:8])
-        return ForgetResult(node_id=node_id, content_snippet=content_snippet, status="forgotten")
+        return ForgetResult(
+            node_id=node_id, content_snippet=content_snippet, status="forgotten"
+        )
 
     return [
         search_memory,

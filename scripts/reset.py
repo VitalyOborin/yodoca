@@ -83,7 +83,9 @@ def _collect_env_keys(path: Path) -> set[str]:
 def _clear_saved_secrets(root: Path) -> tuple[int, list[tuple[str, Exception]]]:
     settings_path = root / SETTINGS_FILE
     env_path = root / ENV_FILE
-    secret_names = _collect_secrets_from_settings(settings_path) | _collect_env_keys(env_path)
+    secret_names = _collect_secrets_from_settings(settings_path) | _collect_env_keys(
+        env_path
+    )
     removed = 0
     errors: list[tuple[str, Exception]] = []
 
@@ -128,7 +130,9 @@ def main() -> int:
                     removed += 1
                 except OSError as e:
                     errors.append((path, e))
-                    print(f"Error removing {path.relative_to(root)}: {e}", file=sys.stderr)
+                    print(
+                        f"Error removing {path.relative_to(root)}: {e}", file=sys.stderr
+                    )
     else:
         print(f"Skip (not found): {MEMORY_DIR}")
 

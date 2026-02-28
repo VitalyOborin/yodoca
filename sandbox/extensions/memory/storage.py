@@ -128,7 +128,9 @@ class MemoryStorage:
             await self._read_conn.close()
             self._read_conn = None
 
-    def _submit_write(self, sql: str, params: tuple, wait: bool = False) -> asyncio.Future[Any] | None:
+    def _submit_write(
+        self, sql: str, params: tuple, wait: bool = False
+    ) -> asyncio.Future[Any] | None:
         """Submit write to queue. If wait=True, returns Future to await."""
         future = asyncio.get_running_loop().create_future() if wait else None
         op = WriteOp(sql=sql, params=params, future=future)
@@ -258,9 +260,7 @@ class MemoryStorage:
             for r in rows
         ]
 
-    async def batch_update_confidence(
-        self, updates: list[tuple[str, float]]
-    ) -> None:
+    async def batch_update_confidence(self, updates: list[tuple[str, float]]) -> None:
         """Batch update confidence for nodes. updates: [(node_id, confidence), ...]."""
         if not updates:
             return
@@ -482,7 +482,9 @@ class MemoryStorage:
             logger.warning(
                 "Embedding dimension mismatch: provider returned %d, expected %d. "
                 "Truncating to %d (Matryoshka). Check provider 'dimensions' parameter support.",
-                len(embedding), expected_dim, expected_dim,
+                len(embedding),
+                expected_dim,
+                expected_dim,
             )
             embedding = embedding[:expected_dim]
         elif len(embedding) < expected_dim:
@@ -521,7 +523,9 @@ class MemoryStorage:
         """Update entity embedding and vec_entities. Awaitable via write queue."""
         blob = self._serialize_embedding(embedding)
         f1 = self._submit_write(
-            "UPDATE entities SET embedding = ? WHERE id = ?", (blob, entity_id), wait=True
+            "UPDATE entities SET embedding = ? WHERE id = ?",
+            (blob, entity_id),
+            wait=True,
         )
         f2 = self._submit_write(
             "INSERT OR REPLACE INTO vec_entities(entity_id, embedding) VALUES (?, ?)",
@@ -714,7 +718,10 @@ class MemoryStorage:
             "SELECT key, value FROM maintenance_metadata WHERE key IN ('last_consolidation', 'last_decay_run')"
         )
         rows = await cursor.fetchall()
-        out: dict[str, str | None] = {"last_consolidation": None, "last_decay_run": None}
+        out: dict[str, str | None] = {
+            "last_consolidation": None,
+            "last_decay_run": None,
+        }
         for row in rows:
             out[row[0]] = row[1]
         return out
@@ -814,9 +821,7 @@ class MemoryStorage:
         if future:
             await future
 
-    async def update_entity(
-        self, entity_id: str, fields: dict[str, Any]
-    ) -> None:
+    async def update_entity(self, entity_id: str, fields: dict[str, Any]) -> None:
         """Partial update of entity fields. Awaitable."""
         allowed = {"summary", "embedding", "mention_count", "last_updated", "aliases"}
         params_list: list[Any] = []
@@ -826,7 +831,9 @@ class MemoryStorage:
                 continue
             set_parts.append(f"{k} = ?")
             params_list.append(
-                json.dumps(v, ensure_ascii=False) if k == "aliases" and isinstance(v, list) else v
+                json.dumps(v, ensure_ascii=False)
+                if k == "aliases" and isinstance(v, list)
+                else v
             )
         if not set_parts:
             return
@@ -1006,9 +1013,7 @@ class MemoryStorage:
             ORDER BY n.event_time DESC
             LIMIT ?
         """
-        cursor = await self._read_conn.execute(
-            sql, (seed_node_id, max_depth, limit)
-        )
+        cursor = await self._read_conn.execute(sql, (seed_node_id, max_depth, limit))
         rows = await cursor.fetchall()
         return [
             {
@@ -1077,7 +1082,9 @@ class MemoryStorage:
         conditions = ["n.type = 'episodic'", "n.valid_until IS NULL"]
         params: list[Any] = []
         if entity_id:
-            conditions.append("n.id IN (SELECT node_id FROM node_entities WHERE entity_id = ?)")
+            conditions.append(
+                "n.id IN (SELECT node_id FROM node_entities WHERE entity_id = ?)"
+            )
             params.append(entity_id)
         if event_after is not None:
             conditions.append("n.event_time >= ?")
@@ -1145,9 +1152,7 @@ class MemoryStorage:
         }
         return [by_id[nid] for nid in order if nid in by_id]
 
-    async def get_entities_for_nodes(
-        self, node_ids: list[str]
-    ) -> list[dict[str, Any]]:
+    async def get_entities_for_nodes(self, node_ids: list[str]) -> list[dict[str, Any]]:
         """Entities linked to these nodes via node_entities. Deduplicated by entity id."""
         if not self._read_conn or not node_ids:
             return []
@@ -1194,12 +1199,23 @@ class MemoryStorage:
         if self._read_conn is None:
             return {
                 "nodes": {"episodic": 0, "semantic": 0, "procedural": 0, "opinion": 0},
-                "edges": {"temporal": 0, "causal": 0, "entity": 0, "derived_from": 0, "supersedes": 0},
+                "edges": {
+                    "temporal": 0,
+                    "causal": 0,
+                    "entity": 0,
+                    "derived_from": 0,
+                    "supersedes": 0,
+                },
                 "entities": 0,
                 "orphan_nodes": 0,
                 "avg_edges_per_node": 0.0,
             }
-        node_counts: dict[str, int] = {"episodic": 0, "semantic": 0, "procedural": 0, "opinion": 0}
+        node_counts: dict[str, int] = {
+            "episodic": 0,
+            "semantic": 0,
+            "procedural": 0,
+            "opinion": 0,
+        }
         cursor = await self._read_conn.execute(
             "SELECT type, COUNT(*) FROM nodes WHERE valid_until IS NULL GROUP BY type"
         )
@@ -1250,13 +1266,23 @@ class MemoryStorage:
         """Provenance chain: node, source episodes (derived_from), supersedes/superseded_by, linked entities."""
         node = await self.get_node(node_id)
         if not node:
-            return {"node": None, "source_episodes": [], "supersedes": [], "superseded_by": [], "entities": []}
+            return {
+                "node": None,
+                "source_episodes": [],
+                "supersedes": [],
+                "superseded_by": [],
+                "entities": [],
+            }
         source_ids = await self.get_derived_from_targets(node_id)
         source_episodes = await self.get_nodes_by_ids(source_ids) if source_ids else []
         supersedes_ids = await self._get_supersedes_targets(node_id)
         superseded_by_ids = await self._get_supersedes_sources(node_id)
-        supersedes = await self.get_nodes_by_ids(supersedes_ids) if supersedes_ids else []
-        superseded_by = await self.get_nodes_by_ids(superseded_by_ids) if superseded_by_ids else []
+        supersedes = (
+            await self.get_nodes_by_ids(supersedes_ids) if supersedes_ids else []
+        )
+        superseded_by = (
+            await self.get_nodes_by_ids(superseded_by_ids) if superseded_by_ids else []
+        )
         entities = await self.get_entities_for_nodes([node_id])
         return {
             "node": node,

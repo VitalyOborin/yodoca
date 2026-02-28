@@ -1,4 +1,7 @@
 .cursor
+.import_linter_cache
+.mypy_cache
+.ruff_cache
 .venv
 .env
 .idea

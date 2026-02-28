@@ -80,7 +80,9 @@ async def main() -> None:
             print("  (no results)\n")
             continue
         for r in results:
-            preview = r["content"][:100] + "..." if len(r["content"]) > 100 else r["content"]
+            preview = (
+                r["content"][:100] + "..." if len(r["content"]) > 100 else r["content"]
+            )
             conf = r.get("confidence", "?")
             print(f"  [{r['type']}] {r['id'][:8]}.. conf={conf}  {preview}")
         print(f"  total: {len(results)}\n")

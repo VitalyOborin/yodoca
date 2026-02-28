@@ -62,7 +62,9 @@ async def test_probe_provider_openai_compatible(httpx_mock) -> None:
 async def test_probe_all_returns_per_provider_results(httpx_mock) -> None:
     """probe_all returns dict of provider_id -> (ok, message)."""
     httpx_mock.add_response(url="https://api.openai.com/v1/models", json={"data": []})
-    httpx_mock.add_response(url="https://api.anthropic.com/v1/models", json={"data": []})
+    httpx_mock.add_response(
+        url="https://api.anthropic.com/v1/models", json={"data": []}
+    )
 
     providers = {
         "openai": {"type": "openai_compatible", "api_key_secret": "OPENAI_API_KEY"},

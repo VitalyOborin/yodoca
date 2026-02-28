@@ -31,9 +31,9 @@ class EventBus:
         self._max_retries = max_retries
         self._stale_timeout = stale_timeout
         self._wake = asyncio.Event()
-        self._subscribers: dict[str, list[tuple[Callable[[Event], Awaitable[None]], str]]] = (
-            defaultdict(list)
-        )
+        self._subscribers: dict[
+            str, list[tuple[Callable[[Event], Awaitable[None]], str]]
+        ] = defaultdict(list)
         self._dispatch_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
         self._stopped = False
@@ -133,7 +133,15 @@ class EventBus:
                 break
 
             events = await self._journal.claim_pending(limit=self._batch_size)
-            for event_id, topic, source, payload, created_at, correlation_id, retry_count in events:
+            for (
+                event_id,
+                topic,
+                source,
+                payload,
+                created_at,
+                correlation_id,
+                retry_count,
+            ) in events:
                 if self._stopped:
                     break
                 await self._deliver(

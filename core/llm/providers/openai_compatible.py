@@ -41,7 +41,9 @@ class OpenAIEmbedder:
                 result[orig_idx] = list(emb_data.embedding)
             return result
         except Exception as e:
-            logger.warning("OpenAI batch embedding failed, falling back to sequential: %s", e)
+            logger.warning(
+                "OpenAI batch embedding failed, falling back to sequential: %s", e
+            )
             results: list[list[float] | None] = []
             for t in texts:
                 vec = await self._embed_one(t.strip() if t else "", model, dimensions)
@@ -83,9 +85,7 @@ class OpenAICompatibleProvider:
         )
         return OpenAIResponsesModel(model=model_name, openai_client=client)
 
-    async def health_check(
-        self, config: ProviderConfig, api_key: str | None
-    ) -> bool:
+    async def health_check(self, config: ProviderConfig, api_key: str | None) -> bool:
         try:
             client = AsyncOpenAI(
                 base_url=config.base_url,

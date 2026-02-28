@@ -35,7 +35,8 @@ def md_to_tg_html(text: str) -> str:
         lang = (m.group(1) or "").strip()
         code = html.escape(m.group(2))
         inner = (
-            f'<code class="language-{lang}">{code}</code>' if lang
+            f'<code class="language-{lang}">{code}</code>'
+            if lang
             else f"<code>{code}</code>"
         )
         return _stash(f"<pre>{inner}</pre>", store)

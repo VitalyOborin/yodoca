@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Add memory extension to path
-_memory_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
+_memory_ext = (
+    Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
+)
 sys.path.insert(0, str(_memory_ext))
 
 # Load MemoryExtension from memory's main.py explicitly (avoid sys.modules["main"] from other extensions)
@@ -90,15 +92,17 @@ class TestMemoryStorage:
         import time
 
         now = int(time.time())
-        node_id = storage.insert_node({
-            "type": "episodic",
-            "content": "user said hello world",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_role": "user",
-            "session_id": "s1",
-        })
+        node_id = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "user said hello world",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "source_role": "user",
+                "session_id": "s1",
+            }
+        )
         assert node_id is not None
 
         await asyncio.sleep(0.5)
@@ -116,36 +120,42 @@ class TestMemoryStorage:
         storage.ensure_session("s1")
         await asyncio.sleep(0.2)
 
-        n1 = storage.insert_node({
-            "type": "episodic",
-            "content": "first message",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_role": "user",
-            "session_id": "s1",
-        })
+        n1 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "first message",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "source_role": "user",
+                "session_id": "s1",
+            }
+        )
         await asyncio.sleep(0.3)
 
         last = await storage.get_last_episode_id("s1")
         assert last == n1
 
-        n2 = storage.insert_node({
-            "type": "episodic",
-            "content": "second message",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "source_role": "user",
-            "session_id": "s1",
-        })
-        storage.insert_edge({
-            "source_id": n1,
-            "target_id": n2,
-            "relation_type": "temporal",
-            "valid_from": now + 1,
-            "created_at": now + 1,
-        })
+        n2 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "second message",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "source_role": "user",
+                "session_id": "s1",
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": n1,
+                "target_id": n2,
+                "relation_type": "temporal",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         last2 = await storage.get_last_episode_id("s1")
@@ -156,14 +166,16 @@ class TestMemoryStorage:
         import time
 
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "fact: project X is delayed",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_type": "extraction",
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "fact: project X is delayed",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "source_type": "extraction",
+            }
+        )
         await asyncio.sleep(0.3)
 
         node = await storage.get_node(nid)
@@ -176,26 +188,28 @@ class TestMemoryRetrieval:
     """MemoryRetrieval search and context assembly."""
 
     @pytest.mark.asyncio
-    async def test_search_and_assemble_context(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_search_and_assemble_context(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
-        storage.insert_node({
-            "type": "episodic",
-            "content": "discussed budget for Q1",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
+        storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "discussed budget for Q1",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(storage, classifier)
         results = await retrieval.search(
-            "budget", limit=5, node_types=["episodic", "semantic", "procedural", "opinion"]
+            "budget",
+            limit=5,
+            node_types=["episodic", "semantic", "procedural", "opinion"],
         )
         assert len(results) >= 1
 
@@ -213,9 +227,21 @@ class TestMemoryRetrieval:
         retrieval = MemoryRetrieval(storage, classifier)
         # Simulate search returning duplicate content from different nodes (e.g. FTS + vector)
         results = [
-            {"id": "id1", "type": "semantic", "content": "User writes in Python and Go."},
-            {"id": "id2", "type": "semantic", "content": "User writes in Python and Go."},
-            {"id": "id3", "type": "semantic", "content": "User no longer writes in PHP."},
+            {
+                "id": "id1",
+                "type": "semantic",
+                "content": "User writes in Python and Go.",
+            },
+            {
+                "id": "id2",
+                "type": "semantic",
+                "content": "User writes in Python and Go.",
+            },
+            {
+                "id": "id3",
+                "type": "semantic",
+                "content": "User no longer writes in PHP.",
+            },
         ]
         ctx = await retrieval.assemble_context(results, token_budget=500)
         assert "## Facts" in ctx
@@ -232,8 +258,18 @@ class TestQueryComplexity:
         assert classify_query_complexity("what is status") == "simple"
 
     def test_complex(self) -> None:
-        assert classify_query_complexity("compare the two options and summarize everything") == "complex"
-        assert classify_query_complexity("one two three four five six seven eight nine ten") == "complex"
+        assert (
+            classify_query_complexity(
+                "compare the two options and summarize everything"
+            )
+            == "complex"
+        )
+        assert (
+            classify_query_complexity(
+                "one two three four five six seven eight nine ten"
+            )
+            == "complex"
+        )
 
     def test_russian_broad_query_is_complex(self) -> None:
         assert classify_query_complexity("расскажи всё") == "complex"
@@ -288,14 +324,16 @@ class TestMemoryStorageVector:
         import time
 
         now = int(time.time())
-        node_id = storage.insert_node({
-            "type": "semantic",
-            "content": "test fact for vector",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_type": "conversation",
-        })
+        node_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "test fact for vector",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "source_type": "conversation",
+            }
+        )
         await asyncio.sleep(0.3)
 
         embedding = [0.1] * 256
@@ -320,19 +358,24 @@ class TestMemoryRetrievalRRF:
         import time
 
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "hybrid search test",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "hybrid search test",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(
-            storage, classifier,
-            rrf_k=60, rrf_weight_fts=1.0, rrf_weight_vector=1.0,
+            storage,
+            classifier,
+            rrf_k=60,
+            rrf_weight_fts=1.0,
+            rrf_weight_vector=1.0,
         )
         query_emb = [0.1] * 256
         results = await retrieval.search(
@@ -347,6 +390,7 @@ class TestMemoryRetrievalRRF:
 def _tool_ctx(tool_name: str, args: dict) -> object:
     import json
     from agents.tool_context import ToolContext
+
     return ToolContext(
         context=object(),
         tool_name=tool_name,
@@ -387,15 +431,17 @@ class TestRememberCorrectConfirmTools:
         import time
 
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "fact to confirm",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "confidence": 0.5,
-            "decay_rate": 0.2,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "fact to confirm",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "confidence": 0.5,
+                "decay_rate": 0.2,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -423,13 +469,15 @@ class TestRememberCorrectConfirmTools:
         import time
 
         now = int(time.time())
-        old_id = storage.insert_node({
-            "type": "semantic",
-            "content": "old fact to correct",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        old_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "old fact to correct",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -457,9 +505,7 @@ class TestMemoryStoragePhase3:
     """Phase 3: get_session_episodes, mark_session_consolidated, entity ops, get_unconsolidated_sessions."""
 
     @pytest.mark.asyncio
-    async def test_get_session_episodes_paginated(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_get_session_episodes_paginated(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
@@ -467,15 +513,17 @@ class TestMemoryStoragePhase3:
         await asyncio.sleep(0.2)
 
         for i in range(5):
-            storage.insert_node({
-                "type": "episodic",
-                "content": f"episode {i}",
-                "event_time": now + i,
-                "created_at": now + i,
-                "valid_from": now + i,
-                "source_role": "user",
-                "session_id": "sess-ep",
-            })
+            storage.insert_node(
+                {
+                    "type": "episodic",
+                    "content": f"episode {i}",
+                    "event_time": now + i,
+                    "created_at": now + i,
+                    "valid_from": now + i,
+                    "source_role": "user",
+                    "session_id": "sess-ep",
+                }
+            )
         await asyncio.sleep(0.5)
 
         page1 = await storage.get_session_episodes("sess-ep", limit=2, offset=0)
@@ -506,20 +554,24 @@ class TestMemoryStoragePhase3:
         import time
 
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "Alice works at Acme",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "Alice works at Acme",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.2)
 
-        entity_id = await storage.insert_entity({
-            "canonical_name": "Alice",
-            "type": "person",
-            "aliases": ["Alice Smith", "Al"],
-        })
+        entity_id = await storage.insert_entity(
+            {
+                "canonical_name": "Alice",
+                "type": "person",
+                "aliases": ["Alice Smith", "Al"],
+            }
+        )
         assert entity_id
 
         found = await storage.get_entity_by_name("alice")
@@ -535,9 +587,7 @@ class TestMemoryStoragePhase3:
         assert alias_found["canonical_name"] == "Alice"
 
     @pytest.mark.asyncio
-    async def test_get_unconsolidated_sessions(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_get_unconsolidated_sessions(self, storage: MemoryStorage) -> None:
         storage.ensure_session("u1")
         storage.ensure_session("u2")
         await asyncio.sleep(0.2)
@@ -562,22 +612,26 @@ class TestWritePathTools:
         import time
 
         now = int(time.time())
-        ep1 = storage.insert_node({
-            "type": "episodic",
-            "content": "user said X",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
-        ep2 = storage.insert_node({
-            "type": "episodic",
-            "content": "agent replied Y",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "session_id": "s1",
-        })
+        ep1 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "user said X",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
+        ep2 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "agent replied Y",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "session_id": "s1",
+            }
+        )
         await asyncio.sleep(0.5)
 
         classifier = KeywordIntentClassifier()
@@ -615,13 +669,15 @@ class TestWritePathTools:
         import time
 
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "Project Alpha is led by Bob",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "Project Alpha is led by Bob",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.2)
 
         classifier = KeywordIntentClassifier()
@@ -670,20 +726,24 @@ class TestWritePathTools:
         import time
 
         now = int(time.time())
-        old_id = storage.insert_node({
-            "type": "semantic",
-            "content": "old conflicting fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
-        new_id = storage.insert_node({
-            "type": "semantic",
-            "content": "new corrected fact",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-        })
+        old_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "old conflicting fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        new_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "new corrected fact",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -757,9 +817,7 @@ class TestMemoryStoragePhase4:
     """Phase 4: temporal_chain_traversal, causal_chain_traversal, entity_nodes_for_entity, get_nodes_by_ids."""
 
     @pytest.mark.asyncio
-    async def test_temporal_chain_traversal(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_temporal_chain_traversal(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
@@ -767,23 +825,27 @@ class TestMemoryStoragePhase4:
         await asyncio.sleep(0.2)
         ids = []
         for i in range(4):
-            nid = storage.insert_node({
-                "type": "episodic",
-                "content": f"ep {i}",
-                "event_time": now + i,
-                "created_at": now + i,
-                "valid_from": now + i,
-                "session_id": "s1",
-            })
+            nid = storage.insert_node(
+                {
+                    "type": "episodic",
+                    "content": f"ep {i}",
+                    "event_time": now + i,
+                    "created_at": now + i,
+                    "valid_from": now + i,
+                    "session_id": "s1",
+                }
+            )
             ids.append(nid)
             if i > 0:
-                storage.insert_edge({
-                    "source_id": ids[i - 1],
-                    "target_id": nid,
-                    "relation_type": "temporal",
-                    "valid_from": now + i,
-                    "created_at": now + i,
-                })
+                storage.insert_edge(
+                    {
+                        "source_id": ids[i - 1],
+                        "target_id": nid,
+                        "relation_type": "temporal",
+                        "valid_from": now + i,
+                        "created_at": now + i,
+                    }
+                )
         await asyncio.sleep(0.5)
 
         forward = await storage.temporal_chain_traversal(
@@ -794,59 +856,63 @@ class TestMemoryStoragePhase4:
         assert "ep 0" in contents or "ep 1" in contents
 
     @pytest.mark.asyncio
-    async def test_causal_chain_traversal(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_causal_chain_traversal(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
-        cause = storage.insert_node({
-            "type": "episodic",
-            "content": "cause event",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
-        effect = storage.insert_node({
-            "type": "episodic",
-            "content": "effect event",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-        })
-        storage.insert_edge({
-            "source_id": cause,
-            "target_id": effect,
-            "relation_type": "causal",
-            "valid_from": now + 1,
-            "created_at": now + 1,
-        })
+        cause = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "cause event",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        effect = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "effect event",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": cause,
+                "target_id": effect,
+                "relation_type": "causal",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
-        chain = await storage.causal_chain_traversal(
-            effect, max_depth=3, limit=10
-        )
+        chain = await storage.causal_chain_traversal(effect, max_depth=3, limit=10)
         assert len(chain) >= 1
         assert any(r["content"] == "cause event" for r in chain)
 
     @pytest.mark.asyncio
-    async def test_entity_nodes_for_entity(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_entity_nodes_for_entity(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
-        eid = await storage.insert_entity({
-            "canonical_name": "TestProject",
-            "type": "project",
-        })
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "Project milestone",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        eid = await storage.insert_entity(
+            {
+                "canonical_name": "TestProject",
+                "type": "project",
+            }
+        )
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "Project milestone",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await storage.link_node_entity(nid, eid)
         await asyncio.sleep(0.2)
 
@@ -859,13 +925,15 @@ class TestMemoryStoragePhase4:
         import time
 
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "batch fetch test",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "batch fetch test",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.2)
 
         nodes = await storage.get_nodes_by_ids([nid])
@@ -918,18 +986,22 @@ class TestGetEntityInfoTool:
         import time
 
         now = int(time.time())
-        eid = await storage.insert_entity({
-            "canonical_name": "Alice",
-            "type": "person",
-            "summary": "Team lead",
-        })
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "Alice prefers dark mode",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        eid = await storage.insert_entity(
+            {
+                "canonical_name": "Alice",
+                "type": "person",
+                "summary": "Team lead",
+            }
+        )
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "Alice prefers dark mode",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await storage.link_node_entity(nid, eid)
         await asyncio.sleep(0.2)
 
@@ -950,9 +1022,7 @@ class TestGetEntityInfoTool:
         assert "dark mode" in str(result) or "Team lead" in str(result)
 
     @pytest.mark.asyncio
-    async def test_get_entity_info_not_found(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_get_entity_info_not_found(self, storage: MemoryStorage) -> None:
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(storage, classifier)
         tools = build_tools(
@@ -977,16 +1047,18 @@ class TestDecayService:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "fact to decay",
-            "event_time": now,
-            "created_at": now - 10 * 86400,
-            "valid_from": now,
-            "confidence": 0.8,
-            "decay_rate": 0.1,
-            "last_accessed": now - 10 * 86400,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "fact to decay",
+                "event_time": now,
+                "created_at": now - 10 * 86400,
+                "valid_from": now,
+                "confidence": 0.8,
+                "decay_rate": 0.1,
+                "last_accessed": now - 10 * 86400,
+            }
+        )
         await asyncio.sleep(0.3)
 
         decay = DecayService(decay_threshold=0.05)
@@ -998,39 +1070,39 @@ class TestDecayService:
             assert node["confidence"] < 0.8
 
     @pytest.mark.asyncio
-    async def test_episodic_nodes_skipped(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_episodic_nodes_skipped(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "episodic",
-            "content": "episode",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-            "decay_rate": 0.1,
-        })
+        storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "episode",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+                "decay_rate": 0.1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         decayable = await storage.get_decayable_nodes()
         assert not any(n["type"] == "episodic" for n in decayable)
 
     @pytest.mark.asyncio
-    async def test_pruning_below_threshold(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_pruning_below_threshold(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "low confidence fact",
-            "event_time": now,
-            "created_at": now - 100 * 86400,
-            "valid_from": now,
-            "confidence": 0.1,
-            "decay_rate": 0.5,
-            "last_accessed": now - 100 * 86400,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "low confidence fact",
+                "event_time": now,
+                "created_at": now - 100 * 86400,
+                "valid_from": now,
+                "confidence": 0.1,
+                "decay_rate": 0.5,
+                "last_accessed": now - 100 * 86400,
+            }
+        )
         await asyncio.sleep(0.3)
 
         decay = DecayService(decay_threshold=0.05)
@@ -1046,18 +1118,18 @@ class TestAccessReinforcement:
     """Access frequency reinforcement in retrieval.search()."""
 
     @pytest.mark.asyncio
-    async def test_search_increments_access(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_search_increments_access(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        nid = storage.insert_node({
-            "type": "semantic",
-            "content": "reinforcement test",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "access_count": 0,
-        })
+        nid = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "reinforcement test",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "access_count": 0,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1082,18 +1154,22 @@ class TestEntityEnrichment:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        await storage.insert_entity({
-            "canonical_name": "SparseEntity",
-            "type": "person",
-            "summary": None,
-            "mention_count": 5,
-        })
-        await storage.insert_entity({
-            "canonical_name": "RichEntity",
-            "type": "person",
-            "summary": "Has summary",
-            "mention_count": 5,
-        })
+        await storage.insert_entity(
+            {
+                "canonical_name": "SparseEntity",
+                "type": "person",
+                "summary": None,
+                "mention_count": 5,
+            }
+        )
+        await storage.insert_entity(
+            {
+                "canonical_name": "RichEntity",
+                "type": "person",
+                "summary": "Has summary",
+                "mention_count": 5,
+            }
+        )
         await asyncio.sleep(0.2)
 
         sparse = await storage.get_entities_needing_enrichment(min_mentions=3)
@@ -1102,16 +1178,16 @@ class TestEntityEnrichment:
         assert "RichEntity" not in names
 
     @pytest.mark.asyncio
-    async def test_update_entity_summary_tool(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_update_entity_summary_tool(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        eid = await storage.insert_entity({
-            "canonical_name": "ToEnrich",
-            "type": "project",
-            "summary": None,
-            "mention_count": 4,
-        })
+        eid = await storage.insert_entity(
+            {
+                "canonical_name": "ToEnrich",
+                "type": "project",
+                "summary": None,
+                "mention_count": 4,
+            }
+        )
         await asyncio.sleep(0.2)
 
         classifier = KeywordIntentClassifier()
@@ -1139,22 +1215,22 @@ class TestCausalEdgeInference:
     """get_consecutive_episode_pairs, save_causal_edges tool."""
 
     @pytest.mark.asyncio
-    async def test_get_consecutive_episode_pairs(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_get_consecutive_episode_pairs(self, storage: MemoryStorage) -> None:
         now = int(time.time())
         storage.ensure_session("causal-sess")
         await asyncio.sleep(0.2)
         ids = []
         for i in range(3):
-            nid = storage.insert_node({
-                "type": "episodic",
-                "content": f"ep {i}",
-                "event_time": now + i,
-                "created_at": now + i,
-                "valid_from": now + i,
-                "session_id": "causal-sess",
-            })
+            nid = storage.insert_node(
+                {
+                    "type": "episodic",
+                    "content": f"ep {i}",
+                    "event_time": now + i,
+                    "created_at": now + i,
+                    "valid_from": now + i,
+                    "session_id": "causal-sess",
+                }
+            )
             ids.append(nid)
         await asyncio.sleep(0.3)
 
@@ -1167,22 +1243,26 @@ class TestCausalEdgeInference:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        a = storage.insert_node({
-            "type": "episodic",
-            "content": "cause",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
-        b = storage.insert_node({
-            "type": "episodic",
-            "content": "effect",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "session_id": "s1",
-        })
+        a = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "cause",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
+        b = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "effect",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "session_id": "s1",
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1216,35 +1296,39 @@ class TestCausalEdgeInference:
         now = int(time.time())
         storage.ensure_session("excl-sess")
         await asyncio.sleep(0.2)
-        a = storage.insert_node({
-            "type": "episodic",
-            "content": "a",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "excl-sess",
-        })
-        b = storage.insert_node({
-            "type": "episodic",
-            "content": "b",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "session_id": "excl-sess",
-        })
-        storage.insert_edge({
-            "source_id": a,
-            "target_id": b,
-            "relation_type": "causal",
-            "valid_from": now + 1,
-            "created_at": now + 1,
-        })
+        a = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "a",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "excl-sess",
+            }
+        )
+        b = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "b",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "session_id": "excl-sess",
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": a,
+                "target_id": b,
+                "relation_type": "causal",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         pairs = await storage.get_consecutive_episode_pairs(limit=10)
-        assert not any(
-            p[0]["id"] == a and p[1]["id"] == b for p in pairs
-        )
+        assert not any(p[0]["id"] == a and p[1]["id"] == b for p in pairs)
 
 
 class TestNightlyMaintenance:
@@ -1260,53 +1344,64 @@ class TestNightlyMaintenance:
         ext = MemoryExtension()
         ext._storage = storage
         ext._retrieval = MemoryRetrieval(
-            storage, KeywordIntentClassifier(),
+            storage,
+            KeywordIntentClassifier(),
         )
         ext._decay_service = DecayService(decay_threshold=0.05)
         ext._write_agent = None
         ext._ctx = MagicMock()
         ext._ctx.get_config = lambda k, d=None: (
-            3 if k == "entity_enrichment_min_mentions" else
-            50 if k == "causal_inference_batch_size" else d
+            3
+            if k == "entity_enrichment_min_mentions"
+            else 50
+            if k == "causal_inference_batch_size"
+            else d
         )
 
         result = await ext.execute_task("run_nightly_maintenance")
         assert result is not None
         assert "Nightly" in result.get("text", "")
         assert "consolidated" in result.get("text", "").lower()
-        assert "decayed" in result.get("text", "").lower() or "pruned" in result.get("text", "").lower()
+        assert (
+            "decayed" in result.get("text", "").lower()
+            or "pruned" in result.get("text", "").lower()
+        )
 
 
 class TestGraphStats:
     """get_graph_stats, get_storage_size_mb, orphan detection, avg edges per node."""
 
     @pytest.mark.asyncio
-    async def test_get_graph_stats_counts_by_type(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_get_graph_stats_counts_by_type(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "episodic",
-            "content": "ep",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
-        storage.insert_node({
-            "type": "semantic",
-            "content": "fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
-        storage.insert_node({
-            "type": "procedural",
-            "content": "how to",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "ep",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        storage.insert_node(
+            {
+                "type": "procedural",
+                "content": "how to",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         stats = await storage.get_graph_stats()
@@ -1320,13 +1415,15 @@ class TestGraphStats:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        orphan_id = storage.insert_node({
-            "type": "semantic",
-            "content": "orphan node",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        orphan_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "orphan node",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         stats = await storage.get_graph_stats()
@@ -1337,29 +1434,35 @@ class TestGraphStats:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        a = storage.insert_node({
-            "type": "episodic",
-            "content": "a",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
-        b = storage.insert_node({
-            "type": "episodic",
-            "content": "b",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "session_id": "s1",
-        })
-        storage.insert_edge({
-            "source_id": a,
-            "target_id": b,
-            "relation_type": "temporal",
-            "valid_from": now + 1,
-            "created_at": now + 1,
-        })
+        a = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "a",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
+        b = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "b",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "session_id": "s1",
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": a,
+                "target_id": b,
+                "relation_type": "temporal",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         stats = await storage.get_graph_stats()
@@ -1377,17 +1480,17 @@ class TestMemoryStatsTool:
     """memory_stats tool returns formatted output."""
 
     @pytest.mark.asyncio
-    async def test_memory_stats_contains_sections(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_memory_stats_contains_sections(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "seed fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "seed fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1420,43 +1523,53 @@ class TestExplainFactTool:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        ep1 = storage.insert_node({
-            "type": "episodic",
-            "content": "user said X",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-        })
-        ep2 = storage.insert_node({
-            "type": "episodic",
-            "content": "agent replied Y",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-            "session_id": "s1",
-        })
-        fact_id = storage.insert_node({
-            "type": "semantic",
-            "content": "extracted fact from X and Y",
-            "event_time": now + 2,
-            "created_at": now + 2,
-            "valid_from": now + 2,
-        })
-        storage.insert_edge({
-            "source_id": fact_id,
-            "target_id": ep1,
-            "relation_type": "derived_from",
-            "valid_from": now + 2,
-            "created_at": now + 2,
-        })
-        storage.insert_edge({
-            "source_id": fact_id,
-            "target_id": ep2,
-            "relation_type": "derived_from",
-            "valid_from": now + 2,
-            "created_at": now + 2,
-        })
+        ep1 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "user said X",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+            }
+        )
+        ep2 = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "agent replied Y",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+                "session_id": "s1",
+            }
+        )
+        fact_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "extracted fact from X and Y",
+                "event_time": now + 2,
+                "created_at": now + 2,
+                "valid_from": now + 2,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": fact_id,
+                "target_id": ep1,
+                "relation_type": "derived_from",
+                "valid_from": now + 2,
+                "created_at": now + 2,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": fact_id,
+                "target_id": ep2,
+                "relation_type": "derived_from",
+                "valid_from": now + 2,
+                "created_at": now + 2,
+            }
+        )
         await asyncio.sleep(0.5)
 
         classifier = KeywordIntentClassifier()
@@ -1481,27 +1594,33 @@ class TestExplainFactTool:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        old_id = storage.insert_node({
-            "type": "semantic",
-            "content": "old fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
-        new_id = storage.insert_node({
-            "type": "semantic",
-            "content": "new fact supersedes old",
-            "event_time": now + 1,
-            "created_at": now + 1,
-            "valid_from": now + 1,
-        })
-        storage.insert_edge({
-            "source_id": new_id,
-            "target_id": old_id,
-            "relation_type": "supersedes",
-            "valid_from": now + 1,
-            "created_at": now + 1,
-        })
+        old_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "old fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        new_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "new fact supersedes old",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": new_id,
+                "target_id": old_id,
+                "relation_type": "supersedes",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1554,22 +1673,26 @@ class TestWeakFactsTool:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "high confidence fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "confidence": 1.0,
-        })
-        storage.insert_node({
-            "type": "semantic",
-            "content": "low confidence fact",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "confidence": 0.2,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "high confidence fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "confidence": 1.0,
+            }
+        )
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "low confidence fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "confidence": 0.2,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1591,19 +1714,19 @@ class TestWeakFactsTool:
         assert "high confidence" not in out
 
     @pytest.mark.asyncio
-    async def test_weak_facts_excludes_episodic(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_weak_facts_excludes_episodic(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "episodic",
-            "content": "episode with low conf",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "session_id": "s1",
-            "confidence": 0.1,
-        })
+        storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "episode with low conf",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "session_id": "s1",
+                "confidence": 0.1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
@@ -1627,22 +1750,26 @@ class TestWeakFactsTool:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "conf 0.25",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "confidence": 0.25,
-        })
-        storage.insert_node({
-            "type": "semantic",
-            "content": "conf 0.1",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "confidence": 0.1,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "conf 0.25",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "confidence": 0.25,
+            }
+        )
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "conf 0.1",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "confidence": 0.1,
+            }
+        )
         await asyncio.sleep(0.3)
 
         nodes = await storage.get_weak_nodes(threshold=0.3, limit=5)
@@ -1687,15 +1814,30 @@ class TestFormatEventTime:
 
     def test_none_returns_empty_strings(self) -> None:
         result = _format_event_time(None)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
+        assert result == {
+            "event_time_iso": "",
+            "event_time_local": "",
+            "event_time_tz": "",
+            "event_time_relative": "",
+        }
 
     def test_zero_returns_empty_strings(self) -> None:
         result = _format_event_time(0)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
+        assert result == {
+            "event_time_iso": "",
+            "event_time_local": "",
+            "event_time_tz": "",
+            "event_time_relative": "",
+        }
 
     def test_negative_returns_empty_strings(self) -> None:
         result = _format_event_time(-1)
-        assert result == {"event_time_iso": "", "event_time_local": "", "event_time_tz": "", "event_time_relative": ""}
+        assert result == {
+            "event_time_iso": "",
+            "event_time_local": "",
+            "event_time_tz": "",
+            "event_time_relative": "",
+        }
 
     def test_local_format_has_correct_structure(self) -> None:
         ts = 1771860227
@@ -1714,22 +1856,29 @@ class TestSearchMemoryTimestampEnrichment:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "unique fact for timestamp test",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "unique fact for timestamp test",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(storage, classifier)
-        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        tools = build_tools(
+            retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000
+        )
         search = tools[0]
         args = {"query": "unique fact for timestamp test"}
         import json
-        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+
+        raw = await search.on_invoke_tool(
+            _tool_ctx(search.name, args), json.dumps(args)
+        )
         out = str(raw)
         assert "event_time_iso" in out
         assert "event_time_local" in out
@@ -1743,21 +1892,27 @@ class TestSearchMemoryTimestampEnrichment:
         import json
 
         now = int(time.time())
-        storage.insert_node({
-            "type": "semantic",
-            "content": "backward compat timestamp check",
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-        })
+        storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "backward compat timestamp check",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(storage, classifier)
-        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        tools = build_tools(
+            retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000
+        )
         search = tools[0]
         args = {"query": "backward compat timestamp check"}
-        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+        raw = await search.on_invoke_tool(
+            _tool_ctx(search.name, args), json.dumps(args)
+        )
         # Deserialize from JSON string returned by tool
         data = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(data, dict) and "results" in data:
@@ -1766,28 +1921,32 @@ class TestSearchMemoryTimestampEnrichment:
                 assert r["event_time"] > 0
 
     @pytest.mark.asyncio
-    async def test_search_result_count_unchanged(
-        self, storage: MemoryStorage
-    ) -> None:
+    async def test_search_result_count_unchanged(self, storage: MemoryStorage) -> None:
         import json
 
         now = int(time.time())
         for i in range(3):
-            storage.insert_node({
-                "type": "semantic",
-                "content": f"count check node {i}",
-                "event_time": now + i,
-                "created_at": now + i,
-                "valid_from": now + i,
-            })
+            storage.insert_node(
+                {
+                    "type": "semantic",
+                    "content": f"count check node {i}",
+                    "event_time": now + i,
+                    "created_at": now + i,
+                    "valid_from": now + i,
+                }
+            )
         await asyncio.sleep(0.3)
 
         classifier = KeywordIntentClassifier()
         retrieval = MemoryRetrieval(storage, classifier)
-        tools = build_tools(retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000)
+        tools = build_tools(
+            retrieval=retrieval, storage=storage, embed_fn=None, token_budget=1000
+        )
         search = tools[0]
         args = {"query": "count check node", "limit": 5}
-        raw = await search.on_invoke_tool(_tool_ctx(search.name, args), json.dumps(args))
+        raw = await search.on_invoke_tool(
+            _tool_ctx(search.name, args), json.dumps(args)
+        )
         data = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(data, dict) and "count" in data and "results" in data:
             assert data["count"] == len(data["results"])

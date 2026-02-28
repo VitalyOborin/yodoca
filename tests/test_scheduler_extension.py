@@ -64,7 +64,9 @@ class TestSchedulerStore:
         assert await store.cancel_one_shot(row_id) is False
 
     @pytest.mark.asyncio
-    async def test_fetch_due_one_shot_and_mark_fired(self, store: _SchedulerStore) -> None:
+    async def test_fetch_due_one_shot_and_mark_fired(
+        self, store: _SchedulerStore
+    ) -> None:
         now = time.time()
         row_id = await store.insert_one_shot("due.topic", "{}", now - 1)
         due = await store.fetch_due_one_shot(now)
@@ -137,7 +139,9 @@ class TestSchedulerExtension:
         )
         assert row_id > 0
         rows = await ext._store.list_all()
-        assert any(r["topic"] == "reminder.test" and r["type"] == "one_shot" for r in rows)
+        assert any(
+            r["topic"] == "reminder.test" and r["type"] == "one_shot" for r in rows
+        )
         await ext.destroy()
 
     @pytest.mark.asyncio
@@ -179,7 +183,11 @@ class TestSchedulerExtension:
         row_id = await ext._store.insert_one_shot("s.topic", "{}", time.time() - 1)
         due = await ext._store.fetch_due_one_shot(time.time())
         assert len(due) == 1
-        payload = json.loads(due[0]["payload"]) if isinstance(due[0]["payload"], str) else due[0]["payload"]
+        payload = (
+            json.loads(due[0]["payload"])
+            if isinstance(due[0]["payload"], str)
+            else due[0]["payload"]
+        )
         await ctx.emit(due[0]["topic"], payload)
         await ext._store.mark_one_shot_fired(row_id)
         rows = await ext._store.list_all()
@@ -197,7 +205,9 @@ class TestSchedulerExtension:
         ctx.get_config = lambda k, d=None: 0.05 if k == "tick_interval" else d
         ctx.emit = AsyncMock()
         await ext.initialize(ctx)
-        row_id = await ext._store.insert_one_shot("cancel.topic", "{}", time.time() + 60)
+        row_id = await ext._store.insert_one_shot(
+            "cancel.topic", "{}", time.time() + 60
+        )
         ok = await ext._store.cancel_one_shot(row_id)
         assert ok is True
         due = await ext._store.fetch_due_one_shot(time.time() + 120)
@@ -271,7 +281,9 @@ class TestSchedulerExtension:
         assert any(r["id"] == row_id and r["status"] == "active" for r in rows)
 
     @pytest.mark.asyncio
-    async def test_recovery_overdue_one_shot_fires_on_start(self, tmp_path: Path) -> None:
+    async def test_recovery_overdue_one_shot_fires_on_start(
+        self, tmp_path: Path
+    ) -> None:
         """start() fires overdue one-shots immediately."""
         data_dir = tmp_path / "scheduler"
         data_dir.mkdir(parents=True, exist_ok=True)

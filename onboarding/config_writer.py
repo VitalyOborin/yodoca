@@ -47,7 +47,9 @@ def write_config(
             "model": default_cfg.get("model"),
             "provider": default_cfg.get("provider"),
         }
-        base["agents"]["orchestrator"] = {k: v for k, v in base["agents"]["orchestrator"].items() if v is not None}
+        base["agents"]["orchestrator"] = {
+            k: v for k, v in base["agents"]["orchestrator"].items() if v is not None
+        }
     if state.extensions:
         base["extensions"] = {**(base.get("extensions") or {}), **state.extensions}
     _write_atomic_yaml(settings_path, base)
@@ -59,13 +61,11 @@ def write_config(
                 try:
                     set_secret(k, v)
                 except Exception as e:
-                    logger.warning("Failed to store %s in keyring: %s. Writing to .env.", k, e)
+                    logger.warning(
+                        "Failed to store %s in keyring: %s. Writing to .env.", k, e
+                    )
                     secret_keys = secret_keys - {k}
-        env_to_write = {
-            k: v
-            for k, v in state.env_vars.items()
-            if k not in secret_keys
-        }
+        env_to_write = {k: v for k, v in state.env_vars.items() if k not in secret_keys}
     else:
         logger.warning(
             "Keyring unavailable (headless/CI). Storing secrets in .env. "
@@ -73,10 +73,16 @@ def write_config(
         )
         env_to_write = state.env_vars
 
-    _write_env(env_path, env_to_write, exclude_secrets=secret_keys if is_keyring_available() else set())
+    _write_env(
+        env_path,
+        env_to_write,
+        exclude_secrets=secret_keys if is_keyring_available() else set(),
+    )
 
     settings = load_settings(project_root / "config")
-    restart_rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
+    restart_rel = get_setting(
+        settings, "supervisor.restart_file", "sandbox/.restart_requested"
+    )
     restart_file = project_root / restart_rel
     restart_file.parent.mkdir(parents=True, exist_ok=True)
     restart_file.touch()

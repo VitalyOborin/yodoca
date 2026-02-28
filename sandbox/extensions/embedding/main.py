@@ -65,9 +65,7 @@ class EmbeddingExtension:
         if router:
             self._embedder = router.get_capability(EmbeddingCapability, provider_id)
         if not self._embedder:
-            logger.warning(
-                "No embedding-capable provider found, embedding disabled"
-            )
+            logger.warning("No embedding-capable provider found, embedding disabled")
 
     async def start(self) -> None:
         pass

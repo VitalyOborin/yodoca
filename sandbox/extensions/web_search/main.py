@@ -170,7 +170,10 @@ class WebSearchExtension:
         if needs_perplexity:
             api_key = await self._ctx.get_secret("PERPLEXITY_API_KEY")
             if not api_key:
-                return False, "PERPLEXITY_API_KEY is required when using Perplexity provider."
+                return (
+                    False,
+                    "PERPLEXITY_API_KEY is required when using Perplexity provider.",
+                )
             try:
                 import httpx
 

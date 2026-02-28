@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-SANDBOX_DIR: Path = (Path(__file__).resolve().parent.parent.parent / "sandbox").resolve()
+SANDBOX_DIR: Path = (
+    Path(__file__).resolve().parent.parent.parent / "sandbox"
+).resolve()
 
 ACCESS_DENIED_MSG = "Access denied: operations outside sandbox are prohibited."
 

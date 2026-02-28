@@ -37,7 +37,10 @@ def make_channel_tools(router: MessageRouter) -> list:
         """
         if channel_id not in router.get_channel_ids():
             return json.dumps(
-                {"success": False, "error": f"Channel '{channel_id}' not found. Use list_channels to see available channels."},
+                {
+                    "success": False,
+                    "error": f"Channel '{channel_id}' not found. Use list_channels to see available channels.",
+                },
                 ensure_ascii=False,
             )
         try:

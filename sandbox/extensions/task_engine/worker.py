@@ -53,7 +53,9 @@ class TaskCancelled(Exception):
     """Task was cancelled by user while running."""
 
 
-def compute_retry_delay(attempt: int, base: float = 5.0, max_delay: float = 300.0) -> float:
+def compute_retry_delay(
+    attempt: int, base: float = 5.0, max_delay: float = 300.0
+) -> float:
     """Exponential backoff with jitter."""
     delay = min(base * (2**attempt), max_delay)
     jitter = random.uniform(0, delay * 0.3)
@@ -67,7 +69,7 @@ def _extract_final_result(content: str) -> str | None:
     m = _FINAL_RE.search(content)
     if not m:
         return None
-    return content[m.end():].strip() or None
+    return content[m.end() :].strip() or None
 
 
 def _build_step_prompt(state: TaskState, max_steps: int) -> str:
@@ -88,7 +90,9 @@ def _build_step_prompt(state: TaskState, max_steps: int) -> str:
     if state.context.get("subtask_failures"):
         parts.append("Subtask failures:")
         for sf in state.context["subtask_failures"]:
-            parts.append(f"  - Task {sf.get('task_id', '?')}: {sf.get('error', 'unknown error')}")
+            parts.append(
+                f"  - Task {sf.get('task_id', '?')}: {sf.get('error', 'unknown error')}"
+            )
     if state.context.get("review_response"):
         parts.append(f"User review response: {state.context['review_response']}")
     if state.partial_result:
@@ -201,10 +205,14 @@ async def _load_task(db: Any, task_id: str) -> TaskRecord | None:
         return None
     columns = [d[0] for d in cursor.description]
     d = dict(zip(columns, row))
-    payload = json.loads(d["payload"]) if isinstance(d["payload"], str) else d["payload"]
+    payload = (
+        json.loads(d["payload"]) if isinstance(d["payload"], str) else d["payload"]
+    )
     result = None
     if d["result"]:
-        result = json.loads(d["result"]) if isinstance(d["result"], str) else d["result"]
+        result = (
+            json.loads(d["result"]) if isinstance(d["result"], str) else d["result"]
+        )
     return TaskRecord(
         task_id=d["task_id"],
         parent_id=d["parent_id"],
@@ -296,7 +304,9 @@ async def _run_step(
 
     error_code = None
     if outcome.status != "success" and outcome.error:
-        error_code = (outcome.error[:100]) if len(outcome.error) > 100 else outcome.error
+        error_code = (
+            (outcome.error[:100]) if len(outcome.error) > 100 else outcome.error
+        )
     step_record = StepRecord(
         step_id=f"{task.task_id}-{step_num}",
         task_id=task.task_id,
@@ -332,7 +342,11 @@ async def _run_step(
     state.step = step_num + 1
     state.partial_result = outcome.content
     state.steps_log.append(
-        {"step": state.step, "type": "llm_call", "summary": (outcome.content or "")[:200]}
+        {
+            "step": state.step,
+            "type": "llm_call",
+            "summary": (outcome.content or "")[:200],
+        }
     )
     await save_checkpoint(db, task.task_id, state)
 
@@ -340,7 +354,10 @@ async def _run_step(
     if final_result is not None:
         return {"content": final_result}
 
-    await ctx.emit("task.progress", {"task_id": task.task_id, "step": state.step, "max_steps": max_steps})
+    await ctx.emit(
+        "task.progress",
+        {"task_id": task.task_id, "step": state.step, "max_steps": max_steps},
+    )
     return None
 
 
@@ -359,7 +376,9 @@ async def execute_task(
         try:
             state = TaskState.from_json(task.checkpoint)
         except Exception as e:
-            logger.warning("task_engine: invalid checkpoint for %s: %s", task.task_id, e)
+            logger.warning(
+                "task_engine: invalid checkpoint for %s: %s", task.task_id, e
+            )
 
     try:
         if task.agent_id == "orchestrator":
@@ -375,7 +394,9 @@ async def execute_task(
             )
 
         conn = await db.ensure_conn()
-        cursor = await conn.execute("SELECT status FROM agent_task WHERE task_id = ?", (task.task_id,))
+        cursor = await conn.execute(
+            "SELECT status FROM agent_task WHERE task_id = ?", (task.task_id,)
+        )
         row = await cursor.fetchone()
         if row and row[0] in ("waiting_subtasks", "human_review"):
             await conn.execute(
@@ -390,7 +411,15 @@ async def execute_task(
             (json_dumps_unicode(result), time.time(), task.task_id),
         )
         await conn.commit()
-        await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "done", "result": result})
+        await ctx.emit(
+            "task.completed",
+            {
+                "task_id": task.task_id,
+                "parent_id": task.parent_id,
+                "status": "done",
+                "result": result,
+            },
+        )
 
     except RetryableError as e:
         conn = await db.ensure_conn()
@@ -406,16 +435,45 @@ async def execute_task(
             UPDATE agent_task SET status = ?, attempt_no = ?, schedule_at = ?, error = ?, updated_at = ?
             WHERE task_id = ?
             """,
-            (new_status, task.attempt_no + 1, schedule_at, str(e), time.time(), task.task_id),
+            (
+                new_status,
+                task.attempt_no + 1,
+                schedule_at,
+                str(e),
+                time.time(),
+                task.task_id,
+            ),
         )
         await conn.commit()
         if exhausted:
-            await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "failed", "error": str(e)})
-        logger.warning("task_engine: task %s %s (attempt %d): %s", task.task_id, new_status, task.attempt_no + 1, e)
+            await ctx.emit(
+                "task.completed",
+                {
+                    "task_id": task.task_id,
+                    "parent_id": task.parent_id,
+                    "status": "failed",
+                    "error": str(e),
+                },
+            )
+        logger.warning(
+            "task_engine: task %s %s (attempt %d): %s",
+            task.task_id,
+            new_status,
+            task.attempt_no + 1,
+            e,
+        )
 
     except TaskCancelled:
         logger.info("task_engine: task %s cancelled during execution", task.task_id)
-        await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "cancelled", "error": "Cancelled by user"})
+        await ctx.emit(
+            "task.completed",
+            {
+                "task_id": task.task_id,
+                "parent_id": task.parent_id,
+                "status": "cancelled",
+                "error": "Cancelled by user",
+            },
+        )
 
     except (NonRetryableError, LeaseRevoked) as e:
         conn = await db.ensure_conn()
@@ -424,7 +482,15 @@ async def execute_task(
             (str(e), time.time(), task.task_id),
         )
         await conn.commit()
-        await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "failed", "error": str(e)})
+        await ctx.emit(
+            "task.completed",
+            {
+                "task_id": task.task_id,
+                "parent_id": task.parent_id,
+                "status": "failed",
+                "error": str(e),
+            },
+        )
         logger.warning("task_engine: task %s failed: %s", task.task_id, e)
 
     except Exception as e:
@@ -434,7 +500,15 @@ async def execute_task(
             (str(e), time.time(), task.task_id),
         )
         await conn.commit()
-        await ctx.emit("task.completed", {"task_id": task.task_id, "parent_id": task.parent_id, "status": "failed", "error": str(e)})
+        await ctx.emit(
+            "task.completed",
+            {
+                "task_id": task.task_id,
+                "parent_id": task.parent_id,
+                "status": "failed",
+                "error": str(e),
+            },
+        )
         logger.exception("task_engine: task %s failed: %s", task.task_id, e)
 
 
@@ -455,7 +529,9 @@ async def run_agent_loop(
     )
 
     async def invoke_fn() -> StepOutcome:
-        response = await agent.invoke(_build_step_prompt(state, max_steps), step_context)
+        response = await agent.invoke(
+            _build_step_prompt(state, max_steps), step_context
+        )
         return StepOutcome(
             content=response.content,
             status=response.status,
@@ -488,7 +564,9 @@ async def run_orchestrator_loop(
     max_steps = task.payload.get("max_steps", 20)
 
     async def invoke_fn() -> StepOutcome:
-        content = await ctx.invoke_agent_background(_build_step_prompt(state, max_steps))
+        content = await ctx.invoke_agent_background(
+            _build_step_prompt(state, max_steps)
+        )
         return StepOutcome(content=content, status="success")
 
     for step_num in range(state.step, max_steps):

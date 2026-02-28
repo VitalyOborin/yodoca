@@ -22,6 +22,7 @@ _ONBOARDING_SUCCESS = 0
 _ONBOARDING_QUIT = 1
 _ONBOARDING_RETRY = 2
 
+
 def _get_restart_file() -> Path:
     settings = load_settings()
     rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
@@ -31,9 +32,13 @@ def _get_restart_file() -> Path:
 def _get_poll_interval() -> int:
     settings = load_settings()
     return get_setting(settings, "supervisor.restart_file_check_interval", 5)
+
+
 _AGENT_CMD = [sys.executable, "-m", "core"]
 _MAX_RESTARTS = int(os.environ.get("SUPERVISOR_MAX_RESTARTS", "5"))
-_RESTART_WINDOW_MINUTES = float(os.environ.get("SUPERVISOR_RESTART_WINDOW_MINUTES", "5"))
+_RESTART_WINDOW_MINUTES = float(
+    os.environ.get("SUPERVISOR_RESTART_WINDOW_MINUTES", "5")
+)
 
 
 def _log(message: str) -> None:

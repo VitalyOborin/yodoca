@@ -133,8 +133,12 @@ class TelegramChannelExtension:
             )
 
         self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
-        self._stream_edit_interval_ms = int(context.get_config("stream_edit_interval_ms", 500))
-        self._stream_min_chunk_chars = int(context.get_config("stream_min_chunk_chars", 20))
+        self._stream_edit_interval_ms = int(
+            context.get_config("stream_edit_interval_ms", 500)
+        )
+        self._stream_min_chunk_chars = int(
+            context.get_config("stream_min_chunk_chars", 20)
+        )
         self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
         token_key = context.get_config("token_secret", f"{context.extension_id}_token")
@@ -199,7 +203,9 @@ class TelegramChannelExtension:
 
         self._dp.message.register(on_message)
         if chat_id:
-            context.logger.info("Telegram channel initialized (polling, chat_id=%s)", chat_id)
+            context.logger.info(
+                "Telegram channel initialized (polling, chat_id=%s)", chat_id
+            )
         else:
             context.logger.info(
                 "Telegram channel initialized (polling, waiting for first message to capture chat_id)"

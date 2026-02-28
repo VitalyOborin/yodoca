@@ -329,7 +329,9 @@ class MemoryRetrieval:
         graph_results: list[dict[str, Any]] = []
 
         if intent in ("why", "when", "who", "what"):
-            seed_ids = [r["id"] for r in (fts_results[:seed_limit] or vec_results[:seed_limit])]
+            seed_ids = [
+                r["id"] for r in (fts_results[:seed_limit] or vec_results[:seed_limit])
+            ]
 
             if intent == "why" and seed_ids:
                 graph_results = await self._storage.causal_chain_traversal(
@@ -382,8 +384,12 @@ class MemoryRetrieval:
             await self._storage.record_access_for_nodes(node_ids)
         logger.debug(
             "search: query=%r intent=%s fts=%d vec=%d graph=%d merged=%d",
-            query[:60], intent, len(fts_results), len(vec_results),
-            len(graph_results), len(results),
+            query[:60],
+            intent,
+            len(fts_results),
+            len(vec_results),
+            len(graph_results),
+            len(results),
         )
         return results
 
@@ -411,7 +417,9 @@ class MemoryRetrieval:
         budget_temporal = int(total_chars * 0.25)
         budget_evidence = int(total_chars * 0.10)
 
-        facts = [r for r in results if r.get("type") in ("semantic", "procedural", "opinion")]
+        facts = [
+            r for r in results if r.get("type") in ("semantic", "procedural", "opinion")
+        ]
         episodic = [r for r in results if r.get("type") == "episodic"]
         node_ids = [r["id"] for r in results]
 

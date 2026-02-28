@@ -46,7 +46,11 @@ class LocalUnsafeExecutor(BaseExecutor):
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired as e:
             raw = e.stdout or b""
-            stdout = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            stdout = (
+                raw.decode("utf-8", errors="replace")
+                if isinstance(raw, bytes)
+                else str(raw)
+            )
             return 124, stdout, f"TimeoutError: Command exceeded {timeout} seconds."
         except Exception as e:
             return 1, "", f"ExecutionError: {str(e)}"

@@ -96,7 +96,13 @@ class EventJournal:
             INSERT INTO event_journal (topic, source, payload, correlation_id, status, created_at)
             VALUES (?, ?, ?, ?, 'pending', ?)
             """,
-            (topic, source, json.dumps(payload, ensure_ascii=False), correlation_id, now),
+            (
+                topic,
+                source,
+                json.dumps(payload, ensure_ascii=False),
+                correlation_id,
+                now,
+            ),
         )
         await conn.commit()
         return cursor.lastrowid or 0
@@ -122,7 +128,9 @@ class EventJournal:
         for row in rows:
             payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
             retry_count = row[6] if len(row) > 6 else 0
-            result.append((row[0], row[1], row[2], payload, row[4], row[5], retry_count))
+            result.append(
+                (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
+            )
         return result
 
     async def claim_pending(
@@ -158,7 +166,9 @@ class EventJournal:
             for row in rows:
                 payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
                 retry_count = row[6] if len(row) > 6 else 0
-                result.append((row[0], row[1], row[2], payload, row[4], row[5], retry_count))
+                result.append(
+                    (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
+                )
             return result
         except Exception:
             await conn.rollback()

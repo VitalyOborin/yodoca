@@ -22,13 +22,13 @@ class AnthropicProvider:
             ) from e
         # LiteLLM model name format: anthropic/claude-3-5-sonnet-...
         litellm_model = (
-            model_name if model_name.startswith("anthropic/") else f"anthropic/{model_name}"
+            model_name
+            if model_name.startswith("anthropic/")
+            else f"anthropic/{model_name}"
         )
         return LitellmModel(model=litellm_model, api_key=api_key)
 
-    async def health_check(
-        self, config: ProviderConfig, api_key: str | None
-    ) -> bool:
+    async def health_check(self, config: ProviderConfig, api_key: str | None) -> bool:
         """No lightweight LiteLLM ping; report True if build succeeds."""
         try:
             self.build(config, "claude-3-5-haiku-20241022", api_key)

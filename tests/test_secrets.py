@@ -37,7 +37,9 @@ def test_get_secret_keyring_error_falls_back(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_get_secret_async_prefers_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_secret_async_prefers_keyring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Async variant prefers keyring over env."""
     monkeypatch.setenv("TEST_ASYNC", "from-env")
     with patch("core.secrets.keyring") as mock_kr:

@@ -159,7 +159,7 @@ class KvExtension:
                 val = None
 
             await store.set(key.strip(), val)
-            
+
             if val is None:
                 return f"Key '{key.strip()}' deleted."
             return f"Key '{key.strip()}' set."

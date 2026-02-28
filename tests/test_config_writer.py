@@ -27,7 +27,12 @@ def test_write_config_creates_settings_and_env(tmp_path: Path) -> None:
         },
         env_vars={"OPENAI_API_KEY": "sk-test"},
         agents={"default": {"provider": "openai", "model": "gpt-4o-mini"}},
-        extensions={"embedding": {"provider": "openai", "default_model": "text-embedding-3-small"}},
+        extensions={
+            "embedding": {
+                "provider": "openai",
+                "default_model": "text-embedding-3-small",
+            }
+        },
     )
     settings_path = tmp_path / "config" / "settings.yaml"
     env_path = tmp_path / ".env"
@@ -104,7 +109,9 @@ def test_run_embedding_step_uses_same_provider_and_sets_embedding_extension() ->
     )
 
     mock_prompt = type("MockPrompt", (), {"ask": lambda *a, **kw: True})()
-    mock_select_prompt = type("MockPrompt", (), {"ask": lambda *a, **kw: "text-embedding-3-small"})()
+    mock_select_prompt = type(
+        "MockPrompt", (), {"ask": lambda *a, **kw: "text-embedding-3-small"}
+    )()
 
     with (
         patch("questionary.confirm", return_value=mock_prompt),

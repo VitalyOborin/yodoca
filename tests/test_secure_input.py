@@ -34,14 +34,14 @@ class TestMakeSecureInputTool:
         event_bus = MagicMock()
         event_bus.publish = AsyncMock()
         tool = make_secure_input_tool(event_bus)
-        args = json.dumps({
-            "secret_id": "telegram_token",
-            "prompt_message": "Enter bot token",
-            "channel_id": "cli_channel",
-        })
-        result = await tool.on_invoke_tool(
-            _make_tool_ctx(tool.name, args), args
+        args = json.dumps(
+            {
+                "secret_id": "telegram_token",
+                "prompt_message": "Enter bot token",
+                "channel_id": "cli_channel",
+            }
         )
+        result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
         event_bus.publish.assert_called_once()
         call_args = event_bus.publish.call_args
         assert call_args[0][0] == SystemTopics.SECURE_INPUT_REQUEST
@@ -58,13 +58,13 @@ class TestMakeSecureInputTool:
         event_bus = MagicMock()
         event_bus.publish = AsyncMock()
         tool = make_secure_input_tool(event_bus)
-        args = json.dumps({
-            "secret_id": "invalid-id-with-dash",
-            "prompt_message": "Enter token",
-        })
-        result = await tool.on_invoke_tool(
-            _make_tool_ctx(tool.name, args), args
+        args = json.dumps(
+            {
+                "secret_id": "invalid-id-with-dash",
+                "prompt_message": "Enter token",
+            }
         )
+        result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
         event_bus.publish.assert_not_called()
         assert "Error:" in result
         assert "invalid secret_id" in result
@@ -75,9 +75,7 @@ class TestMakeSecureInputTool:
         event_bus.publish = AsyncMock()
         tool = make_secure_input_tool(event_bus)
         args = json.dumps({"secret_id": "123token", "prompt_message": "Enter"})
-        result = await tool.on_invoke_tool(
-            _make_tool_ctx(tool.name, args), args
-        )
+        result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
         event_bus.publish.assert_not_called()
         assert "Error:" in result
 

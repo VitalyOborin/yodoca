@@ -57,9 +57,7 @@ class ExtensionContext:
         """ModelRouter for get_model(agent_id). None if not set (e.g. legacy runner)."""
         return self._model_router
 
-    async def notify_user(
-        self, text: str, channel_id: str | None = None
-    ) -> None:
+    async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         """Send notification to user via system.user.notify. Guaranteed delivery."""
         if self._event_bus:
             await self._event_bus.publish(
@@ -115,7 +113,9 @@ class ExtensionContext:
     ) -> None:
         """Publish event to the Event Bus. Fire-and-forget."""
         if self._event_bus:
-            await self._event_bus.publish(topic, self.extension_id, payload, correlation_id)
+            await self._event_bus.publish(
+                topic, self.extension_id, payload, correlation_id
+            )
 
     async def request_agent_task(
         self, prompt: str, channel_id: str | None = None

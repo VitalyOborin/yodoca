@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-_memory_ext = Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
+_memory_ext = (
+    Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
+)
 sys.path.insert(0, str(_memory_ext))
 
 from agent import ConsolidationResult, MemoryAgent, create_memory_agent

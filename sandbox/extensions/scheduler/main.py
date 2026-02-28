@@ -72,9 +72,7 @@ class _SchedulerStore:
             await self._conn.close()
             self._conn = None
 
-    async def insert_one_shot(
-        self, topic: str, payload: str, fire_at: float
-    ) -> int:
+    async def insert_one_shot(self, topic: str, payload: str, fire_at: float) -> int:
         conn = await self._ensure_conn()
         now = time.time()
         cursor = await conn.execute(
@@ -206,9 +204,7 @@ class _SchedulerStore:
             )
         await conn.commit()
 
-    async def list_all(
-        self, status_filter: str | None = None
-    ) -> list[dict[str, Any]]:
+    async def list_all(self, status_filter: str | None = None) -> list[dict[str, Any]]:
         conn = await self._ensure_conn()
         conn.row_factory = aiosqlite.Row
         result: list[dict[str, Any]] = []
@@ -294,7 +290,9 @@ class _SchedulerStore:
             updates.append("status = ?")
             params.append(status)
 
-        expr_changed = cron_expr is not None or every_sec is not None or until_at is not None
+        expr_changed = (
+            cron_expr is not None or every_sec is not None or until_at is not None
+        )
         if not expr_changed and not updates:
             cursor = await conn.execute(
                 "SELECT next_fire_at FROM recurring_schedules WHERE id = ?",
@@ -356,7 +354,11 @@ class SchedulerExtension:
             await self._store.recover_recurring(now)
             due = await self._store.fetch_due_one_shot(now)
             for row in due:
-                payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                payload = (
+                    json.loads(row["payload"])
+                    if isinstance(row["payload"], str)
+                    else row["payload"]
+                )
                 await self._ctx.emit(row["topic"], payload)
                 await self._store.mark_one_shot_fired(row["id"])
 
@@ -476,7 +478,9 @@ class SchedulerExtension:
                 every_seconds: Interval in seconds (positive number). Mutually exclusive with cron.
                 until_iso: Optional ISO 8601 end datetime. Schedule stops after this time.
             """
-            if (cron is None or not cron.strip()) == (every_seconds is None or every_seconds <= 0):
+            if (cron is None or not cron.strip()) == (
+                every_seconds is None or every_seconds <= 0
+            ):
                 return "Error: provide exactly one of cron or every_seconds (positive)."
 
             if topic == "system.user.notify":
@@ -525,7 +529,8 @@ class SchedulerExtension:
 
         @function_tool(name_override="list_schedules")
         async def list_schedules(
-            status: Literal["scheduled", "fired", "cancelled", "active", "paused"] | None = None,
+            status: Literal["scheduled", "fired", "cancelled", "active", "paused"]
+            | None = None,
         ) -> str:
             """List all schedules. Returns JSON array.
 
@@ -538,14 +543,20 @@ class SchedulerExtension:
                 return "[]"
             result = []
             for r in rows:
-                result.append({
-                    "id": r["id"],
-                    "type": r["type"],
-                    "topic": r["topic"],
-                    "payload": json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"],
-                    "next_fire_iso": datetime.fromtimestamp(r["fire_at_or_next"]).isoformat(),
-                    "status": r["status"],
-                })
+                result.append(
+                    {
+                        "id": r["id"],
+                        "type": r["type"],
+                        "topic": r["topic"],
+                        "payload": json.loads(r["payload"])
+                        if isinstance(r["payload"], str)
+                        else r["payload"],
+                        "next_fire_iso": datetime.fromtimestamp(
+                            r["fire_at_or_next"]
+                        ).isoformat(),
+                        "status": r["status"],
+                    }
+                )
             return json.dumps(result, ensure_ascii=False)
 
         @function_tool(name_override="cancel_schedule")
@@ -562,7 +573,9 @@ class SchedulerExtension:
             if schedule_type == "one_shot":
                 ok = await store.cancel_one_shot(schedule_id)
                 if not ok:
-                    return f"Schedule #{schedule_id} not found or already fired/cancelled."
+                    return (
+                        f"Schedule #{schedule_id} not found or already fired/cancelled."
+                    )
             else:
                 await store.cancel_recurring(schedule_id)
             return f"Schedule #{schedule_id} cancelled."
@@ -622,12 +635,20 @@ class SchedulerExtension:
                 now = time.time()
                 due_one_shot = await store.fetch_due_one_shot(now)
                 for row in due_one_shot:
-                    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                    payload = (
+                        json.loads(row["payload"])
+                        if isinstance(row["payload"], str)
+                        else row["payload"]
+                    )
                     await ctx.emit(row["topic"], payload)
                     await store.mark_one_shot_fired(row["id"])
                 due_recurring = await store.fetch_due_recurring(now)
                 for row in due_recurring:
-                    payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                    payload = (
+                        json.loads(row["payload"])
+                        if isinstance(row["payload"], str)
+                        else row["payload"]
+                    )
                     await ctx.emit(row["topic"], payload)
                     await store.advance_next(row["id"], now)
             except asyncio.CancelledError:

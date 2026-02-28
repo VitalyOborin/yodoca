@@ -84,9 +84,7 @@ class ModelRouter:
         provider_id = config.get("provider")
         if not provider_id:
             return
-        self._agent_configs[agent_id] = _dict_to_model_config(
-            config, str(provider_id)
-        )
+        self._agent_configs[agent_id] = _dict_to_model_config(config, str(provider_id))
 
     def _resolve_key(self, cfg: ProviderConfig) -> str | None:
         if cfg.api_key_literal:
@@ -117,9 +115,7 @@ class ModelRouter:
                 f"Unknown provider type {provider_cfg.type!r} for provider id {provider_cfg.id!r}"
             )
         api_key = self._resolve_key(provider_cfg)
-        model_instance = provider.build(
-            provider_cfg, agent_cfg.model, api_key
-        )
+        model_instance = provider.build(provider_cfg, agent_cfg.model, api_key)
         self._cache[agent_id] = model_instance
         return model_instance
 
@@ -157,7 +153,9 @@ class ModelRouter:
 
     def supports_hosted_tools(self, agent_id: str) -> bool:
         """Return True if the provider for this agent supports OpenAI hosted tool types."""
-        agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get("default")
+        agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get(
+            "default"
+        )
         if not agent_cfg:
             return True
         provider_cfg = self._provider_configs.get(agent_cfg.provider)

@@ -77,7 +77,10 @@ class TestHandleSecureInput:
 
         ctx.emit.assert_called_once()
         call_payload = ctx.emit.call_args[0][1]
-        assert call_payload["text"] == "[System] Secret input for 'my_secret' cancelled by user."
+        assert (
+            call_payload["text"]
+            == "[System] Secret input for 'my_secret' cancelled by user."
+        )
         ctx.set_secret.assert_not_called()
 
     @pytest.mark.asyncio

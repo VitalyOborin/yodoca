@@ -32,7 +32,9 @@ from tools import build_tools
 logger = logging.getLogger(__name__)
 
 
-def _build_embed_fns(embedding_ext: object, dims: int) -> tuple[object | None, object | None]:
+def _build_embed_fns(
+    embedding_ext: object, dims: int
+) -> tuple[object | None, object | None]:
     """Build embed_fn and embed_batch_fn from embedding extension. Returns (embed_fn, embed_batch_fn)."""
     embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
     embed_batch_fn = (
@@ -85,7 +87,11 @@ class MemoryExtension:
             graph_depth=params.get("graph_depth"),
         )
         if not results:
-            logger.debug("get_context: no results for %r (complexity=%s)", prompt[:80], complexity)
+            logger.debug(
+                "get_context: no results for %r (complexity=%s)",
+                prompt[:80],
+                complexity,
+            )
             return None
         context = await self._retrieval.assemble_context(
             results,
@@ -93,18 +99,23 @@ class MemoryExtension:
         )
         logger.debug(
             "get_context: %d results, %d chars (complexity=%s, agent=%s)",
-            len(results), len(context or ""), complexity, turn_context.agent_id,
+            len(results),
+            len(context or ""),
+            complexity,
+            turn_context.agent_id,
         )
         return context
 
     def get_tools(self) -> list:
         if not self._retrieval or not self._storage:
             return []
+
         def get_maintenance_info() -> dict:
             return {
                 "last_consolidation": self._last_consolidation_at,
                 "last_decay_run": self._last_decay_at,
             }
+
         return build_tools(
             retrieval=self._retrieval,
             storage=self._storage,
@@ -117,7 +128,9 @@ class MemoryExtension:
     async def initialize(self, context: object) -> None:
         self._ctx = context
         self._token_budget = context.get_config("context_token_budget", 2000)
-        self._dedup_threshold = context.get_config("remember_fact_dedup_threshold", 0.92)
+        self._dedup_threshold = context.get_config(
+            "remember_fact_dedup_threshold", 0.92
+        )
         db_path = context.data_dir / "memory.db"
         embedding_dims = context.get_config("embedding_dimensions", 256)
         self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
@@ -127,7 +140,9 @@ class MemoryExtension:
         self._embed_fn = None
         embed_batch_fn = None
         if embedding_ext and embedding_ext.health_check():
-            self._embed_fn, embed_batch_fn = _build_embed_fns(embedding_ext, embedding_dims)
+            self._embed_fn, embed_batch_fn = _build_embed_fns(
+                embedding_ext, embedding_dims
+            )
 
         if self._embed_fn:
             classifier = EmbeddingIntentClassifier(
@@ -215,9 +230,13 @@ class MemoryExtension:
             decay_stats = {"decayed": 0, "pruned": 0}
             if self._decay_service:
                 decay_stats = await self._decay_service.apply(self._storage)
-                self._last_decay_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                self._last_decay_at = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime()
+                )
 
-            self._last_consolidation_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            self._last_consolidation_at = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime()
+            )
             await self._storage.set_maintenance_timestamps(
                 last_consolidation=self._last_consolidation_at,
                 last_decay_run=self._last_decay_at,
@@ -280,7 +299,9 @@ class MemoryExtension:
                 prev_sid = self._current_session_id
                 if prev_sid not in self._consolidation_pending:
                     self._consolidation_pending.add(prev_sid)
-                    logger.info("Session switch: scheduling consolidation for %s", prev_sid)
+                    logger.info(
+                        "Session switch: scheduling consolidation for %s", prev_sid
+                    )
                     task = asyncio.create_task(self._consolidate_session(prev_sid))
                     task.add_done_callback(
                         lambda _: self._consolidation_pending.discard(prev_sid)
@@ -308,14 +329,21 @@ class MemoryExtension:
         }
         self._storage.insert_node(node)
         if prev_id:
-            self._storage.insert_edge({
-                "source_id": prev_id,
-                "target_id": node_id,
-                "relation_type": "temporal",
-                "valid_from": now,
-                "created_at": now,
-            })
-        logger.debug("Episode saved: node=%s session=%s len=%d", node_id[:8], session_id, len(text))
+            self._storage.insert_edge(
+                {
+                    "source_id": prev_id,
+                    "target_id": node_id,
+                    "relation_type": "temporal",
+                    "valid_from": now,
+                    "created_at": now,
+                }
+            )
+        logger.debug(
+            "Episode saved: node=%s session=%s len=%d",
+            node_id[:8],
+            session_id,
+            len(text),
+        )
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
@@ -364,14 +392,22 @@ class MemoryExtension:
         }
         self._storage.insert_node(node)
         if prev_id:
-            self._storage.insert_edge({
-                "source_id": prev_id,
-                "target_id": node_id,
-                "relation_type": "temporal",
-                "valid_from": now,
-                "created_at": now,
-            })
-        logger.debug("Agent episode saved: node=%s agent=%s session=%s len=%d", node_id[:8], agent_id, session_id, len(text))
+            self._storage.insert_edge(
+                {
+                    "source_id": prev_id,
+                    "target_id": node_id,
+                    "relation_type": "temporal",
+                    "valid_from": now,
+                    "created_at": now,
+                }
+            )
+        logger.debug(
+            "Agent episode saved: node=%s agent=%s session=%s len=%d",
+            node_id[:8],
+            agent_id,
+            session_id,
+            len(text),
+        )
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
@@ -381,10 +417,15 @@ class MemoryExtension:
         session_id = payload.get("session_id")
         if session_id:
             if session_id in self._consolidation_pending:
-                logger.debug("session.completed: consolidation already pending for %s", session_id)
+                logger.debug(
+                    "session.completed: consolidation already pending for %s",
+                    session_id,
+                )
                 return
             self._consolidation_pending.add(session_id)
-            logger.info("session.completed: scheduling consolidation for %s", session_id)
+            logger.info(
+                "session.completed: scheduling consolidation for %s", session_id
+            )
             task = asyncio.create_task(self._consolidate_session(session_id))
             task.add_done_callback(
                 lambda _: self._consolidation_pending.discard(session_id)
@@ -394,7 +435,9 @@ class MemoryExtension:
         """Consolidate session via write-path agent."""
         try:
             if not self._write_agent or not self._storage:
-                logger.info("consolidate_session skipped (no write agent): %s", session_id)
+                logger.info(
+                    "consolidate_session skipped (no write agent): %s", session_id
+                )
                 return
             if await self._storage.is_session_consolidated(session_id):
                 return

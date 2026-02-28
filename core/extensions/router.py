@@ -9,7 +9,11 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from core.extensions.contract import ChannelProvider, StreamingChannelProvider, TurnContext
+from core.extensions.contract import (
+    ChannelProvider,
+    StreamingChannelProvider,
+    TurnContext,
+)
 from core.events.topics import SystemTopics
 
 if TYPE_CHECKING:
@@ -29,7 +33,9 @@ class MessageRouter:
         self._user_lock = asyncio.Lock()
         self._background_lock = asyncio.Lock()
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
-        self._invoke_middleware: Callable[[str, TurnContext], Awaitable[str]] | None = None
+        self._invoke_middleware: Callable[[str, TurnContext], Awaitable[str]] | None = (
+            None
+        )
         self._session: Any = None
         self._session_id: str | None = None
         self._last_message_at: float | None = None
@@ -69,7 +75,9 @@ class MessageRouter:
     def unsubscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Remove a previously registered subscription."""
         if event in self._subscribers:
-            self._subscribers[event] = [h for h in self._subscribers[event] if h != handler]
+            self._subscribers[event] = [
+                h for h in self._subscribers[event] if h != handler
+            ]
 
     def set_invoke_middleware(
         self,
@@ -235,7 +243,9 @@ class MessageRouter:
                     try:
                         await on_chunk(error_chunk)
                     except Exception:
-                        logger.exception("Error callback failed while reporting stream error")
+                        logger.exception(
+                            "Error callback failed while reporting stream error"
+                        )
                     return full_text + error_chunk
                 return f"(Error: {e})"
 
@@ -334,7 +344,9 @@ class MessageRouter:
                     try:
                         await on_chunk(error_chunk)
                     except Exception:
-                        logger.exception("Error callback failed while reporting stream error")
+                        logger.exception(
+                            "Error callback failed while reporting stream error"
+                        )
                     return full_text + error_chunk
                 return f"(Error: {e})"
 
@@ -380,7 +392,12 @@ class MessageRouter:
 
         await self._emit(
             "user_message",
-            {"text": text, "user_id": user_id, "channel": channel, "session_id": self._session_id},
+            {
+                "text": text,
+                "user_id": user_id,
+                "channel": channel,
+                "session_id": self._session_id,
+            },
         )
         if isinstance(channel, StreamingChannelProvider):
             await channel.on_stream_start(user_id)

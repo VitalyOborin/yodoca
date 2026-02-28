@@ -20,8 +20,14 @@ async def get_task_status(db: Any, task_id: str) -> TaskStatusResult:
     row = await cursor.fetchone()
     if not row:
         return TaskStatusResult(
-            task_id=task_id, status="not_found", agent_id="", goal="", step=0, max_steps=0,
-            attempt_no=0, error="Task not found",
+            task_id=task_id,
+            status="not_found",
+            agent_id="",
+            goal="",
+            step=0,
+            max_steps=0,
+            attempt_no=0,
+            error="Task not found",
         )
     cols = [d[0] for d in cursor.description]
     d = dict(zip(cols, row))
@@ -96,7 +102,13 @@ async def list_active_tasks(db: Any) -> ActiveTasksResult:
 async def cancel_task(db: Any, task_id: str, reason: str = "") -> CancelTaskResult:
     """Cancel a task. Works on pending, running, waiting, and human_review tasks."""
     conn = await db.ensure_conn()
-    cancellable = ("pending", "retry_scheduled", "running", "waiting_subtasks", "human_review")
+    cancellable = (
+        "pending",
+        "retry_scheduled",
+        "running",
+        "waiting_subtasks",
+        "human_review",
+    )
     placeholders = ",".join("?" for _ in cancellable)
     cursor = await conn.execute(
         f"UPDATE agent_task SET status = 'cancelled', error = ?, updated_at = ? WHERE task_id = ? AND status IN ({placeholders})",
@@ -104,5 +116,11 @@ async def cancel_task(db: Any, task_id: str, reason: str = "") -> CancelTaskResu
     )
     await conn.commit()
     if cursor.rowcount:
-        return CancelTaskResult(task_id=task_id, status="cancelled", message="Task cancelled")
-    return CancelTaskResult(task_id=task_id, status="not_found", message="Task not found or already completed")
+        return CancelTaskResult(
+            task_id=task_id, status="cancelled", message="Task cancelled"
+        )
+    return CancelTaskResult(
+        task_id=task_id,
+        status="not_found",
+        message="Task not found or already completed",
+    )

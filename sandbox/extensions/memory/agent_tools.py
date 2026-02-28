@@ -151,7 +151,9 @@ def build_write_path_tools(
         episodes = await storage.get_session_episodes(
             session_id, limit=limit, offset=offset
         )
-        logger.debug("get_session_episodes(%s): returned %d episodes", session_id, len(episodes))
+        logger.debug(
+            "get_session_episodes(%s): returned %d episodes", session_id, len(episodes)
+        )
         return SessionEpisodesResult(episodes=episodes, count=len(episodes))
 
     @function_tool
@@ -167,19 +169,21 @@ def build_write_path_tools(
             source_ids = n.source_episode_ids or []
             if n_type not in ("semantic", "procedural", "opinion") or not content:
                 continue
-            items.append((
-                {
-                    "type": n_type,
-                    "content": content,
-                    "event_time": now,
-                    "created_at": now,
-                    "valid_from": now,
-                    "source_type": "consolidation",
-                    "source_role": "memory_agent",
-                    "confidence": 0.8,
-                },
-                source_ids if isinstance(source_ids, list) else [],
-            ))
+            items.append(
+                (
+                    {
+                        "type": n_type,
+                        "content": content,
+                        "event_time": now,
+                        "created_at": now,
+                        "valid_from": now,
+                        "source_type": "consolidation",
+                        "source_role": "memory_agent",
+                        "confidence": 0.8,
+                    },
+                    source_ids if isinstance(source_ids, list) else [],
+                )
+            )
         if not items:
             return SaveBatchResult(node_ids=[], count=0)
         node_dicts = [it[0] for it in items]
@@ -188,13 +192,15 @@ def build_write_path_tools(
         node_ids = await storage.insert_nodes_batch(node_dicts)
         for nid, ep_ids in zip(node_ids, source_ids_per_node):
             for ep_id in ep_ids:
-                await storage.insert_edge_awaitable({
-                    "source_id": nid,
-                    "target_id": ep_id,
-                    "relation_type": "derived_from",
-                    "valid_from": now,
-                    "created_at": now,
-                })
+                await storage.insert_edge_awaitable(
+                    {
+                        "source_id": nid,
+                        "target_id": ep_id,
+                        "relation_type": "derived_from",
+                        "valid_from": now,
+                        "created_at": now,
+                    }
+                )
         if embed_batch_fn:
             texts = [nd["content"] for nd in node_dicts]
             embeddings = await embed_batch_fn(texts)
@@ -219,9 +225,18 @@ def build_write_path_tools(
                 m_type = ment.type
                 canonical = ment.canonical_name
                 aliases = ment.aliases or []
-                if m_type not in (
-                    "person", "project", "organization", "place", "concept", "tool"
-                ) or not canonical:
+                if (
+                    m_type
+                    not in (
+                        "person",
+                        "project",
+                        "organization",
+                        "place",
+                        "concept",
+                        "tool",
+                    )
+                    or not canonical
+                ):
                     continue
                 entity = await storage.get_entity_by_name(canonical)
                 if not entity:
@@ -241,15 +256,17 @@ def build_write_path_tools(
                     linked += 1
                 else:
                     entity_id = str(uuid.uuid4())
-                    await storage.insert_entity({
-                        "id": entity_id,
-                        "canonical_name": canonical,
-                        "type": m_type,
-                        "aliases": aliases if aliases else [canonical],
-                        "first_seen": now,
-                        "last_updated": now,
-                        "mention_count": 1,
-                    })
+                    await storage.insert_entity(
+                        {
+                            "id": entity_id,
+                            "canonical_name": canonical,
+                            "type": m_type,
+                            "aliases": aliases if aliases else [canonical],
+                            "first_seen": now,
+                            "last_updated": now,
+                            "mention_count": 1,
+                        }
+                    )
                     await storage.link_node_entity(node_id, entity_id)
                     created += 1
                     linked += 1
@@ -281,7 +298,9 @@ def build_write_path_tools(
         return ConflictCandidatesResult(candidates=candidates, count=len(candidates))
 
     @function_tool
-    async def resolve_conflict(old_node_id: str, new_node_id: str) -> ResolveConflictResult:
+    async def resolve_conflict(
+        old_node_id: str, new_node_id: str
+    ) -> ResolveConflictResult:
         """Resolve conflict: soft-delete old node, create supersedes edge."""
         now = int(time.time())
         await storage.update_node_fields(
@@ -289,15 +308,21 @@ def build_write_path_tools(
             {"confidence": 0.3, "decay_rate": 0.5},
         )
         await storage.soft_delete_node(old_node_id)
-        await storage.insert_edge_awaitable({
-            "source_id": new_node_id,
-            "target_id": old_node_id,
-            "relation_type": "supersedes",
-            "valid_from": now,
-            "created_at": now,
-        })
-        logger.info("resolve_conflict: %s supersedes %s", new_node_id[:8], old_node_id[:8])
-        return ResolveConflictResult(old_node_id=old_node_id, new_node_id=new_node_id, status="resolved")
+        await storage.insert_edge_awaitable(
+            {
+                "source_id": new_node_id,
+                "target_id": old_node_id,
+                "relation_type": "supersedes",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
+        logger.info(
+            "resolve_conflict: %s supersedes %s", new_node_id[:8], old_node_id[:8]
+        )
+        return ResolveConflictResult(
+            old_node_id=old_node_id, new_node_id=new_node_id, status="resolved"
+        )
 
     @function_tool
     async def mark_session_consolidated(session_id: str) -> MarkConsolidatedResult:
@@ -315,24 +340,31 @@ def build_write_path_tools(
         for e in edges:
             if not e.source_id or not e.target_id:
                 continue
-            await storage.insert_edge_awaitable({
-                "source_id": e.source_id,
-                "target_id": e.target_id,
-                "relation_type": "causal",
-                "predicate": (e.predicate or "caused_by").strip() or "caused_by",
-                "confidence": 0.7,
-                "valid_from": now,
-                "created_at": now,
-            })
+            await storage.insert_edge_awaitable(
+                {
+                    "source_id": e.source_id,
+                    "target_id": e.target_id,
+                    "relation_type": "causal",
+                    "predicate": (e.predicate or "caused_by").strip() or "caused_by",
+                    "confidence": 0.7,
+                    "valid_from": now,
+                    "created_at": now,
+                }
+            )
         count = len([x for x in edges if x.source_id and x.target_id])
         logger.info("save_causal_edges: %d edges saved", count)
         return SaveCausalEdgesResult(count=count, status="saved")
 
     @function_tool
-    async def update_entity_summary(entity_id: str, summary: str) -> UpdateEntitySummaryResult:
+    async def update_entity_summary(
+        entity_id: str, summary: str
+    ) -> UpdateEntitySummaryResult:
         """Update entity summary and re-embed for improved vector search. Used for entity enrichment."""
         if not entity_id or not (summary or "").strip():
-            return UpdateEntitySummaryResult(entity_id=entity_id or "", status="error: entity_id and summary required")
+            return UpdateEntitySummaryResult(
+                entity_id=entity_id or "",
+                status="error: entity_id and summary required",
+            )
         now = int(time.time())
         await storage.update_entity(
             entity_id, {"summary": summary.strip(), "last_updated": now}

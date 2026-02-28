@@ -29,20 +29,29 @@ async def get_subtask_depth(db: Any, task_id: str) -> int:
     return depth
 
 
-async def update_parent_checkpoint(db: Any, parent_task_id: str, child_task_id: str) -> None:
+async def update_parent_checkpoint(
+    db: Any, parent_task_id: str, child_task_id: str
+) -> None:
     """Append child task_id to parent's pending_subtasks in checkpoint."""
     conn = await db.ensure_conn()
     cursor = await conn.execute(
-        "SELECT checkpoint, payload FROM agent_task WHERE task_id = ?", (parent_task_id,)
+        "SELECT checkpoint, payload FROM agent_task WHERE task_id = ?",
+        (parent_task_id,),
     )
     row = await cursor.fetchone()
     if not row:
         return
     checkpoint_raw, payload_raw = row[0], row[1]
-    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    payload = (
+        json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    )
     goal = payload.get("goal", "")
     try:
-        state = TaskState.from_json(checkpoint_raw) if checkpoint_raw else TaskState(goal=goal)
+        state = (
+            TaskState.from_json(checkpoint_raw)
+            if checkpoint_raw
+            else TaskState(goal=goal)
+        )
     except Exception:
         state = TaskState(goal=goal)
     if child_task_id not in state.pending_subtasks:
@@ -53,7 +62,9 @@ async def update_parent_checkpoint(db: Any, parent_task_id: str, child_task_id: 
     )
 
 
-async def collect_subtask_results(db: Any, parent_id: str) -> tuple[list[dict], list[dict]]:
+async def collect_subtask_results(
+    db: Any, parent_id: str
+) -> tuple[list[dict], list[dict]]:
     """Query all children of parent, return (results, failures) tuples."""
     conn = await db.ensure_conn()
     cursor = await conn.execute(
@@ -71,13 +82,23 @@ async def collect_subtask_results(db: Any, parent_id: str) -> tuple[list[dict], 
         result = None
         if d.get("result"):
             try:
-                result = json.loads(d["result"]) if isinstance(d["result"], str) else d["result"]
+                result = (
+                    json.loads(d["result"])
+                    if isinstance(d["result"], str)
+                    else d["result"]
+                )
             except Exception:
                 result = d.get("result")
         if status == "done":
             results.append({"task_id": task_id, "status": status, "result": result})
         else:
-            failures.append({"task_id": task_id, "status": status, "error": d.get("error") or "unknown"})
+            failures.append(
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "error": d.get("error") or "unknown",
+                }
+            )
     return (results, failures)
 
 
@@ -104,10 +125,16 @@ async def try_resume_parent(db: Any, parent_id: str) -> None:
     if not row:
         return
     checkpoint_raw, payload_raw = row[0], row[1]
-    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    payload = (
+        json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+    )
     goal = payload.get("goal", "")
     try:
-        state = TaskState.from_json(checkpoint_raw) if checkpoint_raw else TaskState(goal=goal)
+        state = (
+            TaskState.from_json(checkpoint_raw)
+            if checkpoint_raw
+            else TaskState(goal=goal)
+        )
     except Exception:
         state = TaskState(goal=goal)
     state.context = dict(state.context)
@@ -118,4 +145,9 @@ async def try_resume_parent(db: Any, parent_id: str) -> None:
         (state.to_json(), time.time(), parent_id),
     )
     await conn.commit()
-    logger.info("task_engine: resumed parent %s with %d results, %d failures", parent_id, len(results), len(failures))
+    logger.info(
+        "task_engine: resumed parent %s with %d results, %d failures",
+        parent_id,
+        len(results),
+        len(failures),
+    )

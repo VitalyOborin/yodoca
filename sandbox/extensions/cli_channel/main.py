@@ -64,7 +64,9 @@ class CliChannelExtension:
         self._response_complete.set()
 
     async def start(self) -> None:
-        self._input_task = asyncio.create_task(self._input_loop(), name="cli_input_loop")
+        self._input_task = asyncio.create_task(
+            self._input_loop(), name="cli_input_loop"
+        )
 
     async def stop(self) -> None:
         if self._input_task:
