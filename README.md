@@ -200,6 +200,27 @@ To reset everything (config, memory, secrets) and start fresh: `uv run python sc
 
 ---
 
+## Development checks
+
+Install dev dependencies and run linting, formatting, and architecture checks:
+
+```bash
+uv sync --extra dev
+```
+
+| Check | Command | Description |
+|-------|---------|-------------|
+| **Lint** | `uv run ruff check .` | Style and bug checks (fix with `--fix`) |
+| **Format** | `uv run ruff format .` | Format code (Black-compatible) |
+| **Import layers** | `uv run lint-imports` | Enforce architecture (core must not import extensions) |
+| **Types** | `uv run mypy` | Static typing (strict mode) |
+| **Security** | `uv run bandit -r core onboarding sandbox` | Basic security scan |
+| **Tests** | `uv run pytest` | Run test suite |
+
+Before opening a PR, run at least: `ruff check .`, `ruff format --check .`, and `lint-imports`.
+
+---
+
 ## Repository layout (conceptual)
 
 ```
@@ -351,6 +372,7 @@ Open a PR and include:
 - motivation/use case
 - a minimal working example
 - tests (when applicable)
+- passing [development checks](#development-checks): `ruff check .`, `ruff format --check .`, `lint-imports`
 
 ---
 
