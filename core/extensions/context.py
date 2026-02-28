@@ -34,6 +34,7 @@ class ExtensionContext:
         model_router: ModelRouterProtocol | None = None,
         agent_id: str | None = None,
         event_bus: "EventBus | None" = None,
+        restart_file_path: Path | None = None,
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -48,6 +49,7 @@ class ExtensionContext:
         self._model_router = model_router
         self.agent_id: str | None = agent_id or extension_id
         self._event_bus = event_bus
+        self._restart_file_path = restart_file_path
         self.on_user_message = self._router.handle_user_message
 
     @property
@@ -165,8 +167,16 @@ class ExtensionContext:
         return self._data_dir_path
 
     def request_restart(self) -> None:
-        """Ask supervisor to restart the kernel. Writes sandbox/.restart_requested."""
-        restart_file = self._data_dir_path.parent.parent / ".restart_requested"
+        """Ask supervisor to restart the kernel.
+
+        When running under the Loader, the path is taken from supervisor.restart_file
+        (injected at construction). Otherwise falls back to sandbox/.restart_requested.
+        """
+        restart_file = (
+            self._restart_file_path
+            if self._restart_file_path is not None
+            else self._data_dir_path.parent.parent / ".restart_requested"
+        )
         restart_file.parent.mkdir(parents=True, exist_ok=True)
         restart_file.write_text("restart requested", encoding="utf-8")
 

@@ -172,6 +172,13 @@ class Loader:
 
         return get_extension
 
+    def _get_restart_file_path(self) -> Path:
+        """Restart flag file path from supervisor.restart_file setting (project-root-relative)."""
+        return (
+            self._data_dir.parent.parent
+            / get_setting(self._settings, "supervisor.restart_file", "sandbox/.restart_requested")
+        )
+
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
         """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
         if not manifest.agent:
@@ -182,10 +189,7 @@ class Loader:
                 from core.tools.provider import CoreToolsProvider
 
                 agent_id = getattr(manifest, "agent_id", None) or manifest.id
-                restart_file_path = (
-                    self._data_dir.parent.parent
-                    / get_setting(self._settings, "supervisor.restart_file", "sandbox/.restart_requested")
-                )
+                restart_file_path = self._get_restart_file_path()
                 tools.extend(
                     CoreToolsProvider(
                         model_router=self._model_router,
@@ -265,6 +269,7 @@ class Loader:
                 model_router=self._model_router,
                 agent_id=agent_id,
                 event_bus=self._event_bus,
+                restart_file_path=self._get_restart_file_path(),
             )
             try:
                 await ext.initialize(ctx)
