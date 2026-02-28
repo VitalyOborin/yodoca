@@ -15,3 +15,6 @@ config:
   read_provider: jina         # jina | tavily
   max_page_length: 15000
   searxng_base_url: "http://localhost:8080"  # only used when search_provider=searxng
+  max_urls_per_call: 10       # max URLs in one open_page call (batch size)
+  total_content_budget: 40000  # max total chars returned for the whole batch
+  open_page_concurrency: 5    # max concurrent HTTP requests in a batch

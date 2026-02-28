@@ -97,8 +97,8 @@ class WebSearchToolResult(BaseModel):
     message: str = ""
 
 
-class OpenPageToolResult(BaseModel):
-    """Structured result of open_page tool."""
+class PageResult(BaseModel):
+    """Result for a single page in a batch request."""
 
     url: str
     title: str
@@ -108,3 +108,14 @@ class OpenPageToolResult(BaseModel):
     truncated: bool = False
     status: Literal["success", "error"]
     error: str = ""
+
+
+class OpenPageToolResult(BaseModel):
+    """Structured result of open_page tool (supports batch fetching)."""
+
+    pages: list[PageResult]
+    total: int
+    success_count: int
+    error_count: int
+    total_content_length: int
+    budget_warning: str = ""

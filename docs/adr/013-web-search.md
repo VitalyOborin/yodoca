@@ -109,14 +109,14 @@ Returns a structured result with a list of search results (title, URL, snippet).
 
 **Tool 2: `open_page`**
 
-The agent calls this tool when snippets from `web_search` are insufficient and it needs the full page content.
+The agent calls this tool when snippets from `web_search` are insufficient and it needs the full page content. The tool supports batch fetching: pass a list of URLs (1–10 items) and all pages are fetched in parallel within a single tool call. Always pass a list, even for one URL (e.g. `["https://example.com"]`).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `url` | `str` | Yes | URL of the page to read |
-| `max_length` | `int` | No | Override `max_page_length` for this call. Useful when the agent needs a shorter excerpt to save context budget. |
+| `urls` | `list[str]` | Yes | List of URLs to fetch (1–10 items). Always use a list, even for a single page. |
+| `max_length_per_page` | `int` | No | Optional max content length per page in chars. If omitted, the total budget is split evenly across URLs. |
 
-Returns a structured result with page title and Markdown content (truncated to `max_page_length` or the per-call `max_length` override). Includes truncation metadata so the agent knows whether it received the full page.
+Returns a structured result with `pages` (one `PageResult` per URL), `total`, `success_count`, `error_count`, `total_content_length`, and `budget_warning`. Total content across all pages is capped to avoid exceeding the context window; see `max_urls_per_call` and `total_content_budget` in manifest config.
 
 Splitting into two tools improves LLM reasoning: the model first searches, evaluates snippet relevance, and then selectively reads only the pages it needs — saving tokens and reducing noise.
 
@@ -140,6 +140,9 @@ config:
   search_provider: duckduckgo    # duckduckgo | tavily | searxng | perplexity
   read_provider: jina            # jina | tavily | crawl4ai
   max_page_length: 15000
+  max_urls_per_call: 10          # max URLs in one open_page call (batch size)
+  total_content_budget: 40000     # max total chars returned for the whole batch
+  open_page_concurrency: 5       # max concurrent HTTP requests in a batch
 ```
 
 The extension reads `search_provider` and `read_provider` from config during `initialize()` and instantiates the corresponding classes. If a hybrid provider (e.g. Tavily) is selected for both roles, a single instance is shared.
@@ -198,7 +201,8 @@ class SearchResultItem(BaseModel):
 **`open_page` output:**
 
 ```python
-class OpenPageToolResult(BaseModel):
+class PageResult(BaseModel):
+    """Result for a single page in a batch request."""
     url: str
     title: str
     content: str
@@ -207,9 +211,18 @@ class OpenPageToolResult(BaseModel):
     truncated: bool = False
     status: Literal["success", "error"]
     error: str = ""
+
+class OpenPageToolResult(BaseModel):
+    """Structured result of open_page tool (supports batch fetching)."""
+    pages: list[PageResult]
+    total: int
+    success_count: int
+    error_count: int
+    total_content_length: int
+    budget_warning: str = ""
 ```
 
-The `truncated` flag and length fields mirror `ReadResult` from the provider layer. The agent sees these in the tool output and can decide whether to refine its query or ask the user for clarification when working with partial content.
+The agent receives one `PageResult` per URL in `pages`. Each `PageResult` has `truncated`, `content_length`, and `original_length` so the agent knows whether it received full or partial content. The `budget_warning` appears when total content approaches the batch limit.
 
 ### 8. Removing WebSearchTool from core
 

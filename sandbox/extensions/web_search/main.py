@@ -1,5 +1,6 @@
 """Web Search extension: ToolProvider for web search and page reading."""
 
+import asyncio
 import ipaddress
 import logging
 import socket
@@ -16,6 +17,7 @@ from urllib.parse import urlparse
 
 from interfaces import (
     OpenPageToolResult,
+    PageResult,
     SearchResultItem,
     WebSearchToolResult,
 )
@@ -64,10 +66,16 @@ class WebSearchExtension:
         self._reader: Any = None
         self._tavily_instance: TavilyProvider | None = None
         self._max_page_length: int = 15000
+        self._max_urls_per_call: int = 10
+        self._total_content_budget: int = 40_000
+        self._open_page_concurrency: int = 5
 
     async def initialize(self, context: Any) -> None:
         self._ctx = context
         self._max_page_length = context.get_config("max_page_length", 15000)
+        self._max_urls_per_call = context.get_config("max_urls_per_call", 10)
+        self._total_content_budget = context.get_config("total_content_budget", 40_000)
+        self._open_page_concurrency = context.get_config("open_page_concurrency", 5)
 
         search_name = context.get_config("search_provider", "duckduckgo")
         read_name = context.get_config("read_provider", "jina")
@@ -257,74 +265,114 @@ class WebSearchExtension:
 
     async def _tool_open_page(
         self,
-        url: str,
-        max_length: int | None = None,
+        urls: list[str],
+        max_length_per_page: int | None = None,
     ) -> OpenPageToolResult:
         """
-        Fetch and read the full text content of a specific webpage.
+        Fetch and read the full text content of one or more web pages in parallel.
+        Always pass a list of URLs, even for a single page: ["https://example.com"].
+        Maximum 10 URLs per call. Total content across all pages is capped to
+        avoid exceeding the context window.
 
         Args:
-            url: The URL of the webpage to open.
-            max_length: Optional override for max content length (chars). Use to save context budget.
+            urls: List of URLs to fetch (1–10 items).
+            max_length_per_page: Optional max content length per page in chars.
+                                 If omitted, the budget is split evenly across URLs.
         """
         if not self._reader:
             return OpenPageToolResult(
-                url=url,
-                title="",
-                content="",
-                content_length=0,
-                original_length=None,
-                truncated=False,
-                status="error",
-                error="Extension not initialized.",
+                pages=[],
+                total=0,
+                success_count=0,
+                error_count=0,
+                total_content_length=0,
+                budget_warning="Extension not initialized.",
             )
 
-        ok, err = _validate_url(url)
-        if not ok:
+        if not urls:
             return OpenPageToolResult(
-                url=url,
-                title="",
-                content="",
-                content_length=0,
-                original_length=None,
-                truncated=False,
-                status="error",
-                error=err,
+                pages=[],
+                total=0,
+                success_count=0,
+                error_count=0,
+                total_content_length=0,
+                budget_warning="No URLs provided.",
             )
 
-        result = await self._reader.read_url(url)
+        urls = urls[: self._max_urls_per_call]
+        n = len(urls)
 
-        if not result.success:
-            return OpenPageToolResult(
-                url=result.url,
-                title=result.title,
-                content=result.content,
-                content_length=result.content_length,
-                original_length=result.original_length,
-                truncated=result.truncated,
-                status="error",
-                error=result.error,
+        if max_length_per_page is None:
+            per_page_cap = self._total_content_budget // n
+        else:
+            per_page_cap = min(
+                max_length_per_page, self._total_content_budget // n
             )
 
-        content = result.content
-        content_length = result.content_length
-        original_length = result.original_length
-        truncated = result.truncated
+        sem = asyncio.Semaphore(self._open_page_concurrency)
 
-        if max_length is not None and max_length < len(content):
-            content = content[:max_length]
-            content_length = max_length
-            truncated = True
-            if original_length is None:
-                original_length = len(result.content)
+        async def _fetch_one(url: str) -> PageResult:
+            async with sem:
+                ok, err = _validate_url(url)
+                if not ok:
+                    return PageResult(
+                        url=url,
+                        title="",
+                        content="",
+                        content_length=0,
+                        truncated=False,
+                        status="error",
+                        error=err,
+                    )
+                try:
+                    result = await self._reader.read_url(url)
+                except Exception as exc:
+                    return PageResult(
+                        url=url,
+                        title="",
+                        content="",
+                        content_length=0,
+                        truncated=False,
+                        status="error",
+                        error=str(exc),
+                    )
+
+                content = result.content
+                truncated = result.truncated
+                original_length = result.original_length
+
+                if len(content) > per_page_cap:
+                    if original_length is None:
+                        original_length = len(content)
+                    content = content[:per_page_cap]
+                    truncated = True
+
+                return PageResult(
+                    url=result.url,
+                    title=result.title,
+                    content=content,
+                    content_length=len(content),
+                    original_length=original_length,
+                    truncated=truncated,
+                    status="success" if result.success else "error",
+                    error=result.error,
+                )
+
+        pages = list(await asyncio.gather(*[_fetch_one(u) for u in urls]))
+
+        total_length = sum(p.content_length for p in pages)
+        warning = ""
+        if total_length >= self._total_content_budget * 0.9:
+            warning = (
+                f"Content budget nearly exhausted ({total_length}/{self._total_content_budget} chars). "
+                "Consider reducing the number of URLs or use max_length_per_page."
+            )
 
         return OpenPageToolResult(
-            url=result.url,
-            title=result.title,
-            content=content,
-            content_length=content_length,
-            original_length=original_length,
-            truncated=truncated,
-            status="success",
-            error="",
+            pages=pages,
+            total=len(pages),
+            success_count=sum(1 for p in pages if p.status == "success"),
+            error_count=sum(1 for p in pages if p.status == "error"),
+            total_content_length=total_length,
+            budget_warning=warning,
         )
