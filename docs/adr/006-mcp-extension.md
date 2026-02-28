@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Proposed (updated 2026-02-28 — aligned with current architecture after ADRs 007–015)
 
 ## Context
 
@@ -17,6 +17,15 @@ To leverage the MCP ecosystem in assistant4 we need a **bridge extension** that:
 3. Optionally exposes MCP Prompts as context (Phase 2)
 
 This aligns with the nano-kernel principle: **all functionality in extensions**. The MCP extension is a standard extension; the kernel gains only a small duck-typed integration point (`get_mcp_servers()`).
+
+### Current architecture context (post-ADR 015)
+
+Since the original proposal the project has grown significantly:
+
+- **9 protocols** in `contract.py`: Extension, ToolProvider, ChannelProvider, StreamingChannelProvider, ServiceProvider, SchedulerProvider, ContextProvider, SetupProvider, AgentProvider.
+- **Capabilities summary** — `Loader.get_capabilities_summary()` generates a natural-language description of available tools/agents for the Orchestrator prompt.
+- **Secrets via OS keyring** (ADR 012) — `context.get_secret()` resolves through keyring first, then `.env`.
+- **Agent creation order** — The Orchestrator `Agent` is now created **before** `start_all()` (runner.py lines 68–75 vs line 79), because the `MessageRouter` needs the agent before extensions start their background loops. This changes the integration strategy (see §4).
 
 ### Problems solved
 
@@ -64,15 +73,31 @@ The extension implements `ServiceProvider`: it uses `run_background()` only to s
 
 For a local standalone app, stdio and Streamable HTTP are the most relevant.
 
-### 4. Kernel integration (minimal)
+### 4. Kernel integration (minimal, post-start injection)
 
 **No new protocol.** The Loader uses duck-typing: after `start_all()`, it calls `get_mcp_servers()` on any extension that has this method and aggregates the lists.
 
-- **[core/extensions/loader.py](core/extensions/loader.py):** Add `get_mcp_servers() -> list[Any]` that scans active extensions for `get_mcp_servers` and concatenates results.
-- **[core/agents/orchestrator.py](core/agents/orchestrator.py):** Add parameter `mcp_servers: list[Any] | None = None` to `create_orchestrator_agent()`; pass to `Agent(..., mcp_servers=mcp_servers or [], mcp_config={"convert_schemas_to_strict": True})`.
-- **[core/runner.py](core/runner.py):** Call `loader.get_mcp_servers()` and pass to `create_orchestrator_agent(mcp_servers=...)`.
+#### Agent creation order constraint
 
-Agent creation happens **after** `start_all()`, so MCP servers are already connected when the Orchestrator is built.
+The Orchestrator `Agent` is created **before** `start_all()` because the `MessageRouter` needs a reference to the agent before extensions start their background loops (channels, event handlers may trigger agent invocations). MCP servers, however, require `start()` to connect via `MCPServerManager.__aenter__()`.
+
+**Solution: post-start injection.** The SDK `Agent` is a Pydantic model; `mcp_servers` is read at `Runner.run()` time (when `list_tools()` is called), not at construction. After `start_all()` returns, the runner sets `agent.mcp_servers` on the already-created agent. By the time the first user message arrives, connections are established.
+
+#### Changes
+
+- **[core/extensions/loader.py](core/extensions/loader.py):** Add `get_mcp_servers() -> list[Any]` that scans ACTIVE extensions for a `get_mcp_servers` method and concatenates results. Also update `get_capabilities_summary()` to include MCP server aliases.
+- **[core/agents/orchestrator.py](core/agents/orchestrator.py):** No changes needed at creation time. The `mcp_servers` field and `mcp_config` are set after `start_all()`.
+- **[core/runner.py](core/runner.py):** After `await loader.start_all()`, call `loader.get_mcp_servers()`. If non-empty, set `agent.mcp_servers = mcp_servers` and `agent.mcp_config = {"convert_schemas_to_strict": True}`.
+
+```python
+# runner.py — after start_all()
+await loader.start_all()
+
+mcp_servers = loader.get_mcp_servers()
+if mcp_servers:
+    agent.mcp_servers = mcp_servers
+    agent.mcp_config = {"convert_schemas_to_strict": True}
+```
 
 ### 5. Extension lifecycle: MCPServerManager
 
@@ -162,28 +187,34 @@ enabled: true
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         MCP Bridge Extension                             │
-│                                                                          │
+│                         MCP Bridge Extension                            │
+│                                                                         │
 │  initialize()  ──►  Parse config.servers, resolve secrets               │
-│  start()       ──►  MCPServerManager.__aenter__()  →  active_servers      │
+│  start()       ──►  MCPServerManager.__aenter__()  →  active_servers    │
 │  get_mcp_servers()  ──►  return manager.active_servers                  │
-│  stop()        ──►  MCPServerManager.__aexit__()                          │
+│  stop()        ──►  MCPServerManager.__aexit__()                        │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
                               │ SDK server instances
                               ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Loader.get_mcp_servers()  ──►  create_orchestrator_agent(mcp_servers=…) │
-│  Agent(mcp_servers=[...], mcp_config={...})                              │
-│  Runner.run(agent, prompt)  ──►  SDK calls list_tools() / call_tool()    │
+│  Runner (bootstrap)                                                     │
+│                                                                         │
+│  1. agent = create_orchestrator_agent(tools=...)   # no MCP yet         │
+│  2. router.set_agent(agent)                                             │
+│  3. await loader.start_all()            # MCP servers connect here      │
+│  4. agent.mcp_servers = loader.get_mcp_servers()   # post-start inject  │
+│  5. agent.mcp_config = {"convert_schemas_to_strict": True}              │
+│                                                                         │
+│  Runner.run(agent, prompt)  ──►  SDK calls list_tools() / call_tool()   │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
                               │ MCP protocol (JSON-RPC)
                               ▼
-┌──────────────────┐  ┌──────────────────┐
-│  MCP Server       │  │  MCP Server      │
-│  (stdio)          │  │  (Streamable HTTP)│
-└──────────────────┘  └──────────────────┘
+┌──────────────────┐  ┌────────────────────┐
+│  MCP Server      │  │  MCP Server        │
+│  (stdio)         │  │  (Streamable HTTP) │
+└──────────────────┘  └────────────────────┘
 ```
 
 ### 8. SDK features used (no custom reimplementation)
@@ -213,7 +244,7 @@ enabled: true
 |---------|------------|
 | stdio subprocess | Runs with same privileges as kernel. User controls `command`/`args`. Document trust. |
 | HTTP | Only configured URLs; no automatic discovery. |
-| Secrets | Resolve via `context.get_secret()`; never log resolved values. |
+| Secrets | Resolve via `context.get_secret()` (backed by OS keyring per ADR 012); never log resolved values. |
 | Dangerous tools | Use `require_approval`; approval callback can publish to EventBus for user confirmation (Phase 2). |
 
 ### 11. Full manifest example
@@ -245,21 +276,26 @@ enabled: true
 
 ### Phase 1: MVP
 
-1. **Kernel:** Add `get_mcp_servers()` to Loader (duck-typed). Add `mcp_servers` (and `mcp_config`) to `create_orchestrator_agent()`. In runner, pass `loader.get_mcp_servers()` into `create_orchestrator_agent()`. Ensure agent is created after `start_all()` so MCP servers are connected.
-2. **Extension:** Create `sandbox/extensions/mcp/` with `manifest.yaml` and `main.py`. Implement `McpBridgeExtension`: Extension + ServiceProvider; in `start()` build SDK server list from `config.servers`, enter `MCPServerManager`, implement `get_mcp_servers()` returning `manager.active_servers`. Support `stdio` and `streamable-http`; resolve secrets; map `cache_tools`, `tool_filter`, `require_approval` to SDK params.
-3. **Dependencies:** Add OpenAI Agents SDK dependency if not already present (MCP classes live in `agents.mcp`).
-4. **Docs:** Update `docs/extensions.md` with MCP extension and example server configs.
+1. **Loader** (`core/extensions/loader.py`):
+   - Add `get_mcp_servers() -> list[Any]` — scans ACTIVE extensions for duck-typed `get_mcp_servers` method, concatenates results.
+   - Update `get_capabilities_summary()` to include MCP server aliases/descriptions.
+2. **Runner** (`core/runner.py`):
+   - After `await loader.start_all()`, call `loader.get_mcp_servers()`.
+   - If non-empty, set `agent.mcp_servers = mcp_servers` and `agent.mcp_config = {"convert_schemas_to_strict": True}` on the already-created Orchestrator agent (post-start injection).
+3. **Extension:** Create `sandbox/extensions/mcp/` with `manifest.yaml` and `main.py`. Implement `McpBridgeExtension`: Extension + ServiceProvider; in `start()` build SDK server list from `config.servers`, enter `MCPServerManager`, implement `get_mcp_servers()` returning `manager.active_servers`. Support `stdio` and `streamable-http`; resolve secrets via `context.get_secret()` (keyring-backed per ADR 012); map `cache_tools`, `tool_filter`, `require_approval` to SDK params.
+4. **Dependencies:** Ensure `openai-agents[mcp]` extra is installed (MCP classes live in `agents.mcp`).
+5. **Docs:** Update `docs/extensions.md` with MCP extension and example server configs.
 
-### Phase 2: Prompts and approval
+### Phase 2: Prompts, approval, and capabilities
 
-1. **MCP Prompts:** Implement `ContextProvider` in the MCP extension (or a separate one) that calls `server.get_prompt(name, args)` and injects result into agent context.
-2. **Approval flow:** Wire `require_approval` + `on_approval_request` to EventBus or channel so user can confirm dangerous tools.
+1. **MCP Prompts:** Implement `ContextProvider` in the MCP extension (or a separate one) that calls `server.get_prompt(name, args)` and injects result into agent context via the existing ContextProvider chain (ADR 008 pattern).
+2. **Approval flow:** Wire `require_approval` + `on_approval_request` to EventBus (ADR 004) and channel selection (ADR 007) so user can confirm dangerous tools on the active channel.
 3. **Health and reconnect:** In `run_background()` or health_check, call `manager.reconnect(failed_only=True)` and optionally emit events for observability.
 
 ### Phase 3: Observability and agent-extensions
 
 1. **Observability:** Emit EventBus events for MCP tool calls (e.g. `mcp.tool_called`, `mcp.tool_failed`).
-2. **Agent-extensions:** If needed, allow agent-extensions to declare `uses_mcp` so sub-agents get a subset of MCP servers (design TBD).
+2. **Agent-extensions:** If needed, allow agent-extensions to declare `uses_mcp` in their manifest so sub-agents receive a subset of MCP servers (design TBD; related to ADR 003 `uses_tools` pattern).
 3. **Hosted MCP:** Document or support `HostedMCPTool` for publicly reachable servers (added to `tools`, not `mcp_servers`).
 
 ## Consequences
@@ -275,9 +311,10 @@ enabled: true
 
 | Trade-off | Impact |
 |-----------|--------|
-| **Kernel awareness of MCP** | Orchestrator and runner must pass `mcp_servers`; loader must expose `get_mcp_servers()`. Small, localized change. |
+| **Kernel awareness of MCP** | Runner must set `agent.mcp_servers` post-start; Loader must expose `get_mcp_servers()`. Small, localized change (2 files). |
 | **Tool count** | Many servers → many tools in one agent. Mitigate with `tool_filter` per server. |
-| **Creation order** | Agent must be created after `start_all()` so MCP servers are connected. Current runner already does this. |
+| **Post-start injection** | Agent is created before `start_all()` (router needs it); MCP servers injected after. Small race window between agent creation and injection is harmless — no user messages arrive until the first channel connects. |
+| **Not a ToolProvider** | MCP tools bypass `get_all_tools()` and the ToolProvider pattern. They appear in the agent via `mcp_servers`, not `tools`. This is intentional (SDK passthrough) but means MCP tools are invisible to `get_capabilities_summary()` unless special handling is added. |
 
 ### Risks
 
@@ -285,6 +322,7 @@ enabled: true
 |------|----------|------------|
 | **SDK API drift** | Low | Pin SDK version; follow OpenAI Agents SDK MCP docs. |
 | **Manager lifecycle** | Low | Ensure `stop()` always calls `__aexit__` so connections close on shutdown. |
+| **Pydantic field mutation** | Low | `Agent.mcp_servers` is a public field on the Pydantic model. If the SDK makes it frozen in a future version, wrap in a factory or switch to `create_orchestrator_agent()` post-start. |
 
 ## Alternatives Considered
 
@@ -294,7 +332,7 @@ enabled: true
 
 ### New protocol `MCPProvider` in contract.py
 
-**Rejected.** Only one extension is expected to provide MCP servers. Adding a 7th protocol for a single implementation violates YAGNI. Duck-typing in Loader is sufficient; a protocol can be introduced later if multiple extensions begin providing servers.
+**Rejected.** Only one extension is expected to provide MCP servers. Adding a 10th protocol for a single implementation violates YAGNI. Duck-typing in Loader is sufficient; a protocol can be introduced later if multiple extensions begin providing servers.
 
 ### MCP config in manifest root (`mcp_servers:`)
 
@@ -306,10 +344,16 @@ enabled: true
 
 ## Relation to Other ADRs
 
-- **ADR 002** — MCP extension implements `ServiceProvider`; Loader wires it. Tools reach the agent via `mcp_servers`, not `get_tools()`.
-- **ADR 003** — Orchestrator receives MCP tools natively. Future: agent-extensions could receive a subset via `uses_mcp` (Phase 3).
-- **ADR 004** — Phase 2/3 approval and observability can use EventBus.
-- **ADR 005** — Memory is unrelated; MCP could provide an alternative memory backend (out of scope).
+- **ADR 002** (Nano-Kernel + Extensions) — MCP extension implements `ServiceProvider`; Loader wires it. Tools reach the agent via `mcp_servers`, not `get_tools()`.
+- **ADR 003** (Agent-as-Extension) — Orchestrator receives MCP tools natively. Future: agent-extensions could receive a subset via `uses_mcp` (Phase 3), similar to `uses_tools`.
+- **ADR 004** (Event Bus) — Phase 2/3 approval and observability events flow through the Event Bus.
+- **ADR 007** (Agent-Driven Channel Selection) — MCP approval callbacks (Phase 2) should use channel selection to route confirmation requests to the active channel.
+- **ADR 008** (Memory v2) — Unrelated; MCP could theoretically provide an alternative memory backend (out of scope).
+- **ADR 010** (Streaming) — MCP tool call results are non-streaming by design (JSON-RPC request/response). No interaction with StreamingChannelProvider.
+- **ADR 012** (Secure Secrets) — Secret resolution for MCP server headers/env uses `context.get_secret()` backed by OS keyring.
+- **ADR 013** (Web Search) — Web search was implemented as a standard `ToolProvider`. MCP servers expose tools via a different path (`mcp_servers`). Both patterns coexist: `ToolProvider` for first-class extensions, MCP for ecosystem bridges.
+- **ADR 014** (Task Engine) — Long-running MCP tool calls are handled by the SDK (timeouts, retries). No Task Engine integration needed unless orchestrating multi-step MCP workflows.
+- **ADR 015** (Agent Skills) — MCP Prompts (Phase 2) could overlap with skills. Skills are static knowledge; MCP prompts are dynamic from servers. Complementary, not conflicting.
 
 ## References
 
