@@ -1,4 +1,4 @@
-"""Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider."""
+"""Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider."""
 
 import asyncio
 import sys
@@ -41,11 +41,9 @@ class StreamState:
 
 
 class TelegramChannelExtension:
-    """Extension + ChannelProvider + ServiceProvider + SetupProvider: Telegram Bot API via aiogram long-polling.
+    """Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider.
 
-    Receives user messages via polling, emits user.message events.
-    Sends agent responses via send_to_user.
-    Supports interactive setup via SetupProvider.
+    Single-user app: always sends to self._chat_id regardless of user_id argument.
     """
 
     def __init__(self) -> None:
@@ -60,6 +58,38 @@ class TelegramChannelExtension:
         self._stream_edit_interval_ms = 500
         self._stream_min_chunk_chars = 20
         self._streams: dict[str, StreamState] = {}
+
+    # ------------------------------------------------------------------ #
+    # ContextProvider                                                       #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def context_priority(self) -> int:
+        return 10  # inject before Memory (priority=100)
+
+    async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str | None:
+        if self._bot and self._token and self._chat_id:
+            return (
+                "## Available channels\n"
+                "- telegram_channel — READY. "
+                "Use send_to_channel(channel_id='telegram_channel', text=...) to send messages. "
+                "Do NOT ask the user for chat_id or any Telegram credentials — everything is already configured.\n"
+            )
+        if self._token:
+            return (
+                "## Available channels\n"
+                "- telegram_channel — TOKEN OK, awaiting first /start from user to capture chat_id. "
+                "Cannot send proactive messages yet.\n"
+            )
+        return (
+            "## Available channels\n"
+            "- telegram_channel — NOT CONFIGURED (token missing). "
+            "Ask the user to run Telegram setup before attempting to send.\n"
+        )
+
+    # ------------------------------------------------------------------ #
+    # SetupProvider                                                         #
+    # ------------------------------------------------------------------ #
 
     def get_setup_schema(self) -> list[dict]:
         """SetupProvider: schema for interactive configuration."""
@@ -123,6 +153,10 @@ class TelegramChannelExtension:
                 await bot.session.close()
         except Exception:
             return False, "Telegram API rejected the token"
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle                                                             #
+    # ------------------------------------------------------------------ #
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
@@ -231,6 +265,10 @@ class TelegramChannelExtension:
     def health_check(self) -> bool:
         return bool(self._bot and self._token and self._chat_id)
 
+    # ------------------------------------------------------------------ #
+    # ServiceProvider                                                       #
+    # ------------------------------------------------------------------ #
+
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""
         if not self._bot or not self._dp or not self._token:
@@ -250,6 +288,10 @@ class TelegramChannelExtension:
                     await self._bot.session.close()
                 except Exception:
                     pass
+
+    # ------------------------------------------------------------------ #
+    # Streaming helpers                                                     #
+    # ------------------------------------------------------------------ #
 
     async def _typing_heartbeat(self) -> None:
         """Send typing action every 4 seconds (Telegram shows it for 5s). Run as task until cancelled."""
@@ -309,13 +351,10 @@ class TelegramChannelExtension:
             )
             state.last_edit_at = now
         except Exception:
-            # Swallow transient Telegram errors; next chunk will try again.
             pass
 
     async def on_stream_status(self, user_id: str, status: str) -> None:
         if not self._streaming_enabled or not self._bot:
-            return
-        if str(user_id) != str(self._chat_id):
             return
         try:
             await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
@@ -347,8 +386,6 @@ class TelegramChannelExtension:
                     parse_mode=ParseMode.HTML,
                 )
             else:
-                # Split into MAX_TG_MESSAGE_LEN chunks; replace placeholder with the
-                # first chunk and send the rest as new messages.
                 parts = [
                     formatted[i : i + MAX_TG_MESSAGE_LEN]
                     for i in range(0, len(formatted), MAX_TG_MESSAGE_LEN)
@@ -371,26 +408,22 @@ class TelegramChannelExtension:
                     "Failed to finalize stream for %s: %s", user_id, e
                 )
 
-    async def send_to_user(self, user_id: str, message: str) -> None:
-        """ChannelProvider: deliver agent response to user."""
-        if not self._bot or not self._token or not self._chat_id:
-            return
-        if str(user_id) != self._chat_id:
-            return
-        try:
-            await self._bot.send_message(
-                chat_id=self._chat_id,
-                text=md_to_tg_html(message),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as e:
-            if self._ctx:
-                self._ctx.logger.exception("Failed to send to %s: %s", self._chat_id, e)
+    # ------------------------------------------------------------------ #
+    # ChannelProvider                                                       #
+    # ------------------------------------------------------------------ #
 
-    async def send_message(self, message: str) -> None:
-        """Proactive: deliver to the channel's default recipient."""
+    async def send_to_user(self, user_id: str, message: str) -> None:
+        """ChannelProvider: deliver message to the configured chat_id.
+
+        Single-user app: user_id argument is ignored — always sends to self._chat_id.
+        Raises RuntimeError if the channel is not ready so the agent gets an explicit
+        error instead of a silent no-op.
+        """
         if not self._bot or not self._token or not self._chat_id:
-            return
+            raise RuntimeError(
+                "telegram_channel is not ready: token or chat_id missing. "
+                "Ask the user to complete Telegram setup."
+            )
         try:
             await self._bot.send_message(
                 chat_id=self._chat_id,
@@ -400,3 +433,8 @@ class TelegramChannelExtension:
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception("Failed to send message: %s", e)
+            raise
+
+    async def send_message(self, message: str) -> None:
+        """Proactive: deliver to the channel's default recipient. Alias for send_to_user."""
+        await self.send_to_user(self._chat_id or "", message)
