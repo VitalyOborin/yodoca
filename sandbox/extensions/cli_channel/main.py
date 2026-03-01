@@ -109,38 +109,38 @@ class CliChannelExtension:
             },
         )
 
+    async def _wait_for_response_then_yield(self) -> None:
+        """Wait for agent response (with timeout), then yield for event delivery."""
+        if self._response_complete.is_set():
+            return
+        try:
+            await asyncio.wait_for(
+                self._response_complete.wait(),
+                timeout=self._RESPONSE_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Timed out waiting for agent response")
+            self._response_complete.set()
+        await asyncio.sleep(0.05)
+
+    async def _process_one_intercept(self) -> bool:
+        """Process one pending intercept (MCP approval or secure input). Return True if processed."""
+        try:
+            req = self._intercept_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return False
+        if req.get("_type") == "mcp_approval":
+            await self._handle_mcp_approval(req)
+        else:
+            await self._handle_secure_input(req)
+        return True
+
     async def _input_loop(self) -> None:
         assert self.context is not None, "initialize() must be called before start()"
         while True:
-            # Block until the agent finishes its current response so that
-            # any follow-up events (e.g. SECURE_INPUT_REQUEST) published
-            # during that response have time to reach our intercept queue
-            # before we show the next ``>`` prompt.
-            if not self._response_complete.is_set():
-                try:
-                    await asyncio.wait_for(
-                        self._response_complete.wait(),
-                        timeout=self._RESPONSE_TIMEOUT_SEC,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("Timed out waiting for agent response")
-                    self._response_complete.set()
-                # The EventBus dispatch loop delivers SECURE_INPUT_REQUEST
-                # asynchronously; yield briefly so it completes delivery.
-                await asyncio.sleep(0.05)
-
-            if not self._intercept_queue.empty():
-                try:
-                    req = self._intercept_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                else:
-                    if req.get("_type") == "mcp_approval":
-                        await self._handle_mcp_approval(req)
-                    else:
-                        await self._handle_secure_input(req)
-                    continue
-
+            await self._wait_for_response_then_yield()
+            if await self._process_one_intercept():
+                continue
             try:
                 line = await asyncio.to_thread(input, "> ")
             except (EOFError, KeyboardInterrupt):
@@ -180,6 +180,20 @@ class CliChannelExtension:
         )
         print("Approved." if approved else "Rejected.")
 
+    async def _read_secret_prompt(self, prompt: str) -> str | None:
+        """Read a secret via getpass. Returns None on cancel/EOF/empty; else the trimmed value."""
+        while True:
+            try:
+                value = await asyncio.to_thread(getpass.getpass, prompt)
+            except (EOFError, KeyboardInterrupt):
+                return None
+            value = value.strip()
+            if not value:
+                continue
+            if value.lower() == "cancel":
+                return None
+            return value
+
     async def _handle_secure_input(self, req: dict[str, Any]) -> None:
         """Collect secret via getpass, store in keyring, emit synthetic confirmation."""
         secret_id = req["secret_id"]
@@ -188,34 +202,23 @@ class CliChannelExtension:
             f"\n[Security] The AI agent requests secure input: {prompt}\n"
             "(input hidden, type 'cancel' to abort): "
         )
-        while True:
-            try:
-                value = await asyncio.to_thread(getpass.getpass, framed)
-            except (EOFError, KeyboardInterrupt):
-                await self._emit_user_message(
-                    f"[System] Secret input for '{secret_id}' cancelled by user."
-                )
-                return
-            value = value.strip()
-            if not value:
-                continue
-            if value.lower() == "cancel":
-                await self._emit_user_message(
-                    f"[System] Secret input for '{secret_id}' cancelled by user."
-                )
-                return
-            try:
-                await self.context.set_secret(secret_id, value)
-            except Exception:
-                logger.exception("Failed to store secret %s", secret_id)
-                await self._emit_user_message(
-                    f"[System] Failed to save secret '{secret_id}'. Check keyring availability."
-                )
-                return
+        value = await self._read_secret_prompt(framed)
+        if value is None:
             await self._emit_user_message(
-                f"[System] Secret '{secret_id}' saved successfully."
+                f"[System] Secret input for '{secret_id}' cancelled by user."
             )
             return
+        try:
+            await self.context.set_secret(secret_id, value)
+        except Exception:
+            logger.exception("Failed to store secret %s", secret_id)
+            await self._emit_user_message(
+                f"[System] Failed to save secret '{secret_id}'. Check keyring availability."
+            )
+            return
+        await self._emit_user_message(
+            f"[System] Secret '{secret_id}' saved successfully."
+        )
 
     async def send_to_user(self, _user_id: str, message: str) -> None:
         print(message)
