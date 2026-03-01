@@ -9,61 +9,49 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+async def _probe_models_endpoint(
+    url: str,
+    headers: dict[str, str],
+    timeout: float = 10.0,
+) -> tuple[bool, str]:
+    """GET a /models-style endpoint and return (success, message)."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 401:
+                return False, "Invalid API key"
+            if resp.status_code >= 400:
+                return False, f"HTTP {resp.status_code}"
+            data = resp.json()
+            models = data.get("data", [])
+            count = len(models) if isinstance(models, list) else 0
+            return True, f"connected ({count} models)" if count else "connected"
+    except httpx.TimeoutException:
+        return False, "Connection timeout"
+    except Exception as e:
+        logger.debug("Probe failed: %s", e)
+        return False, str(e)
+
+
 async def probe_openai_compatible(
     base_url: str,
     api_key: str,
     timeout: float = 10.0,
 ) -> tuple[bool, str]:
-    """Probe an OpenAI-compatible API (OpenAI, OpenRouter, LM Studio).
-
-    Returns (success, message).
-    """
+    """Probe an OpenAI-compatible API (OpenAI, OpenRouter, LM Studio)."""
     url = base_url.rstrip("/") + "/models"
-    headers: dict[str, str] = {"Authorization": f"Bearer {api_key}"}
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 401:
-                return False, "Invalid API key"
-            if resp.status_code >= 400:
-                return False, f"HTTP {resp.status_code}"
-            data = resp.json()
-            models = data.get("data", [])
-            count = len(models) if isinstance(models, list) else 0
-            return True, f"connected ({count} models)" if count else "connected"
-    except httpx.TimeoutException:
-        return False, "Connection timeout"
-    except Exception as e:
-        logger.debug("Probe failed: %s", e)
-        return False, str(e)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    return await _probe_models_endpoint(url, headers, timeout)
 
 
 async def probe_anthropic(api_key: str, timeout: float = 10.0) -> tuple[bool, str]:
-    """Probe Anthropic API via models endpoint (free, no completion cost).
-
-    Returns (success, message).
-    """
+    """Probe Anthropic API via models endpoint (free, no completion cost)."""
     url = "https://api.anthropic.com/v1/models"
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
     }
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 401:
-                return False, "Invalid API key"
-            if resp.status_code >= 400:
-                return False, f"HTTP {resp.status_code}"
-            data = resp.json()
-            models = data.get("data", [])
-            count = len(models) if isinstance(models, list) else 0
-            return True, f"connected ({count} models)" if count else "connected"
-    except httpx.TimeoutException:
-        return False, "Connection timeout"
-    except Exception as e:
-        logger.debug("Probe failed: %s", e)
-        return False, str(e)
+    return await _probe_models_endpoint(url, headers, timeout)
 
 
 async def probe_provider(

@@ -39,16 +39,16 @@ def write_config(
     # Ensure default agent has explicit default instructions path
     if "default" in base["agents"] and isinstance(base["agents"]["default"], dict):
         base["agents"]["default"].setdefault("instructions", "prompts/default.jinja2")
-    # Orchestrator uses same config as default (instructions, model, provider from onboarding)
     default_cfg = base["agents"].get("default")
     if isinstance(default_cfg, dict):
         base["agents"]["orchestrator"] = {
-            "instructions": default_cfg.get("instructions", "prompts/default.jinja2"),
-            "model": default_cfg.get("model"),
-            "provider": default_cfg.get("provider"),
-        }
-        base["agents"]["orchestrator"] = {
-            k: v for k, v in base["agents"]["orchestrator"].items() if v is not None
+            k: v
+            for k, v in {
+                "instructions": default_cfg.get("instructions", "prompts/default.jinja2"),
+                "model": default_cfg.get("model"),
+                "provider": default_cfg.get("provider"),
+            }.items()
+            if v is not None
         }
     if state.extensions:
         base["extensions"] = {**(base.get("extensions") or {}), **state.extensions}

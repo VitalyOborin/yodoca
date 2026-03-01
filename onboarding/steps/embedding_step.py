@@ -9,6 +9,7 @@ from questionary import Choice
 
 from onboarding.state import WizardState
 from onboarding.steps.provider_step import (
+    _ask_until_nonempty,
     add_provider_credentials_only,
     get_provider_choices_not_in_state,
 )
@@ -57,19 +58,18 @@ def run_embedding_step(state: WizardState) -> bool:
         }
         return True
 
-    use_same = (
-        questionary.confirm(
+    if default_provider in embedding_capable:
+        use_same = questionary.confirm(
             "Use same provider as default?",
-            default=default_provider in embedding_capable,
+            default=True,
             style=STYLE,
         ).ask()
-        if default_provider in embedding_capable
-        else False
-    )
-    if use_same is None:
-        return False
+        if use_same is None:
+            return False
+    else:
+        use_same = False
 
-    if use_same and default_provider in _EMBEDDING_MODELS:
+    if use_same:
         provider_id = default_provider
     else:
         provider_id = _choose_or_add_embedding_provider(state, embedding_capable)
@@ -135,13 +135,7 @@ def _select_embedding_model(provider_id: str) -> str | None:
     """Select embedding model for provider. Returns model name or None if cancelled."""
     models = _EMBEDDING_MODELS.get(provider_id, [])
     if not models:
-        while True:
-            val = questionary.text("Embedding model name:", style=STYLE).ask()
-            if val is None:
-                return None
-            if val and val.strip():
-                return val.strip()
-            print("Model name cannot be empty. Try again.\n")
+        return _ask_until_nonempty("Embedding model name:")
 
     choices: list[Choice] = [Choice(m, m) for m in models]
     choices.append(Choice("Enter model name manually...", _MANUAL_ENTRY))
@@ -153,14 +147,6 @@ def _select_embedding_model(provider_id: str) -> str | None:
     ).ask()
     if selected is None:
         return None
-
     if selected == _MANUAL_ENTRY:
-        while True:
-            val = questionary.text("Embedding model name:", style=STYLE).ask()
-            if val is None:
-                return None
-            if val and val.strip():
-                return val.strip()
-            print("Model name cannot be empty. Try again.\n")
-
+        return _ask_until_nonempty("Embedding model name:")
     return selected

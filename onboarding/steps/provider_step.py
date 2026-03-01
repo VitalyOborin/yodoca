@@ -3,7 +3,7 @@
 Sequential add-one-at-a-time flow: select provider -> credentials -> model -> add another?
 """
 
-from typing import Any
+from typing import Any, Callable
 
 import questionary
 from questionary import Choice
@@ -72,18 +72,16 @@ def run_provider_step(state: WizardState) -> bool:
     return True
 
 
+_CREDENTIAL_COLLECTORS: dict[str, "Callable[[WizardState], bool]"] = {}
+
+
 def add_provider_credentials_only(state: WizardState, provider_id: str) -> bool:
     """Add one provider (credentials only, no model). For use by embedding step.
     Returns False if user cancelled."""
-    if provider_id == "openai":
-        return _collect_openai(state)
-    if provider_id == "anthropic":
-        return _collect_anthropic(state)
-    if provider_id == "openrouter":
-        return _collect_openrouter(state)
-    if provider_id == "lm_studio":
-        return _collect_lm_studio(state)
-    return False
+    collector = _CREDENTIAL_COLLECTORS.get(provider_id)
+    if collector is None:
+        return False
+    return collector(state)
 
 
 def get_provider_choices_not_in_state(state: WizardState) -> list[tuple[str, str]]:
@@ -110,13 +108,7 @@ def _select_model(provider_id: str) -> str | None:
     """Select model for provider. Returns model name or None if cancelled."""
     models = _PROVIDER_MODELS.get(provider_id, [])
     if not models:
-        while True:
-            val = questionary.text("Model name:", style=STYLE).ask()
-            if val is None:
-                return None
-            if val and val.strip():
-                return val.strip()
-            print("Model name cannot be empty. Try again.\n")
+        return _ask_until_nonempty("Model name:")
 
     choices: list[Choice] = [Choice(m, m) for m in models]
     choices.append(Choice("Enter model name manually...", _MANUAL_ENTRY))
@@ -128,16 +120,8 @@ def _select_model(provider_id: str) -> str | None:
     ).ask()
     if selected is None:
         return None
-
     if selected == _MANUAL_ENTRY:
-        while True:
-            val = questionary.text("Model name:", style=STYLE).ask()
-            if val is None:
-                return None
-            if val and val.strip():
-                return val.strip()
-            print("Model name cannot be empty. Try again.\n")
-
+        return _ask_until_nonempty("Model name:")
     return selected
 
 
@@ -216,3 +200,11 @@ def _collect_lm_studio(state: WizardState) -> bool:
             "supports_hosted_tools": False,
         }
     return True
+
+
+_CREDENTIAL_COLLECTORS.update({
+    "openai": _collect_openai,
+    "anthropic": _collect_anthropic,
+    "openrouter": _collect_openrouter,
+    "lm_studio": _collect_lm_studio,
+})
