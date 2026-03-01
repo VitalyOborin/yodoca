@@ -34,6 +34,22 @@ async def _resolve_secrets_in_string(value: str, get_secret: Any) -> str | None:
     return "".join(result_parts)
 
 
+async def _resolve_dict_secrets(
+    d: dict[str, Any], get_secret: Any
+) -> dict[str, Any] | None:
+    """Resolve ${NAME} in all string values of a dict. Return None if any secret is missing."""
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            resolved_v = await _resolve_secrets_in_string(v, get_secret)
+            if resolved_v is None:
+                return None
+            out[k] = resolved_v
+        else:
+            out[k] = v
+    return out
+
+
 async def _resolve_all_secrets(cfg: dict[str, Any], get_secret: Any) -> dict[str, Any] | None:
     """Resolve ${NAME} in url, headers values, env values. Return None if any missing."""
     resolved: dict[str, Any] = dict(cfg)
@@ -44,29 +60,12 @@ async def _resolve_all_secrets(cfg: dict[str, Any], get_secret: Any) -> dict[str
             return None
         resolved["url"] = url
 
-    if "headers" in resolved and isinstance(resolved["headers"], dict):
-        new_headers: dict[str, str] = {}
-        for k, v in resolved["headers"].items():
-            if isinstance(v, str):
-                v2 = await _resolve_secrets_in_string(v, get_secret)
-                if v2 is None:
-                    return None
-                new_headers[k] = v2
-            else:
-                new_headers[k] = v
-        resolved["headers"] = new_headers
-
-    if "env" in resolved and isinstance(resolved["env"], dict):
-        new_env: dict[str, str] = {}
-        for k, v in resolved["env"].items():
-            if isinstance(v, str):
-                v2 = await _resolve_secrets_in_string(v, get_secret)
-                if v2 is None:
-                    return None
-                new_env[k] = v2
-            else:
-                new_env[k] = v
-        resolved["env"] = new_env
+    for key in ("headers", "env"):
+        if key in resolved and isinstance(resolved[key], dict):
+            result = await _resolve_dict_secrets(resolved[key], get_secret)
+            if result is None:
+                return None
+            resolved[key] = result
 
     return resolved
 
@@ -79,6 +78,61 @@ def _extract_text_from_prompt_messages(messages: list[Any]) -> str:
         if content is not None and hasattr(content, "text") and content.text:
             parts.append(content.text)
     return "\n\n".join(parts) if parts else ""
+
+
+def _parse_common_options(entry: dict[str, Any]) -> dict[str, Any]:
+    """Extract cache_tools, tool_filter, require_approval from a server config entry."""
+    opts: dict[str, Any] = {"cache_tools_list": entry.get("cache_tools", False)}
+
+    names = entry.get("tool_filter")
+    if isinstance(names, list) and names:
+        opts["tool_filter"] = create_static_tool_filter(allowed_tool_names=names)
+
+    rap = entry.get("require_approval")
+    if isinstance(rap, dict):
+        tool_names = rap.get("always")
+        if isinstance(tool_names, list) and tool_names:
+            opts["require_approval"] = {"always": {"tool_names": tool_names}}
+
+    return opts
+
+
+def _build_server(alias: str, entry: dict[str, Any]) -> Any | None:
+    """Build MCPServerStdio or MCPServerStreamableHttp from config. Returns None on bad config."""
+    transport = entry.get("transport")
+    common = _parse_common_options(entry)
+
+    if transport == "stdio":
+        command = entry.get("command")
+        args = entry.get("args")
+        if not command or not args:
+            logger.warning("mcp: server %s (stdio) missing command or args", alias)
+            return None
+        params: dict[str, Any] = {"command": command, "args": args}
+        if "env" in entry:
+            params["env"] = entry["env"]
+        return MCPServerStdio(name=alias, params=params, **common)
+
+    if transport == "streamable-http":
+        url = entry.get("url")
+        if not url:
+            logger.warning("mcp: server %s (streamable-http) missing url", alias)
+            return None
+        params = {"url": url, "timeout": 10}
+        if "headers" in entry:
+            params["headers"] = entry["headers"]
+        return MCPServerStreamableHttp(name=alias, params=params, **common)
+
+    logger.warning("mcp: server %s: unsupported transport %s", alias, transport)
+    return None
+
+
+def _find_missing_secret_names(entry: dict[str, Any]) -> list[str]:
+    """Extract ${SECRET} names from url, headers, env values for diagnostics."""
+    parts = [str(entry.get("url", ""))]
+    parts.extend(str(v) for v in (entry.get("headers") or {}).values())
+    parts.extend(str(v) for v in (entry.get("env") or {}).values())
+    return list(dict.fromkeys(_SECRET_PATTERN.findall(" ".join(parts))))
 
 
 class McpBridgeExtension:
@@ -114,69 +168,20 @@ class McpBridgeExtension:
 
             resolved = await _resolve_all_secrets(entry, self._ctx.get_secret)
             if resolved is None:
-                parts = [str(entry.get("url", ""))]
-                parts.extend(str(v) for v in (entry.get("headers") or {}).values())
-                parts.extend(str(v) for v in (entry.get("env") or {}).values())
-                secret_names = list(dict.fromkeys(_SECRET_PATTERN.findall(" ".join(parts))))
                 logger.warning(
                     "mcp: skipping server %s: missing secret(s) %s",
                     alias,
-                    secret_names,
+                    _find_missing_secret_names(entry),
                 )
                 continue
             entry = resolved
 
             try:
-                cache_tools = entry.get("cache_tools", False)
-                tool_filter_val = None
-                if "tool_filter" in entry:
-                    names = entry["tool_filter"]
-                    if isinstance(names, list) and names:
-                        tool_filter_val = create_static_tool_filter(allowed_tool_names=names)
-                require_approval_val = None
-                if "require_approval" in entry:
-                    rap = entry["require_approval"]
-                    if isinstance(rap, dict) and "always" in rap:
-                        tool_names = rap["always"]
-                        if isinstance(tool_names, list) and tool_names:
-                            require_approval_val = {"always": {"tool_names": tool_names}}
-
-                if transport == "stdio":
-                    command = entry.get("command")
-                    args = entry.get("args")
-                    if not command or not args:
-                        logger.warning("mcp: server %s (stdio) missing command or args", alias)
-                        continue
-                    params: dict[str, Any] = {"command": command, "args": args}
-                    if "env" in entry:
-                        params["env"] = entry["env"]
-                    server = MCPServerStdio(
-                        name=alias,
-                        params=params,
-                        cache_tools_list=cache_tools,
-                        tool_filter=tool_filter_val,
-                        require_approval=require_approval_val,
-                    )
-                elif transport == "streamable-http":
-                    url = entry.get("url")
-                    if not url:
-                        logger.warning("mcp: server %s (streamable-http) missing url", alias)
-                        continue
-                    params = {"url": url, "timeout": 10}
-                    if "headers" in entry:
-                        params["headers"] = entry["headers"]
-                    server = MCPServerStreamableHttp(
-                        name=alias,
-                        params=params,
-                        cache_tools_list=cache_tools,
-                        tool_filter=tool_filter_val,
-                        require_approval=require_approval_val,
-                    )
-                else:
-                    logger.warning("mcp: server %s: unsupported transport %s", alias, transport)
-                    continue
+                server = _build_server(alias, entry)
             except Exception as e:
                 logger.exception("mcp: failed to build server %s: %s", alias, e)
+                continue
+            if server is None:
                 continue
 
             servers.append(server)
@@ -210,7 +215,7 @@ class McpBridgeExtension:
     def get_mcp_server_aliases(self) -> list[str]:
         if not self._manager:
             return []
-        return [getattr(s, "name", "") for s in self._manager.active_servers if hasattr(s, "name")]
+        return [getattr(s, "name", "") for s in self._manager.active_servers]
 
     @property
     def context_priority(self) -> int:
@@ -229,52 +234,74 @@ class McpBridgeExtension:
             if not alias:
                 continue
             prompts_cfg = self._server_prompts_config.get(alias)
-            if prompts_cfg is None or prompts_cfg == []:
+            if not prompts_cfg:
                 continue
 
-            to_fetch: list[tuple[str, dict[str, Any] | None]] = []
-
-            if prompts_cfg == "auto":
-                try:
-                    list_result = await server.list_prompts()
-                    for p in getattr(list_result, "prompts", []) or []:
-                        name = getattr(p, "name", "")
-                        if name:
-                            to_fetch.append((name, None))
-                except Exception as e:
-                    logger.debug("mcp: list_prompts failed for %s: %s", alias, e)
-                    continue
-            elif isinstance(prompts_cfg, list):
-                for item in prompts_cfg:
-                    if isinstance(item, dict):
-                        name = item.get("name")
-                        args = item.get("args")
-                        if name:
-                            to_fetch.append((name, args if isinstance(args, dict) else None))
-                    elif isinstance(item, str):
-                        to_fetch.append((item, None))
+            to_fetch = await self._resolve_prompts_to_fetch(server, alias, prompts_cfg)
 
             for name, args in to_fetch:
-                cache_key = (alias, name)
-                cached = self._prompts_cache.get(cache_key)
-                if cached is not None and (now - cached[1]) < cache_ttl:
-                    text = cached[0]
-                else:
-                    try:
-                        result = await server.get_prompt(name, args)
-                        text = _extract_text_from_prompt_messages(
-                            getattr(result, "messages", []) or []
-                        )
-                        self._prompts_cache[cache_key] = (text, now)
-                    except Exception as e:
-                        logger.debug("mcp: get_prompt %s/%s failed: %s", alias, name, e)
-                        continue
+                text = await self._fetch_prompt_cached(
+                    server, alias, name, args, now, cache_ttl
+                )
                 if text:
                     parts.append(f"[MCP Prompt: {alias}/{name}]\n{text}")
 
         if not parts:
             return None
         return "\n\n---\n\n".join(parts)
+
+    async def _resolve_prompts_to_fetch(
+        self, server: Any, alias: str, prompts_cfg: Any
+    ) -> list[tuple[str, dict[str, Any] | None]]:
+        """Turn prompts config ('auto' or explicit list) into (name, args) pairs."""
+        if prompts_cfg == "auto":
+            try:
+                list_result = await server.list_prompts()
+                return [
+                    (getattr(p, "name", ""), None)
+                    for p in getattr(list_result, "prompts", []) or []
+                    if getattr(p, "name", "")
+                ]
+            except Exception as e:
+                logger.debug("mcp: list_prompts failed for %s: %s", alias, e)
+                return []
+
+        result: list[tuple[str, dict[str, Any] | None]] = []
+        if isinstance(prompts_cfg, list):
+            for item in prompts_cfg:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    args = item.get("args")
+                    if name:
+                        result.append((name, args if isinstance(args, dict) else None))
+                elif isinstance(item, str):
+                    result.append((item, None))
+        return result
+
+    async def _fetch_prompt_cached(
+        self,
+        server: Any,
+        alias: str,
+        name: str,
+        args: dict[str, Any] | None,
+        now: float,
+        cache_ttl: float,
+    ) -> str:
+        """Return prompt text from cache or fetch from server. Empty string on failure."""
+        cache_key = (alias, name)
+        cached = self._prompts_cache.get(cache_key)
+        if cached is not None and (now - cached[1]) < cache_ttl:
+            return cached[0]
+        try:
+            result = await server.get_prompt(name, args)
+            text = _extract_text_from_prompt_messages(
+                getattr(result, "messages", []) or []
+            )
+            self._prompts_cache[cache_key] = (text, now)
+            return text
+        except Exception as e:
+            logger.debug("mcp: get_prompt %s/%s failed: %s", alias, name, e)
+            return ""
 
     async def run_background(self) -> None:
         interval = self._ctx.get_config("reconnect_interval", 120)
@@ -286,19 +313,11 @@ class McpBridgeExtension:
                 if self._manager.failed_servers:
                     reconnected = await self._manager.reconnect(failed_only=True)
                     if reconnected:
-                        logger.info(
-                            "mcp: reconnected %d server(s)",
-                            len(reconnected),
-                        )
+                        names = [getattr(s, "name", "") for s in reconnected]
+                        logger.info("mcp: reconnected %d server(s)", len(reconnected))
                         await self._ctx.emit(
                             "mcp.servers_reconnected",
-                            {
-                                "reconnected": [
-                                    getattr(s, "name", "")
-                                    for s in reconnected
-                                    if hasattr(s, "name")
-                                ],
-                            },
+                            {"reconnected": names},
                         )
         except asyncio.CancelledError:
             pass
