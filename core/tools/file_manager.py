@@ -57,6 +57,81 @@ class SandboxEditor:
 apply_patch_tool = ApplyPatchTool(editor=SandboxEditor())
 
 
+def _rel(p: Path) -> str:
+    return p.relative_to(SANDBOX_DIR).as_posix()
+
+
+def _file_read(target: Path) -> str:
+    if not target.is_file():
+        return f"Error: not a file or does not exist: {_rel(target)}"
+    return target.read_text(encoding="utf-8")
+
+
+def _file_write(target: Path, content: str | None) -> str:
+    if content is None:
+        return "Error: content is required for write action"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"Wrote {_rel(target)}"
+
+
+def _file_delete(target: Path) -> str:
+    if not target.exists():
+        return f"Error: not found: {_rel(target)}"
+    if target.is_file():
+        target.unlink()
+        return f"Deleted file {_rel(target)}"
+    if target.is_dir():
+        if any(target.iterdir()):
+            return f"Error: directory not empty: {_rel(target)}"
+        target.rmdir()
+        return f"Deleted directory {_rel(target)}"
+    return f"Error: cannot delete: {_rel(target)}"
+
+
+def _file_copy(target: Path, destination: str | None) -> str:
+    if destination is None:
+        return "Error: destination is required for copy action"
+    dst = resolve_sandbox_path(destination)
+    if not target.exists():
+        return f"Error: source not found: {_rel(target)}"
+    if target.is_file():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, dst)
+    else:
+        shutil.copytree(target, dst)
+    return f"Copied {_rel(target)} -> {_rel(dst)}"
+
+
+def _file_move(target: Path, destination: str | None) -> str:
+    if destination is None:
+        return "Error: destination is required for move action"
+    dst = resolve_sandbox_path(destination)
+    if not target.exists():
+        return f"Error: source not found: {_rel(target)}"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    target.rename(dst)
+    return f"Moved {_rel(target)} -> {_rel(dst)}"
+
+
+def _file_stat(target: Path) -> str:
+    if not target.exists():
+        return f"Path does not exist: {_rel(target)}"
+    if target.is_file():
+        return f"type=file, size={target.stat().st_size} bytes, path={_rel(target)}"
+    if target.is_dir():
+        return f"type=directory, entries={sum(1 for _ in target.iterdir())}, path={_rel(target)}"
+    return f"type=unknown, path={_rel(target)}"
+
+
+def _file_list(target: Path) -> str:
+    if not target.is_dir():
+        return f"Error: not a directory: {_rel(target)}"
+    items = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    lines = [f"{'[DIR]' if p.is_dir() else '     '} {p.name}" for p in items]
+    return "\n".join(lines) if lines else "(empty)"
+
+
 @function_tool(name_override="file", strict_mode=False)
 def file(
     action: Literal["read", "write", "delete", "copy", "move", "stat", "list"],
@@ -64,100 +139,26 @@ def file(
     content: str | None = None,
     destination: str | None = None,
 ) -> str:
-    """Unified file operations. Works ONLY within the sandbox directory; paths outside are rejected.
-
-    Args:
-        action: Operation to perform.
-            read: read file contents
-            write: create new file or overwrite existing with content
-            delete: delete file or empty directory
-            copy: copy file or directory to destination
-            move: rename or move file/directory to destination
-            stat: check existence and get info (type, size)
-            list: list files and directories in path
-        path: Path relative to sandbox. Absolute paths must be inside sandbox; otherwise rejected.
-        content: Required for write. Content to write.
-        destination: Required for copy and move. Target path.
-    """
+    """Unified file operations. Works ONLY within the sandbox directory; paths outside are rejected."""
     try:
         target = resolve_sandbox_path(path)
         SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
-
-        def _rel(p: Path) -> str:
-            return p.relative_to(SANDBOX_DIR).as_posix()
-
         if action == "read":
-            if not target.is_file():
-                return f"Error: not a file or does not exist: {_rel(target)}"
-            return target.read_text(encoding="utf-8")
-
+            return _file_read(target)
         if action == "write":
-            if content is None:
-                return "Error: content is required for write action"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            return f"Wrote {_rel(target)}"
-
+            return _file_write(target, content)
         if action == "delete":
-            if not target.exists():
-                return f"Error: not found: {_rel(target)}"
-            if target.is_file():
-                target.unlink()
-                return f"Deleted file {_rel(target)}"
-            if target.is_dir():
-                if any(target.iterdir()):
-                    return f"Error: directory not empty: {_rel(target)}"
-                target.rmdir()
-                return f"Deleted directory {_rel(target)}"
-            return f"Error: cannot delete: {_rel(target)}"
-
+            return _file_delete(target)
         if action == "copy":
-            if destination is None:
-                return "Error: destination is required for copy action"
-            dst = resolve_sandbox_path(destination)
-            if not target.exists():
-                return f"Error: source not found: {_rel(target)}"
-            if target.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(target, dst)
-            else:
-                shutil.copytree(target, dst)
-            return f"Copied {_rel(target)} -> {_rel(dst)}"
-
+            return _file_copy(target, destination)
         if action == "move":
-            if destination is None:
-                return "Error: destination is required for move action"
-            dst = resolve_sandbox_path(destination)
-            if not target.exists():
-                return f"Error: source not found: {_rel(target)}"
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            target.rename(dst)
-            return f"Moved {_rel(target)} -> {_rel(dst)}"
-
+            return _file_move(target, destination)
         if action == "stat":
-            if not target.exists():
-                return f"Path does not exist: {_rel(target)}"
-            if target.is_file():
-                size = target.stat().st_size
-                return f"type=file, size={size} bytes, path={_rel(target)}"
-            if target.is_dir():
-                count = sum(1 for _ in target.iterdir())
-                return f"type=directory, entries={count}, path={_rel(target)}"
-            return f"type=unknown, path={_rel(target)}"
-
+            return _file_stat(target)
         if action == "list":
-            if not target.is_dir():
-                return f"Error: not a directory: {_rel(target)}"
-            items = sorted(
-                target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
-            )
-            lines = [f"{'[DIR]' if p.is_dir() else '     '} {p.name}" for p in items]
-            return "\n".join(lines) if lines else "(empty)"
-
+            return _file_list(target)
         return f"Error: unknown action: {action}"
     except RuntimeError as e:
-        if "Access denied" in str(e):
-            return str(e)
-        return f"Error: {e}"
+        return str(e) if "Access denied" in str(e) else f"Error: {e}"
     except Exception as e:
         return f"Error: {e}"

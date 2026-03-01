@@ -44,11 +44,17 @@ class OpenAIEmbedder:
             logger.warning(
                 "OpenAI batch embedding failed, falling back to sequential: %s", e
             )
-            results: list[list[float] | None] = []
-            for t in texts:
-                vec = await self._embed_one(t.strip() if t else "", model, dimensions)
-                results.append(vec)
-            return results
+            return await self._embed_batch_fallback(texts, model, dimensions)
+
+    async def _embed_batch_fallback(
+        self, texts: list[str], model: str, dimensions: int | None
+    ) -> list[list[float] | None]:
+        """Fallback: embed one by one when batch API fails."""
+        results: list[list[float] | None] = []
+        for t in texts:
+            vec = await self._embed_one(t.strip() if t else "", model, dimensions)
+            results.append(vec)
+        return results
 
     async def _embed_one(
         self, text: str, model: str, dimensions: int | None
@@ -103,7 +109,7 @@ class OpenAICompatibleProvider:
         cap: type,
         config: ProviderConfig,
         api_key: str | None,
-    ):
+    ) -> OpenAIEmbedder | None:
         from core.llm.capabilities import EmbeddingCapability
 
         if cap is EmbeddingCapability:

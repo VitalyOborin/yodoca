@@ -225,60 +225,65 @@ class Loader:
             template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
         )
 
+    def _register_agent_config_from_manifests(self) -> None:
+        """Register agent config from manifests with model_router (default + overrides)."""
+        if not self._model_router:
+            return
+        default_provider = self._model_router.get_default_provider()
+        for manifest in self._manifests:
+            if manifest.agent and default_provider:
+                agent_id = manifest.agent_id or manifest.id
+                if manifest.agent_config and agent_id in manifest.agent_config:
+                    continue
+                self._model_router.register_agent_config(
+                    agent_id,
+                    {"provider": default_provider, "model": manifest.agent.model},
+                )
+        for manifest in self._manifests:
+            if manifest.agent_config:
+                for aid, acfg in manifest.agent_config.items():
+                    if isinstance(acfg, dict):
+                        self._model_router.register_agent_config(aid, acfg)
+
+    def _build_extension_context(
+        self, ext_id: str, manifest: ExtensionManifest, router: MessageRouter
+    ) -> ExtensionContext:
+        """Build ExtensionContext for one extension."""
+        data_dir_path = self._data_dir / ext_id
+        overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
+        config = {**manifest.config, **overrides}
+        resolved_tools = self._resolve_agent_tools(manifest) if manifest.agent else []
+        resolved_instructions = (
+            self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
+        )
+        agent_model = manifest.agent.model if manifest.agent else ""
+        agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
+        return ExtensionContext(
+            extension_id=ext_id,
+            config=config,
+            logger=logging.getLogger(f"ext.{ext_id}"),
+            router=router,
+            get_extension=self._make_get_extension(ext_id),
+            data_dir_path=data_dir_path,
+            shutdown_event=self._shutdown_event,
+            resolved_tools=resolved_tools,
+            resolved_instructions=resolved_instructions,
+            agent_model=agent_model,
+            model_router=self._model_router,
+            agent_id=agent_id,
+            event_bus=self._event_bus,
+            restart_file_path=self._get_restart_file_path(),
+        )
+
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Skip on exception."""
         self._router = router
-        if self._model_router:
-            default_provider = self._model_router.get_default_provider()
-            for manifest in self._manifests:
-                if manifest.agent and default_provider:
-                    agent_id = manifest.agent_id or manifest.id
-                    if manifest.agent_config and agent_id in manifest.agent_config:
-                        continue
-                    self._model_router.register_agent_config(
-                        agent_id,
-                        {"provider": default_provider, "model": manifest.agent.model},
-                    )
-            for manifest in self._manifests:
-                if manifest.agent_config:
-                    for aid, acfg in manifest.agent_config.items():
-                        if isinstance(acfg, dict):
-                            self._model_router.register_agent_config(aid, acfg)
+        self._register_agent_config_from_manifests()
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
                 continue
             manifest = next(m for m in self._manifests if m.id == ext_id)
-            data_dir_path = self._data_dir / ext_id
-            resolved_tools = (
-                self._resolve_agent_tools(manifest) if manifest.agent else []
-            )
-            resolved_instructions = (
-                self._resolve_agent_instructions(manifest, ext_id)
-                if manifest.agent
-                else ""
-            )
-            agent_model = manifest.agent.model if manifest.agent else ""
-            agent_id = getattr(manifest, "agent_id", None) or (
-                ext_id if manifest.agent else None
-            )
-            overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
-            config = {**manifest.config, **overrides}
-            ctx = ExtensionContext(
-                extension_id=ext_id,
-                config=config,
-                logger=logging.getLogger(f"ext.{ext_id}"),
-                router=router,
-                get_extension=self._make_get_extension(ext_id),
-                data_dir_path=data_dir_path,
-                shutdown_event=self._shutdown_event,
-                resolved_tools=resolved_tools,
-                resolved_instructions=resolved_instructions,
-                agent_model=agent_model,
-                model_router=self._model_router,
-                agent_id=agent_id,
-                event_bus=self._event_bus,
-                restart_file_path=self._get_restart_file_path(),
-            )
+            ctx = self._build_extension_context(ext_id, manifest, router)
             try:
                 await ext.initialize(ctx)
             except Exception as e:
@@ -303,71 +308,66 @@ class Loader:
                     result[sub.topic] = ext_id
         return result
 
-    def _wire_system_topics(self, event_bus: EventBus) -> None:
-        """Register guaranteed system topic handlers. Called before extension wiring."""
-        if not self._router:
-            return
-        router = self._router
-
-        async def on_user_notify(event: Event) -> None:
-            await router.notify_user(
+    async def _on_user_notify(self, event: Event) -> None:
+        if self._router:
+            await self._router.notify_user(
                 event.payload.get("text", ""),
                 event.payload.get("channel_id"),
             )
 
-        event_bus.subscribe(SystemTopics.USER_NOTIFY, on_user_notify, "kernel.system")
-
-        async def on_agent_task(event: Event) -> None:
+    async def _on_agent_task(self, event: Event) -> None:
+        if self._router:
             prompt = event.payload.get("prompt", "")
             channel_id = event.payload.get("channel_id")
-            response = await router.invoke_agent_background(prompt)
+            response = await self._router.invoke_agent_background(prompt)
             if response:
-                await router.notify_user(response, channel_id)
+                await self._router.notify_user(response, channel_id)
 
-        event_bus.subscribe(SystemTopics.AGENT_TASK, on_agent_task, "kernel.system")
+    async def _on_agent_background(self, event: Event) -> None:
+        import time as _time
 
-        async def on_agent_background(event: Event) -> None:
-            import time as _time
-
-            prompt = event.payload.get("prompt", "")
-            correlation_id = event.payload.get("correlation_id") or event.correlation_id
-            started_at = _time.perf_counter()
-
+        if not self._router:
+            return
+        prompt = event.payload.get("prompt", "")
+        correlation_id = event.payload.get("correlation_id") or event.correlation_id
+        started_at = _time.perf_counter()
+        logger.info(
+            "agent loop: start",
+            extra={
+                "correlation_id": correlation_id,
+                "event_id": event.id,
+                "prompt_len": len(prompt),
+            },
+        )
+        try:
+            await self._router.invoke_agent_background(prompt)
+            duration_ms = int((_time.perf_counter() - started_at) * 1000)
             logger.info(
-                "agent loop: start",
+                "agent loop: done",
                 extra={
                     "correlation_id": correlation_id,
                     "event_id": event.id,
-                    "prompt_len": len(prompt),
+                    "duration_ms": duration_ms,
                 },
             )
-            try:
-                await router.invoke_agent_background(prompt)
-                duration_ms = int((_time.perf_counter() - started_at) * 1000)
-                logger.info(
-                    "agent loop: done",
-                    extra={
-                        "correlation_id": correlation_id,
-                        "event_id": event.id,
-                        "duration_ms": duration_ms,
-                    },
-                )
-            except Exception as e:
-                logger.exception("agent loop: failed: %s", e)
-                raise
+        except Exception as e:
+            logger.exception("agent loop: failed: %s", e)
+            raise
 
-        event_bus.subscribe(
-            SystemTopics.AGENT_BACKGROUND, on_agent_background, "kernel.system"
-        )
-
-    def wire_event_subscriptions(self, event_bus: EventBus) -> None:
-        """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
+    def _wire_system_topics(self, event_bus: EventBus) -> None:
+        """Register guaranteed system topic handlers. Called before extension wiring."""
         if not self._router:
             return
+        event_bus.subscribe(SystemTopics.USER_NOTIFY, self._on_user_notify, "kernel.system")
+        event_bus.subscribe(SystemTopics.AGENT_TASK, self._on_agent_task, "kernel.system")
+        event_bus.subscribe(
+            SystemTopics.AGENT_BACKGROUND, self._on_agent_background, "kernel.system"
+        )
+
+    def _wire_notify_user_handlers(self, event_bus: EventBus) -> None:
         router = self._router
-
-        self._wire_system_topics(event_bus)
-
+        if not router:
+            return
         for manifest in self._manifests:
             if not manifest.events or not manifest.events.subscribes:
                 continue
@@ -377,31 +377,59 @@ class Loader:
             for sub in manifest.events.subscribes:
                 if sub.handler != "notify_user":
                     continue
-
                 async def handler(event: Event) -> None:
-                    await router.notify_user(event.payload.get("text", ""))
-
+                    if self._router:
+                        await self._router.notify_user(event.payload.get("text", ""))
                 event_bus.subscribe(sub.topic, handler, ext_id)
 
-        # Kernel: route user.message events into the reactive path (agent -> channel)
-        async def kernel_user_message_handler(event: Event) -> None:
-            text = event.payload.get("text", "").strip()
-            user_id = event.payload.get("user_id", "default")
-            channel_id = event.payload.get("channel_id")
-            if not text or not channel_id:
-                logger.warning(
-                    "user.message missing text or channel_id: %s", event.payload
-                )
-                return
-            channel = router.get_channel(channel_id)
-            if not channel:
-                logger.warning("user.message: unknown channel_id %s", channel_id)
-                return
-            await router.handle_user_message(text, user_id, channel, channel_id)
+    async def _on_kernel_user_message(self, event: Event) -> None:
+        if not self._router:
+            return
+        router = self._router
+        text = event.payload.get("text", "").strip()
+        user_id = event.payload.get("user_id", "default")
+        channel_id = event.payload.get("channel_id")
+        if not text or not channel_id:
+            logger.warning(
+                "user.message missing text or channel_id: %s", event.payload
+            )
+            return
+        channel = router.get_channel(channel_id)
+        if not channel:
+            logger.warning("user.message: unknown channel_id %s", channel_id)
+            return
+        await router.handle_user_message(text, user_id, channel, channel_id)
 
-        event_bus.subscribe("user.message", kernel_user_message_handler, "kernel")
+    def _make_proactive_handler(
+        self, topic: str, ext_id: str, agent: AgentProvider
+    ) -> Callable[[Event], Any]:
+        router = self._router
+        async def handler(event: Event) -> None:
+            task = (
+                event.payload.get("prompt")
+                or f"Background event '{topic}': {event.payload}"
+            )
+            context = AgentInvocationContext(correlation_id=event.correlation_id)
+            try:
+                response = await agent.invoke(task, context)
+                if response.status == "success" and response.content and router:
+                    await router.notify_user(
+                        response.content, event.payload.get("channel_id")
+                    )
+                elif response.status != "success":
+                    logger.debug(
+                        "Proactive handler for %s: agent returned %s",
+                        topic,
+                        response.status,
+                    )
+            except Exception as e:
+                logger.exception("Proactive handler for %s failed: %s", topic, e)
+        return handler
 
-        # Proactive loop: invoke_agent subscriptions -> AgentProvider.invoke -> notify_user
+    def _wire_proactive_handlers(self, event_bus: EventBus) -> None:
+        router = self._router
+        if not router:
+            return
         proactive_map = self._collect_proactive_subscriptions()
         for topic, ext_id in proactive_map.items():
             agent = self._agent_providers.get(ext_id)
@@ -412,30 +440,17 @@ class Loader:
                     ext_id,
                 )
                 continue
+            handler = self._make_proactive_handler(topic, ext_id, agent)
+            event_bus.subscribe(topic, handler, "kernel.proactive")
 
-            async def proactive_handler(
-                event: Event, _topic: str = topic, _agent: AgentProvider = agent
-            ) -> None:
-                task = (
-                    event.payload.get("prompt")
-                    or f"Background event '{_topic}': {event.payload}"
-                )
-                context = AgentInvocationContext(correlation_id=event.correlation_id)
-                try:
-                    response = await _agent.invoke(task, context)
-                    if response.status == "success" and response.content:
-                        channel_id = event.payload.get("channel_id")
-                        await router.notify_user(response.content, channel_id)
-                    elif response.status != "success":
-                        logger.debug(
-                            "Proactive handler for %s: agent returned %s",
-                            _topic,
-                            response.status,
-                        )
-                except Exception as e:
-                    logger.exception("Proactive handler for %s failed: %s", _topic, e)
-
-            event_bus.subscribe(topic, proactive_handler, "kernel.proactive")
+    def wire_event_subscriptions(self, event_bus: EventBus) -> None:
+        """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
+        if not self._router:
+            return
+        self._wire_system_topics(event_bus)
+        self._wire_notify_user_handlers(event_bus)
+        event_bus.subscribe("user.message", self._on_kernel_user_message, "kernel")
+        self._wire_proactive_handlers(event_bus)
 
     def _collect_context_providers(
         self, router: MessageRouter
@@ -574,11 +589,10 @@ class Loader:
         invoke_agent.__doc__ = descriptor.description or ""
         return function_tool(name_override=ext_id)(invoke_agent)
 
-    def get_capabilities_summary(self) -> str:
-        """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
+    def _collect_tool_agent_parts(self) -> tuple[list[str], list[str]]:
+        """Return (tool_parts, agent_parts) for capabilities summary."""
         tool_parts: list[str] = []
         agent_parts: list[str] = []
-        mcp_aliases: list[str] = []
         for m in self._manifests:
             if (
                 m.id not in self._extensions
@@ -592,6 +606,11 @@ class Loader:
                 agent_parts.append(f"- {m.id}: {desc}")
             else:
                 tool_parts.append(f"- {m.id}: {desc}")
+        return (tool_parts, agent_parts)
+
+    def _collect_mcp_aliases(self) -> list[str]:
+        """Collect MCP server aliases from ACTIVE extensions."""
+        mcp_aliases: list[str] = []
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) != ExtensionState.ACTIVE:
                 continue
@@ -609,6 +628,12 @@ class Loader:
                 logger.exception(
                     "get_mcp_server_aliases failed for %s: %s", ext_id, e
                 )
+        return mcp_aliases
+
+    def get_capabilities_summary(self) -> str:
+        """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
+        tool_parts, agent_parts = self._collect_tool_agent_parts()
+        mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))

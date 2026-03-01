@@ -143,6 +143,38 @@ class MessageRouter:
             result["reason"] = payload.get("reason")
             evt.set()
 
+    async def _handle_one_approval_interruption(
+        self,
+        item: Any,
+        channel_id: str | None,
+        state: Any,
+    ) -> None:
+        """Publish MCP approval request, wait for response, approve or reject item on state."""
+        request_id, evt = str(uuid.uuid4()), asyncio.Event()
+        result_holder: dict[str, Any] = {}
+        self._pending_approvals[request_id] = (evt, result_holder)
+        tool_name = getattr(item, "tool_name", None) or getattr(item, "name", "?")
+        args_str = str(getattr(item, "arguments", ""))
+        try:
+            if self._event_bus:
+                await self._event_bus.publish(
+                    SystemTopics.MCP_TOOL_APPROVAL_REQUEST,
+                    "kernel.router",
+                    {"request_id": request_id, "tool_name": tool_name, "arguments": args_str, "server_alias": "", "channel_id": channel_id},
+                )
+                try:
+                    await asyncio.wait_for(evt.wait(), timeout=self._approval_timeout)
+                except asyncio.TimeoutError:
+                    logger.warning("MCP tool approval timed out for %s, rejecting", tool_name)
+            else:
+                result_holder["approved"] = False
+            if result_holder.get("approved", False):
+                state.approve(item)
+            else:
+                state.reject(item, always_reject=True)
+        finally:
+            self._pending_approvals.pop(request_id, None)
+
     async def _run_with_approval_loop(
         self,
         agent: Any,
@@ -161,42 +193,7 @@ class MessageRouter:
             rounds += 1
             state = result.to_state()
             for item in result.interruptions:
-                request_id = str(uuid.uuid4())
-                evt = asyncio.Event()
-                result_holder: dict[str, Any] = {}
-                self._pending_approvals[request_id] = (evt, result_holder)
-                tool_name = getattr(item, "tool_name", None) or getattr(item, "name", "?")
-                args_str = str(getattr(item, "arguments", ""))
-                try:
-                    if self._event_bus:
-                        await self._event_bus.publish(
-                            SystemTopics.MCP_TOOL_APPROVAL_REQUEST,
-                            "kernel.router",
-                            {
-                                "request_id": request_id,
-                                "tool_name": tool_name,
-                                "arguments": args_str,
-                                "server_alias": "",
-                                "channel_id": channel_id,
-                            },
-                        )
-                        try:
-                            await asyncio.wait_for(
-                                evt.wait(), timeout=self._approval_timeout
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "MCP tool approval timed out for %s, rejecting",
-                                tool_name,
-                            )
-                    else:
-                        result_holder["approved"] = False
-                    if result_holder.get("approved", False):
-                        state.approve(item)
-                    else:
-                        state.reject(item, always_reject=True)
-                finally:
-                    self._pending_approvals.pop(request_id, None)
+                await self._handle_one_approval_interruption(item, channel_id, state)
             result = await Runner.run(agent, state, session=session)
         return result
 
@@ -241,26 +238,31 @@ class MessageRouter:
         full_text = ""
         try:
             async for event in result.stream_events():
-                if event.type == "raw_response_event":
-                    event_data = event.data
-                    delta = None
-                    if response_delta_type is not None and isinstance(event_data, response_delta_type):
-                        delta = event_data.delta
-                    elif hasattr(event_data, "delta"):
-                        delta = event_data.delta
-                    if delta is not None:
-                        full_text += delta
-                        await on_chunk(delta)
+                delta = self._get_stream_delta(event, response_delta_type)
+                if delta is not None:
+                    full_text += delta
+                    await on_chunk(delta)
                 elif event.type == "run_item_stream_event":
                     item = getattr(event, "item", None)
-                    if getattr(item, "type", None) == "tool_call_item":
+                    if getattr(item, "type", None) == "tool_call_item" and on_tool_call:
                         raw_item = getattr(item, "raw_item", None)
-                        tool_name = getattr(raw_item, "name", "tool")
-                        if on_tool_call:
-                            await on_tool_call(str(tool_name))
+                        await on_tool_call(str(getattr(raw_item, "name", "tool")))
             return full_text, None
         except BaseException as e:
             return full_text, e
+
+    def _get_stream_delta(
+        self, event: Any, response_delta_type: type | None
+    ) -> str | None:
+        """Extract text delta from raw_response_event; None for other event types."""
+        if event.type != "raw_response_event":
+            return None
+        event_data = getattr(event, "data", None)
+        if response_delta_type is not None and isinstance(event_data, response_delta_type):
+            return getattr(event_data, "delta", None)
+        if hasattr(event_data, "delta"):
+            return event_data.delta
+        return None
 
     async def _prepare_agent(
         self,
@@ -279,6 +281,37 @@ class MessageRouter:
                 instructions=self._agent.instructions + "\n\n---\n\n" + context
             )
         return agent, stripped
+
+    async def _run_streamed_invoke(
+        self,
+        agent: Any,
+        stripped: str,
+        session: Any,
+        on_chunk: Callable[[str], Awaitable[None]],
+        on_tool_call: Callable[[str], Awaitable[None]] | None,
+        use_background_lock: bool,
+    ) -> str:
+        """Run streamed agent under user or background lock. Returns final text or error message."""
+        lock = self._background_lock if use_background_lock else self._user_lock; full_text = ""
+        async with lock:
+            try:
+                from agents import Runner
+                result = Runner.run_streamed(agent, stripped, session=session)
+                full_text, stream_error = await self._consume_stream_events(
+                    result, on_chunk, on_tool_call, _get_response_delta_type()
+                )
+                if stream_error is not None:
+                    raise stream_error
+                return result.final_output or full_text
+            except Exception as e:
+                logger.exception("Agent streaming invocation failed: %s", e)
+                if full_text:
+                    try:
+                        await on_chunk(f"\n(Error: {e})")
+                    except Exception:
+                        logger.exception("Error callback failed while reporting stream error")
+                    return full_text + f"\n(Error: {e})"
+                return f"(Error: {e})"
 
     async def invoke_agent(
         self, prompt: str, turn_context: TurnContext | None = None
@@ -304,40 +337,13 @@ class MessageRouter:
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
         turn_context: TurnContext | None = None,
     ) -> str:
-        """Run agent with streaming callbacks; return final response.
-
-        Lock is held for the entire stream to keep in-order responses across users.
-        """
+        """Run agent with streaming callbacks; return final response."""
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        response_delta_type = _get_response_delta_type()
-        full_text = ""
-        async with self._user_lock:
-            try:
-                from agents import Runner
-
-                result = Runner.run_streamed(
-                    agent, stripped, session=self._session
-                )
-                full_text, stream_error = await self._consume_stream_events(
-                    result, on_chunk, on_tool_call, response_delta_type
-                )
-                if stream_error is not None:
-                    raise stream_error
-                return result.final_output or full_text
-            except Exception as e:
-                logger.exception("Agent streaming invocation failed: %s", e)
-                if full_text:
-                    error_chunk = f"\n(Error: {e})"
-                    try:
-                        await on_chunk(error_chunk)
-                    except Exception:
-                        logger.exception(
-                            "Error callback failed while reporting stream error"
-                        )
-                    return full_text + error_chunk
-                return f"(Error: {e})"
+        return await self._run_streamed_invoke(
+            agent, stripped, self._session, on_chunk, on_tool_call, False
+        )
 
     def _get_background_session(self) -> Any:
         """Ephemeral session for background invocations; does not share user conversation history."""
@@ -374,39 +380,14 @@ class MessageRouter:
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
         turn_context: TurnContext | None = None,
     ) -> str:
-        """Run agent with streaming; uses background lock and ephemeral session.
-        Does not block user messages."""
+        """Run agent with streaming; uses background lock and ephemeral session."""
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
         session = self._get_background_session()
-        response_delta_type = _get_response_delta_type()
-        full_text = ""
-        async with self._background_lock:
-            try:
-                from agents import Runner
-
-                result = Runner.run_streamed(
-                    agent, stripped, session=session
-                )
-                full_text, stream_error = await self._consume_stream_events(
-                    result, on_chunk, on_tool_call, response_delta_type
-                )
-                if stream_error is not None:
-                    raise stream_error
-                return result.final_output or full_text
-            except Exception as e:
-                logger.exception("Agent background streaming failed: %s", e)
-                if full_text:
-                    error_chunk = f"\n(Error: {e})"
-                    try:
-                        await on_chunk(error_chunk)
-                    except Exception:
-                        logger.exception(
-                            "Error callback failed while reporting stream error"
-                        )
-                    return full_text + error_chunk
-                return f"(Error: {e})"
+        return await self._run_streamed_invoke(
+            agent, stripped, session, on_chunk, on_tool_call, True
+        )
 
     async def enrich_prompt(
         self, prompt: str, turn_context: TurnContext | None = None
@@ -425,14 +406,8 @@ class MessageRouter:
             return context + "\n\n---\n\n" + stripped
         return stripped
 
-    async def handle_user_message(
-        self,
-        text: str,
-        user_id: str,
-        channel: ChannelProvider,
-        channel_id: str,
-    ) -> None:
-        """Invoke agent with user message, send response via channel. Serialized."""
+    async def _maybe_rotate_session(self) -> None:
+        """Rotate session if last message was longer than session_timeout ago."""
         now = time.time()
         if (
             self._last_message_at is not None
@@ -441,22 +416,14 @@ class MessageRouter:
             await self._rotate_session()
         self._last_message_at = now
 
-        turn_context = TurnContext(
-            agent_id=self._agent_id,
-            channel_id=channel_id,
-            user_id=user_id,
-            session_id=self._session_id,
-        )
-
-        await self._emit(
-            "user_message",
-            {
-                "text": text,
-                "user_id": user_id,
-                "channel": channel,
-                "session_id": self._session_id,
-            },
-        )
+    async def _deliver_response_to_channel(
+        self,
+        channel: ChannelProvider,
+        user_id: str,
+        text: str,
+        turn_context: TurnContext,
+    ) -> str:
+        """Invoke agent and send response via channel (streaming or non-streaming). Returns response text."""
         if isinstance(channel, StreamingChannelProvider):
             await channel.on_stream_start(user_id)
             response = await self.invoke_agent_streamed(
@@ -471,16 +438,28 @@ class MessageRouter:
         else:
             response = await self.invoke_agent(text, turn_context)
             await channel.send_to_user(user_id, response)
-        await self._emit(
-            "agent_response",
-            {
-                "user_id": user_id,
-                "text": response,
-                "channel": channel,
-                "session_id": self._session_id,
-                "agent_id": self._agent_id,
-            },
+        return response
+
+    async def handle_user_message(
+        self,
+        text: str,
+        user_id: str,
+        channel: ChannelProvider,
+        channel_id: str,
+    ) -> None:
+        """Invoke agent with user message, send response via channel. Serialized."""
+        await self._maybe_rotate_session()
+        turn_context = TurnContext(
+            agent_id=self._agent_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            session_id=self._session_id,
         )
+        await self._emit("user_message", {"text": text, "user_id": user_id, "channel": channel, "session_id": self._session_id})
+        response = await self._deliver_response_to_channel(
+            channel, user_id, text, turn_context
+        )
+        await self._emit("agent_response", {"user_id": user_id, "text": response, "channel": channel, "session_id": self._session_id, "agent_id": self._agent_id})
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         """Send proactive notification to user. Channel handles all addressing internally."""

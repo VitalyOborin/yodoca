@@ -229,17 +229,10 @@ class EventJournal:
         await conn.commit()
         return cursor.rowcount or 0
 
-    async def recover_stale(
-        self, stale_threshold: float, max_retries: int
-    ) -> tuple[int, int]:
-        """Reset events stuck in 'processing' longer than threshold.
-        Events with retry_count < max_retries go to 'pending' (retry_count incremented).
-        Events with retry_count >= max_retries go to 'dead_letter'.
-        Returns (reset_count, dead_letter_count)."""
-        conn = await self._ensure_conn()
-        now = time.time()
-
-        # Reset to pending: retry_count < max_retries
+    async def _reset_stale_to_pending(
+        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+    ) -> int:
+        """Reset events stuck in processing (retry_count < max) to pending. Return count."""
         cursor = await conn.execute(
             """
             UPDATE event_journal
@@ -248,9 +241,12 @@ class EventJournal:
             """,
             (now - stale_threshold, max_retries),
         )
-        reset_count = cursor.rowcount or 0
+        return cursor.rowcount or 0
 
-        # Dead-letter: retry_count >= max_retries
+    async def _dead_letter_stale(
+        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+    ) -> int:
+        """Dead-letter events stuck in processing (retry_count >= max). Return count."""
         cursor = await conn.execute(
             """
             UPDATE event_journal
@@ -260,7 +256,22 @@ class EventJournal:
             """,
             (now, now - stale_threshold, max_retries),
         )
-        dead_letter_count = cursor.rowcount or 0
+        return cursor.rowcount or 0
 
+    async def recover_stale(
+        self, stale_threshold: float, max_retries: int
+    ) -> tuple[int, int]:
+        """Reset events stuck in 'processing' longer than threshold.
+        Events with retry_count < max_retries go to 'pending' (retry_count incremented).
+        Events with retry_count >= max_retries go to 'dead_letter'.
+        Returns (reset_count, dead_letter_count)."""
+        conn = await self._ensure_conn()
+        now = time.time()
+        reset_count = await self._reset_stale_to_pending(
+            conn, now, stale_threshold, max_retries
+        )
+        dead_letter_count = await self._dead_letter_stale(
+            conn, now, stale_threshold, max_retries
+        )
         await conn.commit()
         return (reset_count, dead_letter_count)

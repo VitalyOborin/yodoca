@@ -49,9 +49,7 @@ class ExtensionContext:
         self._model_router = model_router
         self.agent_id: str | None = agent_id or extension_id
         self._event_bus = event_bus
-        self._restart_file_path = restart_file_path
-        self.on_user_message = self._router.handle_user_message
-
+        self._restart_file_path = restart_file_path; self.on_user_message = self._router.handle_user_message
     @property
     def model_router(self) -> ModelRouterProtocol | None:
         """ModelRouter for get_model(agent_id). None if not set (e.g. legacy runner)."""

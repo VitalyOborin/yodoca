@@ -117,6 +117,33 @@ class EventBus:
             logger.info("EventBus: recovered %d events", count)
         return count
 
+    async def _claim_and_deliver_batch(self) -> None:
+        """Claim one batch of pending events and deliver each to handlers."""
+        events = await self._journal.claim_pending(limit=self._batch_size)
+        for (
+            event_id,
+            topic,
+            source,
+            payload,
+            created_at,
+            correlation_id,
+            retry_count,
+        ) in events:
+            if self._stopped:
+                break
+            await self._deliver(
+                Event(
+                    id=event_id,
+                    topic=topic,
+                    source=source,
+                    payload=payload,
+                    created_at=created_at,
+                    correlation_id=correlation_id,
+                    status="processing",
+                    retry_count=retry_count,
+                ),
+            )
+
     async def _dispatch_loop(self) -> None:
         """Main loop: wait for work, fetch pending, deliver to handlers."""
         while not self._stopped:
@@ -128,44 +155,13 @@ class EventBus:
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
-
             if self._stopped:
                 break
+            await self._claim_and_deliver_batch()
 
-            events = await self._journal.claim_pending(limit=self._batch_size)
-            for (
-                event_id,
-                topic,
-                source,
-                payload,
-                created_at,
-                correlation_id,
-                retry_count,
-            ) in events:
-                if self._stopped:
-                    break
-                await self._deliver(
-                    Event(
-                        id=event_id,
-                        topic=topic,
-                        source=source,
-                        payload=payload,
-                        created_at=created_at,
-                        correlation_id=correlation_id,
-                        status="processing",
-                        retry_count=retry_count,
-                    ),
-                )
-
-    async def _deliver(self, event: Event) -> None:
-        """Deliver event to handlers; mark done or failed.
-        Event was already claimed (status=processing) by claim_pending; no mark_processing here."""
+    async def _run_handlers(self, event: Event) -> list[str]:
+        """Invoke all handlers for event.topic. Return list of error messages."""
         handlers = self._subscribers.get(event.topic, [])
-
-        if not handlers:
-            await self._journal.mark_done(event.id)
-            return
-
         errors: list[str] = []
         for handler, subscriber_id in handlers:
             try:
@@ -179,25 +175,37 @@ class EventBus:
                     event.id,
                     e,
                 )
+        return errors
 
-        if errors:
-            error_msg = "; ".join(errors)
-            if event.retry_count < self._max_retries:
-                await self._journal.mark_retry(event.id)
-                logger.warning(
-                    "EventBus: retrying event %s (attempt %d/%d): %s",
-                    event.id,
-                    event.retry_count + 1,
-                    self._max_retries,
-                    error_msg,
-                )
-            else:
-                await self._journal.mark_dead_letter(event.id, error_msg)
-                logger.error(
-                    "EventBus: dead-lettered event %s after %d retries: %s",
-                    event.id,
-                    event.retry_count,
-                    error_msg,
-                )
-        else:
+    async def _mark_delivery_result(self, event: Event, errors: list[str]) -> None:
+        """Mark event done, retry, or dead_letter based on errors."""
+        if not errors:
             await self._journal.mark_done(event.id)
+            return
+        error_msg = "; ".join(errors)
+        if event.retry_count < self._max_retries:
+            await self._journal.mark_retry(event.id)
+            logger.warning(
+                "EventBus: retrying event %s (attempt %d/%d): %s",
+                event.id,
+                event.retry_count + 1,
+                self._max_retries,
+                error_msg,
+            )
+        else:
+            await self._journal.mark_dead_letter(event.id, error_msg)
+            logger.error(
+                "EventBus: dead-lettered event %s after %d retries: %s",
+                event.id,
+                event.retry_count,
+                error_msg,
+            )
+
+    async def _deliver(self, event: Event) -> None:
+        """Deliver event to handlers; mark done or failed."""
+        handlers = self._subscribers.get(event.topic, [])
+        if not handlers:
+            await self._journal.mark_done(event.id)
+            return
+        errors = await self._run_handlers(event)
+        await self._mark_delivery_result(event, errors)

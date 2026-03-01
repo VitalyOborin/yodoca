@@ -1,5 +1,7 @@
 """Anthropic provider via LiteLLM (openai-agents[litellm])."""
 
+from typing import Any
+
 from core.llm.protocol import ProviderConfig
 
 
@@ -13,7 +15,7 @@ class AnthropicProvider:
         config: ProviderConfig,
         model_name: str,
         api_key: str | None,
-    ):
+    ) -> Any:
         try:
             from agents.extensions.models.litellm_model import LitellmModel
         except ImportError as e:
@@ -41,6 +43,6 @@ class AnthropicProvider:
         cap: type,
         config: ProviderConfig,
         api_key: str | None,
-    ):
+    ) -> None:
         """Anthropic does not support embedding capability."""
         return None
