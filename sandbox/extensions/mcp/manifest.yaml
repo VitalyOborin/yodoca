@@ -1,0 +1,30 @@
+id: mcp
+name: MCP Bridge
+version: "1.0.0"
+
+description: |
+  Connects to external MCP servers and exposes their tools to the agent.
+  Supports stdio and streamable-http transports. Configure servers in config.servers.
+
+entrypoint: main:McpBridgeExtension
+
+depends_on: []
+
+config:
+  prompts_cache_ttl: 300
+  reconnect_interval: 120
+  servers:
+    - alias: context7
+      transport: streamable-http
+      url: https://mcp.context7.com/mcp
+      headers:
+        CONTEXT7_API_KEY: "<API_KEY>"  # Replace with real key from context7.com/dashboard
+      cache_tools: true
+
+setup_instructions: |
+  Add entries to config.servers: alias, transport (stdio | streamable-http),
+  and for stdio: command, args; for HTTP: url. Optional: cache_tools,
+  tool_filter, require_approval. Use ${SECRET_NAME} in url/headers/env for
+  secrets (resolved via keyring/.env).
+
+enabled: true

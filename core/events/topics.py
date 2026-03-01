@@ -19,6 +19,10 @@ class SystemTopics:
     # Request secure input from a channel (secret collection without LLM exposure)
     SECURE_INPUT_REQUEST = "system.channel.secure_input_request"
 
+    # MCP tool approval: pause run, ask user, resume on approve/reject
+    MCP_TOOL_APPROVAL_REQUEST = "system.mcp.tool_approval_request"
+    MCP_TOOL_APPROVAL_RESPONSE = "system.mcp.tool_approval_response"
+
 
 # Payload contracts (documentation + runtime validation)
 USER_NOTIFY_PAYLOAD = {"text": "str", "channel_id": "str | None"}
@@ -33,4 +37,16 @@ SECURE_INPUT_REQUEST_PAYLOAD = {
     "secret_id": "str",
     "prompt": "str",
     "target_channel": "str",
+}
+MCP_TOOL_APPROVAL_REQUEST_PAYLOAD = {
+    "request_id": "str",
+    "tool_name": "str",
+    "arguments": "str",
+    "server_alias": "str",
+    "channel_id": "str | None",
+}
+MCP_TOOL_APPROVAL_RESPONSE_PAYLOAD = {
+    "request_id": "str",
+    "approved": "bool",
+    "reason": "str | None",
 }

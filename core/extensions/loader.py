@@ -524,6 +524,24 @@ class Loader:
             self._scheduler_manager.start()
         self._health_manager.start()
 
+    def get_mcp_servers(self) -> list[Any]:
+        """Collect MCP server instances from ACTIVE extensions that provide get_mcp_servers (duck-typed)."""
+        servers: list[Any] = []
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) != ExtensionState.ACTIVE:
+                continue
+            if not hasattr(ext, "get_mcp_servers") or not callable(
+                getattr(ext, "get_mcp_servers")
+            ):
+                continue
+            try:
+                result = ext.get_mcp_servers()
+                if result:
+                    servers.extend(result if isinstance(result, list) else list(result))
+            except Exception as e:
+                logger.exception("get_mcp_servers failed for %s: %s", ext_id, e)
+        return servers
+
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
         tools: list[Any] = []
@@ -558,9 +576,10 @@ class Loader:
         return function_tool(name_override=ext_id)(invoke_agent)
 
     def get_capabilities_summary(self) -> str:
-        """Natural-language summary: tools and agents separate for orchestrator prompt."""
+        """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
         tool_parts: list[str] = []
         agent_parts: list[str] = []
+        mcp_aliases: list[str] = []
         for m in self._manifests:
             if (
                 m.id not in self._extensions
@@ -574,11 +593,31 @@ class Loader:
                 agent_parts.append(f"- {m.id}: {desc}")
             else:
                 tool_parts.append(f"- {m.id}: {desc}")
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) != ExtensionState.ACTIVE:
+                continue
+            if not hasattr(ext, "get_mcp_server_aliases") or not callable(
+                getattr(ext, "get_mcp_server_aliases")
+            ):
+                continue
+            try:
+                aliases = ext.get_mcp_server_aliases()
+                if aliases:
+                    mcp_aliases.extend(
+                        aliases if isinstance(aliases, list) else list(aliases)
+                    )
+            except Exception as e:
+                logger.exception(
+                    "get_mcp_server_aliases failed for %s: %s", ext_id, e
+                )
         sections: list[str] = []
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))
         if agent_parts:
             sections.append("Available agents:\n" + "\n".join(agent_parts))
+        if mcp_aliases:
+            mcp_lines = "\n".join(f"- {a}" for a in mcp_aliases)
+            sections.append("MCP servers:\n" + mcp_lines)
         return "\n\n".join(sections) if sections else "No extensions loaded."
 
     async def shutdown(self) -> None:

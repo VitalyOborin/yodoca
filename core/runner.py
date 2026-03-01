@@ -78,6 +78,11 @@ async def main_async() -> None:
     await event_bus.start()
     await loader.start_all()
 
+    mcp_servers = loader.get_mcp_servers()
+    if mcp_servers:
+        agent.mcp_servers = mcp_servers
+        agent.mcp_config = {"convert_schemas_to_strict": True}
+
     session_timeout = get_setting(settings, "session.timeout_sec", 1800)
     session_dir = data_dir / "memory"
     session_dir.mkdir(parents=True, exist_ok=True)

@@ -34,13 +34,24 @@ class CliChannelExtension:
             SystemTopics.SECURE_INPUT_REQUEST,
             self._on_secure_input_request,
         )
+        context.subscribe_event(
+            SystemTopics.MCP_TOOL_APPROVAL_REQUEST,
+            self._on_mcp_approval_request,
+        )
 
     async def _on_secure_input_request(self, event: Any) -> None:
         """Enqueue secure input requests targeting this channel."""
         payload = event.payload
         target = payload.get("target_channel", "")
         if target == self.context.extension_id:
-            self._intercept_queue.put_nowait(payload)
+            self._intercept_queue.put_nowait({**payload, "_type": "secure_input"})
+
+    async def _on_mcp_approval_request(self, event: Any) -> None:
+        """Enqueue MCP tool approval requests targeting this channel."""
+        payload = event.payload
+        target = payload.get("channel_id", "")
+        if target is None or target == self.context.extension_id:
+            self._intercept_queue.put_nowait({**payload, "_type": "mcp_approval"})
 
     async def on_stream_start(self, _user_id: str) -> None:
         self._stream_buffer = ""
@@ -124,7 +135,10 @@ class CliChannelExtension:
                 except asyncio.QueueEmpty:
                     pass
                 else:
-                    await self._handle_secure_input(req)
+                    if req.get("_type") == "mcp_approval":
+                        await self._handle_mcp_approval(req)
+                    else:
+                        await self._handle_secure_input(req)
                     continue
 
             try:
@@ -136,6 +150,35 @@ class CliChannelExtension:
             if not line:
                 continue
             await self._emit_user_message(line)
+
+    async def _handle_mcp_approval(self, req: dict[str, Any]) -> None:
+        """Show MCP tool approval prompt, emit MCP_TOOL_APPROVAL_RESPONSE."""
+        request_id = req.get("request_id", "")
+        tool_name = req.get("tool_name", "?")
+        arguments = req.get("arguments", "")
+        if not request_id:
+            return
+        print(
+            f"\n[MCP Approval] Tool '{tool_name}' requested with args: {arguments[:200]}"
+            f"{'...' if len(arguments) > 200 else ''}\n"
+            "Approve? [y/N]: ",
+            end="",
+            flush=True,
+        )
+        try:
+            line = (await asyncio.to_thread(input)).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            line = "n"
+        approved = line in ("y", "yes")
+        await self.context.emit(
+            SystemTopics.MCP_TOOL_APPROVAL_RESPONSE,
+            {
+                "request_id": request_id,
+                "approved": approved,
+                "reason": None,
+            },
+        )
+        print("Approved." if approved else "Rejected.")
 
     async def _handle_secure_input(self, req: dict[str, Any]) -> None:
         """Collect secret via getpass, store in keyring, emit synthetic confirmation."""

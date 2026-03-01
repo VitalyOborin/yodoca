@@ -169,6 +169,59 @@ async def run_background(self) -> None:
 
 Loader wraps it in `asyncio.create_task()` and cancels on shutdown.
 
+### MCP Bridge (`mcp` extension)
+
+The MCP Bridge connects to external [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers from config and exposes their tools to the Orchestrator via the SDK's native `mcp_servers`. It does **not** implement `ToolProvider`; MCP tools are injected into the agent after `loader.start_all()` (post-start injection, see [ADR 006](adr/006-mcp-extension.md)).
+
+Configure servers in `config.servers`:
+
+**stdio** (local subprocess):
+
+```yaml
+config:
+  servers:
+    - alias: filesystem
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+      cache_tools: true
+      tool_filter: ["read_file", "list_directory"]
+```
+
+**streamable-http** (HTTP endpoint):
+
+```yaml
+config:
+  servers:
+    - alias: github
+      transport: streamable-http
+      url: http://localhost:3000/mcp
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+      cache_tools: true
+      require_approval:
+        always: ["delete_repository"]
+```
+
+Secrets: `${SECRET_NAME}` in `url`, `headers`, and `env` is resolved via `context.get_secret()` (keyring/.env per ADR 012). Missing secrets cause that server to be skipped with a log warning.
+
+**MCP Prompts** (Phase 2): Add `prompts` per server to inject MCP prompt templates into the agent context via the ContextProvider chain:
+
+```yaml
+    - alias: code_review
+      transport: streamable-http
+      url: http://localhost:8000/mcp
+      prompts:
+        - name: code_review_instructions
+          args:
+            focus: "security vulnerabilities"
+            language: "python"
+```
+
+Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cache_ttl` (default 300s), `reconnect_interval` (default 120s) for failed server retries.
+
+**Approval flow**: When `require_approval` is set, the Router detects SDK interruptions and emits `system.mcp.tool_approval_request`; channels (e.g. CLI) subscribe, show a prompt to the user, and emit `system.mcp.tool_approval_response` with approve/reject. The run resumes accordingly.
+
 ### `ContextProvider`
 
 Enriches agent context before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).

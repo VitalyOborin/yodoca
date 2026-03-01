@@ -6,6 +6,7 @@ Serializes agent invocations. Dispatches user_message and agent_response for mid
 import asyncio
 import logging
 import time
+import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -18,6 +19,7 @@ from core.events.topics import SystemTopics
 
 if TYPE_CHECKING:
     from core.events.bus import EventBus
+    from core.events.models import Event
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ class MessageRouter:
         self._session_timeout: int = 1800
         self._session_db_path: str | None = None
         self._event_bus: "EventBus | None" = None
+        self._pending_approvals: dict[str, tuple[asyncio.Event, dict[str, Any]]] = {}
+        self._approval_timeout: float = 60.0
 
     def set_agent(self, agent: Any, agent_id: str = "orchestrator") -> None:
         """Set the Orchestrator agent (called by runner after agent creation)."""
@@ -110,6 +114,82 @@ class MessageRouter:
         from agents import SQLiteSession
 
         self._session = SQLiteSession(self._session_id, session_db_path)
+        if event_bus:
+            event_bus.subscribe(
+                SystemTopics.MCP_TOOL_APPROVAL_RESPONSE,
+                self._on_mcp_approval_response,
+                "kernel.router",
+            )
+
+    async def _on_mcp_approval_response(self, event: Any) -> None:
+        """Handle MCP_TOOL_APPROVAL_RESPONSE: resolve pending approval waiters."""
+        payload = event.payload if hasattr(event, "payload") else {}
+        request_id = payload.get("request_id")
+        if not request_id:
+            return
+        pending = self._pending_approvals.pop(request_id, None)
+        if pending:
+            evt, result = pending
+            result["approved"] = payload.get("approved", False)
+            result["reason"] = payload.get("reason")
+            evt.set()
+
+    async def _run_with_approval_loop(
+        self,
+        agent: Any,
+        input_or_state: str | Any,
+        session: Any,
+        turn_context: TurnContext | None,
+        max_rounds: int = 10,
+    ) -> Any:
+        """Run agent, handling MCP tool approval interruptions via EventBus."""
+        from agents import Runner
+
+        channel_id = turn_context.channel_id if turn_context else None
+        result = await Runner.run(agent, input_or_state, session=session)
+        rounds = 0
+        while getattr(result, "interruptions", None) and rounds < max_rounds:
+            rounds += 1
+            state = result.to_state()
+            for item in result.interruptions:
+                request_id = str(uuid.uuid4())
+                evt = asyncio.Event()
+                result_holder: dict[str, Any] = {}
+                self._pending_approvals[request_id] = (evt, result_holder)
+                tool_name = getattr(item, "tool_name", None) or getattr(item, "name", "?")
+                args_str = str(getattr(item, "arguments", ""))
+                try:
+                    if self._event_bus:
+                        await self._event_bus.publish(
+                            SystemTopics.MCP_TOOL_APPROVAL_REQUEST,
+                            "kernel.router",
+                            {
+                                "request_id": request_id,
+                                "tool_name": tool_name,
+                                "arguments": args_str,
+                                "server_alias": "",
+                                "channel_id": channel_id,
+                            },
+                        )
+                        try:
+                            await asyncio.wait_for(
+                                evt.wait(), timeout=self._approval_timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "MCP tool approval timed out for %s, rejecting",
+                                tool_name,
+                            )
+                    else:
+                        result_holder["approved"] = False
+                    if result_holder.get("approved", False):
+                        state.approve(item)
+                    else:
+                        state.reject(item, always_reject=True)
+                finally:
+                    self._pending_approvals.pop(request_id, None)
+            result = await Runner.run(agent, state, session=session)
+        return result
 
     async def _rotate_session(self) -> None:
         """Rotate to a new session and publish session.completed for the old one."""
@@ -167,12 +247,8 @@ class MessageRouter:
         agent, stripped = await self._prepare_agent(prompt, turn_context)
         async with self._user_lock:
             try:
-                from agents import Runner
-
-                result = await Runner.run(
-                    agent,
-                    stripped,
-                    session=self._session,
+                result = await self._run_with_approval_loop(
+                    agent, stripped, self._session, turn_context
                 )
                 return result.final_output or ""
             except Exception as e:
@@ -269,12 +345,8 @@ class MessageRouter:
         session = self._get_background_session()
         async with self._background_lock:
             try:
-                from agents import Runner
-
-                result = await Runner.run(
-                    agent,
-                    stripped,
-                    session=session,
+                result = await self._run_with_approval_loop(
+                    agent, stripped, session, turn_context
                 )
                 return result.final_output or ""
             except Exception as e:
