@@ -20,6 +20,7 @@ from aiogram.types import Message
 from aiogram.utils.token import TokenValidationError, validate_token
 
 if TYPE_CHECKING:
+    from core.extensions.contract import TurnContext
     from core.extensions.context import ExtensionContext
 
 
@@ -67,7 +68,9 @@ class TelegramChannelExtension:
     def context_priority(self) -> int:
         return 10  # inject before Memory (priority=100)
 
-    async def get_context(self, prompt: str, *, agent_id: str | None = None) -> str | None:
+    async def get_context(
+        self, prompt: str, turn_context: "TurnContext"
+    ) -> str | None:
         if self._bot and self._token and self._chat_id:
             return (
                 "## Available channels\n"
