@@ -22,6 +22,7 @@ def build_tools(ext: Any) -> list[Any]:
         priority: int = 5,
         parent_task_id: str | None = None,
         max_steps: int | None = None,
+        output_channel: str | None = None,
     ) -> SubmitTaskResult:
         """Submit a new background task for async execution by a specified agent.
 
@@ -32,9 +33,11 @@ def build_tools(ext: Any) -> list[Any]:
 
         agent_id: 'orchestrator' (default, general-purpose) or 'builder_agent'
         (creates new extensions). Returns task_id for tracking.
+        output_channel: optional target channel id for final delivery
+        (e.g. 'telegram_channel', 'cli_channel').
         """
         return await ext.submit_task(
-            goal, agent_id, priority, parent_task_id, max_steps
+            goal, agent_id, priority, parent_task_id, max_steps, output_channel
         )
 
     @function_tool

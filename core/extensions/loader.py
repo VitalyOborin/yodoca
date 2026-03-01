@@ -319,7 +319,13 @@ class Loader:
         if self._router:
             prompt = event.payload.get("prompt", "")
             channel_id = event.payload.get("channel_id")
-            response = await self._router.invoke_agent_background(prompt)
+            turn_context = TurnContext(
+                agent_id="orchestrator",
+                channel_id=channel_id,
+            )
+            response = await self._router.invoke_agent_background(
+                prompt, turn_context=turn_context
+            )
             if response:
                 await self._router.notify_user(response, channel_id)
 

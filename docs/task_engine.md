@@ -45,7 +45,7 @@ Tasks with `agent_id="orchestrator"` are executed via `ctx.invoke_agent_backgrou
 
 ## Tools (Orchestrator)
 
-- **submit_task** — Submit a background task: `goal`, `agent_id` (default `orchestrator`), `priority`, optional `parent_task_id`, optional `max_steps`. Returns `task_id`, `status`, `message`.
+- **submit_task** — Submit a background task: `goal`, `agent_id` (default `orchestrator`), `priority`, optional `parent_task_id`, optional `max_steps`, optional `output_channel`. Returns `task_id`, `status`, `message`.
 - **get_task_status** — By `task_id`: status, goal, step/max_steps, partial_result, error.
 - **list_active_tasks** — All tasks in pending, running, retry_scheduled, waiting_subtasks, human_review.
 - **cancel_task** — Cancel by `task_id` (and optional reason). Cancellation takes effect **between steps**; the current step (if any) completes first.
@@ -54,7 +54,7 @@ Tasks with `agent_id="orchestrator"` are executed via `ctx.invoke_agent_backgrou
 
 ## Agent loop and completion
 
-- Worker runs a ReAct loop: each step builds a prompt from `TaskState` (goal, step N of M, subtask results/failures, review response, partial result) and invokes the agent (or Orchestrator).
+- Worker runs a ReAct loop: each step builds a prompt from `TaskState` (goal, step N of M, subtask results/failures, review response, partial result) and invokes the agent (or Orchestrator). If task payload includes `output_channel`, the step prompt also includes an explicit delivery requirement for that channel.
 - Step is timed; lease is renewed in the background during the call (`_lease_keepalive`). After the call: step is recorded in `task_step`, state is updated and checkpointed, then completion is checked.
 - **Completion**: the agent must include the marker `<<TASK_COMPLETE>>` at the start of a line, followed by the final result. The loop treats that as done and returns `{"content": result}`. Without the marker, the loop continues until `max_steps` and then returns with a warning.
 - Errors: `RetryableError` → retry with backoff (up to `max_retries`); `NonRetryableError` / `LeaseRevoked` / `TaskCancelled` → fail or cancel immediately.

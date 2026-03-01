@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -299,6 +300,25 @@ class TestProactiveLoop:
             handlers = event_bus._subscribers[topic]
             kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
             assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
+
+    @pytest.mark.asyncio
+    async def test_on_agent_task_passes_turn_context_channel(self, tmp_path: Path) -> None:
+        """system.agent.task passes channel_id into background invoke turn_context."""
+        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
+        router = MessageRouter()
+        router.invoke_agent_background = AsyncMock(return_value="done")  # type: ignore[method-assign]
+        router.notify_user = AsyncMock()  # type: ignore[method-assign]
+        loader._router = router
+
+        event = SimpleNamespace(
+            payload={"prompt": "run this", "channel_id": "telegram_channel"}
+        )
+        await loader._on_agent_task(event)
+
+        assert router.invoke_agent_background.await_count == 1
+        _args, kwargs = router.invoke_agent_background.await_args
+        assert kwargs["turn_context"].channel_id == "telegram_channel"
+        router.notify_user.assert_awaited_once_with("done", "telegram_channel")
 
 
 class TestInitializeAndLifecycle:

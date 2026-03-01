@@ -184,6 +184,7 @@ class TaskEngineExtension:
         priority: int = 5,
         parent_task_id: str | None = None,
         max_steps: int | None = None,
+        output_channel: str | None = None,
     ) -> SubmitTaskResult:
         if not self._db or not self._ctx:
             return SubmitTaskResult(
@@ -213,6 +214,7 @@ class TaskEngineExtension:
             "max_steps": max_steps
             or int(self._ctx.get_config("default_max_steps", 20)),
             "source": "orchestrator",
+            "output_channel": output_channel,
         }
         conn = await self._db.ensure_conn()
         now = time.time()
