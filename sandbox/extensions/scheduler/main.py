@@ -43,6 +43,13 @@ CREATE INDEX IF NOT EXISTS idx_rs_next_fire ON recurring_schedules(next_fire_at,
 """
 
 
+def _compute_next_fire(cron_expr: str | None, every_sec: float | None, now: float) -> float:
+    """Calculate next fire time from cron expression or interval."""
+    if cron_expr:
+        return croniter(cron_expr, now).get_next(float)
+    return now + (every_sec or 0)
+
+
 class _SchedulerStore:
     """SQLite-backed store for one-shot and recurring schedules."""
 
@@ -163,11 +170,7 @@ class _SchedulerStore:
             )
             await conn.commit()
             return
-        if cron_expr:
-            c = croniter(cron_expr, now)
-            next_fire = c.get_next(float)
-        else:
-            next_fire = now + (every_sec or 0)
+        next_fire = _compute_next_fire(cron_expr, every_sec, now)
         await conn.execute(
             "UPDATE recurring_schedules SET next_fire_at = ? WHERE id = ?",
             (next_fire, row_id),
@@ -193,11 +196,7 @@ class _SchedulerStore:
                     (row_id,),
                 )
                 continue
-            if cron_expr:
-                c = croniter(cron_expr, now)
-                next_fire = c.get_next(float)
-            else:
-                next_fire = now + (every_sec or 0)
+            next_fire = _compute_next_fire(cron_expr, every_sec, now)
             await conn.execute(
                 "UPDATE recurring_schedules SET next_fire_at = ? WHERE id = ?",
                 (next_fire, row_id),
@@ -307,11 +306,7 @@ class _SchedulerStore:
             new_every = every_sec if every_sec is not None else old_every
             new_until = until_at if until_at is not None else old_until
             now = time.time()
-            if new_cron:
-                c = croniter(new_cron, now)
-                next_fire = c.get_next(float)
-            else:
-                next_fire = now + (new_every or 0)
+            next_fire = _compute_next_fire(new_cron, new_every, now)
             if new_until is not None and next_fire > new_until:
                 next_fire = new_until
             updates.append("next_fire_at = ?")
@@ -331,6 +326,42 @@ class _SchedulerStore:
         )
         await conn.commit()
         return next_fire
+
+
+def _build_event_payload(
+    topic: str,
+    message: str,
+    channel_id: str | None,
+    payload_extra_json: str | None,
+) -> dict[str, Any] | str:
+    """Build event payload from tool args. Returns error string on invalid JSON."""
+    if topic == "system.user.notify":
+        payload: dict[str, Any] = {"text": message}
+    elif topic in ("system.agent.task", "system.agent.background"):
+        payload = {"prompt": message}
+    elif payload_extra_json:
+        try:
+            payload = json.loads(payload_extra_json)
+        except json.JSONDecodeError as e:
+            return f"Error: invalid payload_extra_json: {e}"
+    else:
+        payload = {"message": message}
+    if channel_id:
+        payload["channel_id"] = channel_id
+    return payload
+
+
+def _parse_iso(value: str) -> float | None:
+    """Parse ISO 8601 datetime string to timestamp. Returns None on invalid format."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_payload_json(raw: Any) -> Any:
+    """Parse JSON string payload to dict, pass through if already parsed."""
+    return json.loads(raw) if isinstance(raw, str) else raw
 
 
 class SchedulerExtension:
@@ -354,12 +385,7 @@ class SchedulerExtension:
             await self._store.recover_recurring(now)
             due = await self._store.fetch_due_one_shot(now)
             for row in due:
-                payload = (
-                    json.loads(row["payload"])
-                    if isinstance(row["payload"], str)
-                    else row["payload"]
-                )
-                await self._ctx.emit(row["topic"], payload)
+                await self._ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
                 await self._store.mark_one_shot_fired(row["id"])
 
     async def stop(self) -> None:
@@ -416,25 +442,14 @@ class SchedulerExtension:
             if delay_seconds is not None and delay_seconds <= 0:
                 return "Error: delay_seconds must be positive."
 
-            if topic == "system.user.notify":
-                payload: dict[str, Any] = {"text": message}
-            elif topic in ("system.agent.task", "system.agent.background"):
-                payload = {"prompt": message}
-            elif payload_extra_json:
-                try:
-                    payload = json.loads(payload_extra_json)
-                except json.JSONDecodeError as e:
-                    return f"Error: invalid payload_extra_json: {e}"
-            else:
-                payload = {"message": message}
-            if channel_id:
-                payload["channel_id"] = channel_id
+            result = _build_event_payload(topic, message, channel_id, payload_extra_json)
+            if isinstance(result, str):
+                return result
+            payload = result
 
             if at_iso:
-                try:
-                    dt = datetime.fromisoformat(at_iso.replace("Z", "+00:00"))
-                    fire_at = dt.timestamp()
-                except (ValueError, TypeError):
+                fire_at = _parse_iso(at_iso)
+                if fire_at is None:
                     return "Error: invalid at_iso format. Use ISO 8601 (e.g. '2025-02-21T10:00:00')."
                 if fire_at <= time.time():
                     return "Error: at_iso must be in the future."
@@ -478,29 +493,19 @@ class SchedulerExtension:
                 every_seconds: Interval in seconds (positive number). Mutually exclusive with cron.
                 until_iso: Optional ISO 8601 end datetime. Schedule stops after this time.
             """
-            if (cron is None or not cron.strip()) == (
-                every_seconds is None or every_seconds <= 0
-            ):
+            has_cron = cron is not None and cron.strip()
+            has_interval = every_seconds is not None and every_seconds > 0
+            if has_cron == has_interval:
                 return "Error: provide exactly one of cron or every_seconds (positive)."
 
-            if topic == "system.user.notify":
-                payload: dict[str, Any] = {"text": message}
-            elif topic in ("system.agent.task", "system.agent.background"):
-                payload = {"prompt": message}
-            elif payload_extra_json:
-                try:
-                    payload = json.loads(payload_extra_json)
-                except json.JSONDecodeError as e:
-                    return f"Error: invalid payload_extra_json: {e}"
-            else:
-                payload = {"message": message}
-            if channel_id:
-                payload["channel_id"] = channel_id
+            result = _build_event_payload(topic, message, channel_id, payload_extra_json)
+            if isinstance(result, str):
+                return result
+            payload = result
 
             if cron:
                 try:
-                    c = croniter(cron.strip(), time.time())
-                    next_fire = c.get_next(float)
+                    next_fire = croniter(cron.strip(), time.time()).get_next(float)
                 except (ValueError, KeyError) as e:
                     return f"Error: invalid cron expression: {e}"
             else:
@@ -508,10 +513,8 @@ class SchedulerExtension:
 
             until_at: float | None = None
             if until_iso:
-                try:
-                    dt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
-                    until_at = dt.timestamp()
-                except (ValueError, TypeError):
+                until_at = _parse_iso(until_iso)
+                if until_at is None:
                     return "Error: invalid until_iso format."
                 if until_at <= time.time():
                     return "Error: until_iso must be in the future."
@@ -541,22 +544,19 @@ class SchedulerExtension:
             rows = await store.list_all(status)
             if not rows:
                 return "[]"
-            result = []
-            for r in rows:
-                result.append(
-                    {
-                        "id": r["id"],
-                        "type": r["type"],
-                        "topic": r["topic"],
-                        "payload": json.loads(r["payload"])
-                        if isinstance(r["payload"], str)
-                        else r["payload"],
-                        "next_fire_iso": datetime.fromtimestamp(
-                            r["fire_at_or_next"]
-                        ).isoformat(),
-                        "status": r["status"],
-                    }
-                )
+            result = [
+                {
+                    "id": r["id"],
+                    "type": r["type"],
+                    "topic": r["topic"],
+                    "payload": _parse_payload_json(r["payload"]),
+                    "next_fire_iso": datetime.fromtimestamp(
+                        r["fire_at_or_next"]
+                    ).isoformat(),
+                    "status": r["status"],
+                }
+                for r in rows
+            ]
             return json.dumps(result, ensure_ascii=False)
 
         @function_tool(name_override="cancel_schedule")
@@ -599,10 +599,8 @@ class SchedulerExtension:
             """
             until_at: float | None = None
             if until_iso:
-                try:
-                    dt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
-                    until_at = dt.timestamp()
-                except (ValueError, TypeError):
+                until_at = _parse_iso(until_iso)
+                if until_at is None:
                     return "Error: invalid until_iso format."
             next_fire = await store.update_recurring(
                 schedule_id,
@@ -635,21 +633,11 @@ class SchedulerExtension:
                 now = time.time()
                 due_one_shot = await store.fetch_due_one_shot(now)
                 for row in due_one_shot:
-                    payload = (
-                        json.loads(row["payload"])
-                        if isinstance(row["payload"], str)
-                        else row["payload"]
-                    )
-                    await ctx.emit(row["topic"], payload)
+                    await ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
                     await store.mark_one_shot_fired(row["id"])
                 due_recurring = await store.fetch_due_recurring(now)
                 for row in due_recurring:
-                    payload = (
-                        json.loads(row["payload"])
-                        if isinstance(row["payload"], str)
-                        else row["payload"]
-                    )
-                    await ctx.emit(row["topic"], payload)
+                    await ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
                     await store.advance_next(row["id"], now)
             except asyncio.CancelledError:
                 break
