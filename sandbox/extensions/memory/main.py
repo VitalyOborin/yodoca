@@ -162,6 +162,7 @@ class MemoryExtension:
             rrf_weight_fts=context.get_config("rrf_weight_fts", 1.0),
             rrf_weight_vector=context.get_config("rrf_weight_vector", 1.0),
             rrf_weight_graph=context.get_config("rrf_weight_graph", 1.0),
+            min_score_ratio=context.get_config("rrf_min_score_ratio", 0.4),
         )
 
         self._write_agent = None

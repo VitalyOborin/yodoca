@@ -1,5 +1,6 @@
 """SQLite journal storage for the Event Bus."""
 
+import asyncio
 import json
 import logging
 import time
@@ -45,18 +46,20 @@ class EventJournal:
         self._db_path = db_path
         self._busy_timeout = busy_timeout
         self._conn: aiosqlite.Connection | None = None
+        self._conn_lock = asyncio.Lock()
 
     async def _ensure_conn(self) -> aiosqlite.Connection:
-        if self._conn is None:
-            self._conn = await aiosqlite.connect(str(self._db_path))
-            await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.execute("PRAGMA synchronous=NORMAL")
-            await self._conn.execute(f"PRAGMA busy_timeout={self._busy_timeout}")
-            await self._conn.executescript(_SCHEMA)
-            await self._conn.commit()
-            await self._migrate_retry_count()
-            await self._migrate_processing_since()
-        return self._conn
+        async with self._conn_lock:
+            if self._conn is None:
+                self._conn = await aiosqlite.connect(str(self._db_path))
+                await self._conn.execute("PRAGMA journal_mode=WAL")
+                await self._conn.execute("PRAGMA synchronous=NORMAL")
+                await self._conn.execute(f"PRAGMA busy_timeout={self._busy_timeout}")
+                await self._conn.executescript(_SCHEMA)
+                await self._conn.commit()
+                await self._migrate_retry_count()
+                await self._migrate_processing_since()
+            return self._conn
 
     async def _get_table_columns(self) -> set[str]:
         """Return set of column names for event_journal. Requires _conn set."""
@@ -88,9 +91,10 @@ class EventJournal:
 
     async def close(self) -> None:
         """Close the database connection."""
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        async with self._conn_lock:
+            if self._conn:
+                await self._conn.close()
+                self._conn = None
 
     async def insert(
         self,
@@ -117,23 +121,6 @@ class EventJournal:
         )
         await conn.commit()
         return cursor.lastrowid or 0
-
-    async def fetch_pending(self, limit: int = 3) -> list[_EventRow]:
-        """Fetch pending events by created_at. Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count).
-        Deprecated: use claim_pending for atomic claim."""
-        conn = await self._ensure_conn()
-        cursor = await conn.execute(
-            """
-            SELECT id, topic, source, payload, created_at, correlation_id, retry_count
-            FROM event_journal
-            WHERE status = 'pending'
-            ORDER BY created_at
-            LIMIT ?
-            """,
-            (limit,),
-        )
-        rows = await cursor.fetchall()
-        return [_row_to_event_tuple(row) for row in rows]
 
     async def claim_pending(self, limit: int = 3) -> list[_EventRow]:
         """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction.

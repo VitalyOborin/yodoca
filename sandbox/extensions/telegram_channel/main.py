@@ -229,7 +229,7 @@ class TelegramChannelExtension:
         self._token = None
 
     def health_check(self) -> bool:
-        return bool(self._bot and self._token)
+        return bool(self._bot and self._token and self._chat_id)
 
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""

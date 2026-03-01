@@ -13,6 +13,8 @@ def _make_list_channels(router: MessageRouter) -> Any:
     @function_tool
     async def list_channels() -> str:
         """List all available communication channels.
+        Usually unnecessary — available channels are already listed in the system context.
+        Use only if channel context is missing or you need to refresh the list.
         Returns JSON array of {channel_id, description} objects for use with send_to_channel."""
         ids = router.get_channel_ids()
         if not ids:
@@ -27,7 +29,9 @@ def _make_send_to_channel(router: MessageRouter) -> Any:
     @function_tool
     async def send_to_channel(channel_id: str, text: str) -> str:
         """Send a message to the user via a specific channel.
-        Use when the user explicitly asks to communicate through a particular channel."""
+        channel_id must be one of the available channel IDs from the system context
+        (e.g. 'telegram_channel', 'cli_channel').
+        Do not call list_channels first — use channel IDs from system context."""
         if channel_id not in router.get_channel_ids():
             return json.dumps(
                 {"success": False, "error": f"Channel '{channel_id}' not found. Use list_channels to see available channels."},

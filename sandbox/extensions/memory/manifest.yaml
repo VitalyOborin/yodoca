@@ -26,6 +26,7 @@ config:
   rrf_weight_vector: 1.0
   rrf_weight_fts: 1.0
   rrf_weight_graph: 1.0
+  rrf_min_score_ratio: 0.4
   intent_similarity_threshold: 0.45
 
 agent_config:

@@ -209,7 +209,7 @@ def classify_query_complexity(query: str) -> str:
 def get_adaptive_params(complexity: str) -> dict[str, Any]:
     """Token budget, retrieval depth, and graph depth by complexity."""
     if complexity == "simple":
-        return {"token_budget": 1000, "limit": 5, "graph_depth": 2}
+        return {"token_budget": 600, "limit": 3, "graph_depth": 2}
     return {"token_budget": 3000, "limit": 20, "graph_depth": 4}
 
 
@@ -256,6 +256,7 @@ class MemoryRetrieval:
         rrf_weight_fts: float = 1.0,
         rrf_weight_vector: float = 1.0,
         rrf_weight_graph: float = 1.0,
+        min_score_ratio: float = 0.4,
     ) -> None:
         self._storage = storage
         self._intent_classifier = intent_classifier
@@ -263,6 +264,7 @@ class MemoryRetrieval:
         self._w_fts = rrf_weight_fts
         self._w_vec = rrf_weight_vector
         self._w_graph = rrf_weight_graph
+        self._min_score_ratio = min_score_ratio
 
     def _rrf_merge(
         self,
@@ -288,7 +290,10 @@ class MemoryRetrieval:
                 scores[nid] = scores.get(nid, 0) + self._w_graph / (self._k + rank)
                 all_items.setdefault(nid, item)
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
-        return [all_items[nid] for nid in ranked]
+        return [
+            {**all_items[nid], "_rrf_score": scores[nid]}
+            for nid in ranked
+        ]
 
     async def search(
         self,
@@ -380,6 +385,11 @@ class MemoryRetrieval:
             graph_results=graph_results if graph_results else None,
         )
         if results:
+            max_score = results[0].get("_rrf_score", 1.0)
+            min_score = max_score * self._min_score_ratio
+            results = [r for r in results if r.get("_rrf_score", 0) >= min_score]
+            for r in results:
+                r.pop("_rrf_score", None)
             node_ids = [r["id"] for r in results]
             await self._storage.record_access_for_nodes(node_ids)
         logger.debug(
@@ -404,7 +414,7 @@ class MemoryRetrieval:
         results: list[dict[str, Any]],
         token_budget: int = 2000,
     ) -> str:
-        """Format results with budget shares: Facts 40%, Entity profiles 25%, Temporal 25%, Evidence 10%.
+        """Format results with budget shares: Facts 65%, Entity profiles 35%.
 
         Deduplicates by normalized content so duplicate nodes (same text, different id) appear once.
         """
@@ -412,10 +422,9 @@ class MemoryRetrieval:
             return ""
         char_per_token = 4
         total_chars = token_budget * char_per_token
-        budget_facts = int(total_chars * 0.40)
-        budget_entities = int(total_chars * 0.25)
-        budget_temporal = int(total_chars * 0.25)
-        budget_evidence = int(total_chars * 0.10)
+        budget_facts = int(total_chars * 0.65)
+        budget_entities = int(total_chars * 0.35)
+        budget_temporal = 0
 
         facts = [
             r for r in results if r.get("type") in ("semantic", "procedural", "opinion")
@@ -426,11 +435,14 @@ class MemoryRetrieval:
         sections: list[str] = []
         seen_fact_content: set[str] = set()
 
+        max_fact_chars = 200
         if facts:
             lines = []
             chars = 0
             for r in facts:
                 c = r.get("content", "")
+                if len(c) > max_fact_chars:
+                    c = c[: max_fact_chars - 3] + "..."
                 key = self._normalize_content(c)
                 if key in seen_fact_content or not key:
                     continue
@@ -448,8 +460,10 @@ class MemoryRetrieval:
             chars = 0
             seen_entity_block: set[str] = set()
             for e in entities[:5]:
+                summary = e.get("summary") or ""
+                if not summary or summary.strip() == "(no summary)":
+                    continue
                 name = e.get("canonical_name", "")
-                summary = e.get("summary") or "(no summary)"
                 block = f"**{name}**: {summary}"
                 key = self._normalize_content(block)
                 if key in seen_entity_block or not key:
@@ -478,48 +492,6 @@ class MemoryRetrieval:
                 chars += len(c) + 4
             if lines:
                 sections.append("## Temporal context\n" + "\n".join(lines))
-        else:
-            episode_ids: list[str] = []
-            for r in facts[:3]:
-                targets = await self._storage.get_derived_from_targets(r["id"])
-                episode_ids.extend(targets)
-            if episode_ids:
-                episodes = await self._storage.get_nodes_by_ids(episode_ids)
-                lines = []
-                chars = 0
-                for ep in sorted(episodes, key=lambda x: x.get("event_time", 0)):
-                    c = ep.get("content", "")
-                    key = self._normalize_content(c)
-                    if key in seen_temporal_content or not key:
-                        continue
-                    if chars + len(c) + 4 > budget_temporal:
-                        break
-                    seen_temporal_content.add(key)
-                    lines.append(f"- {c}")
-                    chars += len(c) + 4
-                if lines:
-                    sections.append("## Temporal context\n" + "\n".join(lines))
-
-        if facts and budget_evidence > 0:
-            evidence_lines = []
-            chars = 0
-            seen_evidence: set[str] = set()
-            for r in facts[:2]:
-                targets = await self._storage.get_derived_from_targets(r["id"])
-                if targets:
-                    nodes = await self._storage.get_nodes_by_ids(targets[:1])
-                    if nodes:
-                        src = nodes[0].get("content", "")[:200]
-                        block = f"- Source: {src}..."
-                        key = self._normalize_content(block)
-                        if key in seen_evidence or not key:
-                            continue
-                        if chars + len(block) + 2 <= budget_evidence:
-                            seen_evidence.add(key)
-                            evidence_lines.append(block)
-                            chars += len(block) + 2
-            if evidence_lines:
-                sections.append("## Evidence\n" + "\n".join(evidence_lines))
 
         if not sections:
             lines = []

@@ -300,8 +300,8 @@ class MessageRouter:
     ) -> str:
         """Run streamed agent under user or background lock. Returns final text or error message."""
         lock = self._background_lock if use_background_lock else self._user_lock
-        full_text = ""
         async with lock:
+            full_text = ""
             try:
                 from agents import Runner
                 result = Runner.run_streamed(agent, stripped, session=session)
