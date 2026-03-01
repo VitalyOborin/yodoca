@@ -135,15 +135,14 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 
 - **Location:** `core/tools/`
 - **Role:** Built-in tools available to the Orchestrator and declarative agents via `CoreToolsProvider`.
-- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `list_channels` / `send_to_channel` (channel selection; see [channels.md](channels.md)), `WebSearchTool` (web search; hosted-only).
+- **Tools:** `file` (read/write files), `apply_patch_tool` (patch files), `request_restart` (trigger system restart), `list_channels` / `send_to_channel` (channel selection; see [channels.md](channels.md)). Web search is provided by the **`web_search` extension** ([ADR 013](adr/013-web-search.md)), not by core — add `web_search` to the Orchestrator's tool set via extension dependencies or capabilities.
 - **Shell execution:** Provided by the `shell_exec` extension (`sandbox/extensions/shell_exec/`), not by core. Config: `containered`, `timeout_seconds`, `max_output_length`.
-- **Hosted-only gating:** `WebSearchTool` is included only when the agent's provider supports OpenAI hosted tools (`supports_hosted_tools` in provider config).
 
 ### Orchestrator
 
 - **Location:** `core/agents/orchestrator.py`
 - **Role:** Main AI agent. Created via `create_orchestrator_agent()` factory with:
-  - **core tools** — from `CoreToolsProvider` (file, restart, web search)
+  - **core tools** — from `CoreToolsProvider` (file, restart, channel tools)
   - **extension tools** — from ToolProvider extensions (`loader.get_all_tools()`)
   - **agent tools** — from AgentProvider extensions in `tool` mode (`loader.get_agent_tools()`)
   - **capabilities_summary** — natural-language summary injected into the prompt template
@@ -197,7 +196,7 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 | Category | Extensions | Protocols | Purpose |
 |----------|-----------|-----------|---------|
 | **Channels** | cli_channel, telegram_channel | ChannelProvider, ServiceProvider | Receive user input; deliver agent responses |
-| **Tools** | kv, scheduler | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, etc.) |
+| **Tools** | kv, scheduler, web_search, shell_exec | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, web_search/open_page, shell execution) |
 | **Agents** | builder_agent, simple_agent | AgentProvider | Specialized agents invoked as tools (`integration_mode: tool`) |
 | **Memory** | memory | ToolProvider, ContextProvider, SchedulerProvider | Graph-based cognitive memory: episodes, facts, procedures, opinions. Intent-aware hybrid retrieval, LLM-powered consolidation, Ebbinghaus decay |
 | **Background work** | task_engine | ToolProvider, ServiceProvider | Durable multi-step task execution with checkpointing, retries, subtasks, and human review |

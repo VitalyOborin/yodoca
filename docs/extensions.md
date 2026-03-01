@@ -222,6 +222,10 @@ Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cac
 
 **Approval flow**: When `require_approval` is set, the Router detects SDK interruptions and emits `system.mcp.tool_approval_request`; channels (e.g. CLI) subscribe, show a prompt to the user, and emit `system.mcp.tool_approval_response` with approve/reject. The run resumes accordingly.
 
+### Web Search (`web_search` extension)
+
+The Web Search extension ([ADR 013](adr/013-web-search.md)) implements `ToolProvider` and exposes two tools: **`web_search`** (query → ranked results with snippets) and **`open_page`** (fetch full page content from URLs). It uses configurable search and read providers (DuckDuckGo, Jina, Tavily, Perplexity, SearXNG, etc.). Add `web_search` to the Orchestrator's tool set (e.g. via `uses_tools` or by having the extension in the default capabilities) so the agent can search the web and read pages regardless of LLM provider.
+
 ### `ContextProvider`
 
 Enriches agent context before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
@@ -348,7 +352,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | Method | Description |
 |--------|-------------|
 | `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
-| `get_secret(name)` | Read from environment (e.g. `.env`) |
+| `get_secret(name)` | Read secret by name (keyring first, then `.env`). Async; use `await ctx.get_secret(name)`. |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
 
 ### Event Bus
@@ -591,4 +595,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `embedding`, `builder_agent`, `simple_agent`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `builder_agent`, `simple_agent`

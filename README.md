@@ -251,6 +251,9 @@ sandbox/
     embedding/           # embedding generation for memory search
     scheduler/           # one-shot and recurring events
     task_engine/         # durable background tasks with retries
+    web_search/          # web search and page reading (replaces core WebSearchTool)
+    mcp/                 # Model Context Protocol bridge
+    shell_exec/          # shell command execution (configurable container/timeout)
     kv/                  # key-value store (secrets, config)
     builder_agent/       # code-generation agent
     simple_agent/        # declarative sub-agent (manifest-only)
@@ -354,6 +357,7 @@ Detailed docs live in [`docs/`](docs/):
 - [Channels](docs/channels.md) — CLI, Telegram, agent channel tools
 - [Memory](docs/memory.md), [Scheduler](docs/scheduler.md), [Task Engine](docs/task_engine.md)
 - [Secrets](docs/secrets.md) — keyring vs `.env`, onboarding flow
+- [Configuration](docs/configuration.md), [Config (structure)](docs/config.md) — settings and extension config priority
 - [ADRs](docs/adr/) — architecture decisions
 
 ---
