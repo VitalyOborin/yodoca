@@ -9,6 +9,15 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
+_EventRow = tuple[int, str, str, dict, float, str | None, int]
+
+
+def _row_to_event_tuple(row: tuple) -> _EventRow:
+    """Convert journal row to (id, topic, source, payload, created_at, correlation_id, retry_count)."""
+    payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
+    retry_count = row[6] if len(row) > 6 else 0
+    return (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_journal (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,14 +58,19 @@ class EventJournal:
             await self._migrate_processing_since()
         return self._conn
 
+    async def _get_table_columns(self) -> set[str]:
+        """Return set of column names for event_journal. Requires _conn set."""
+        if self._conn is None:
+            return set()
+        cursor = await self._conn.execute("PRAGMA table_info(event_journal)")
+        rows = await cursor.fetchall()
+        return {row[1] for row in rows}
+
     async def _migrate_retry_count(self) -> None:
         """Add retry_count column if missing (migration for existing DBs)."""
         if self._conn is None:
             return
-        cursor = await self._conn.execute("PRAGMA table_info(event_journal)")
-        rows = await cursor.fetchall()
-        columns = [row[1] for row in rows]
-        if "retry_count" not in columns:
+        if "retry_count" not in await self._get_table_columns():
             await self._conn.execute(
                 "ALTER TABLE event_journal ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
             )
@@ -66,10 +80,7 @@ class EventJournal:
         """Add processing_since column if missing (migration for existing DBs)."""
         if self._conn is None:
             return
-        cursor = await self._conn.execute("PRAGMA table_info(event_journal)")
-        rows = await cursor.fetchall()
-        columns = [row[1] for row in rows]
-        if "processing_since" not in columns:
+        if "processing_since" not in await self._get_table_columns():
             await self._conn.execute(
                 "ALTER TABLE event_journal ADD COLUMN processing_since REAL"
             )
@@ -107,9 +118,7 @@ class EventJournal:
         await conn.commit()
         return cursor.lastrowid or 0
 
-    async def fetch_pending(
-        self, limit: int = 3
-    ) -> list[tuple[int, str, str, dict, float, str | None, int]]:
+    async def fetch_pending(self, limit: int = 3) -> list[_EventRow]:
         """Fetch pending events by created_at. Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count).
         Deprecated: use claim_pending for atomic claim."""
         conn = await self._ensure_conn()
@@ -124,18 +133,9 @@ class EventJournal:
             (limit,),
         )
         rows = await cursor.fetchall()
-        result: list[tuple[int, str, str, dict, float, str | None, int]] = []
-        for row in rows:
-            payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
-            retry_count = row[6] if len(row) > 6 else 0
-            result.append(
-                (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
-            )
-        return result
+        return [_row_to_event_tuple(row) for row in rows]
 
-    async def claim_pending(
-        self, limit: int = 3
-    ) -> list[tuple[int, str, str, dict, float, str | None, int]]:
+    async def claim_pending(self, limit: int = 3) -> list[_EventRow]:
         """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction.
         Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count)."""
         conn = await self._ensure_conn()
@@ -162,14 +162,7 @@ class EventJournal:
                     [now, *ids],
                 )
             await conn.commit()
-            result: list[tuple[int, str, str, dict, float, str | None, int]] = []
-            for row in rows:
-                payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
-                retry_count = row[6] if len(row) > 6 else 0
-                result.append(
-                    (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
-                )
-            return result
+            return [_row_to_event_tuple(row) for row in rows]
         except Exception:
             await conn.rollback()
             raise

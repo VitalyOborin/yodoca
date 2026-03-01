@@ -495,14 +495,13 @@ class Loader:
             if isinstance(ext, SchedulerProvider) and manifest:
                 self._scheduler_manager.register(ext_id, ext, manifest)
 
-        channel_descriptions = {}
-        for m in self._manifests:
-            if m.id in [
-                eid
-                for eid, e in self._extensions.items()
-                if isinstance(e, ChannelProvider)
-            ]:
-                channel_descriptions[m.id] = m.name
+        channel_ids = {
+            eid for eid, e in self._extensions.items()
+            if isinstance(e, ChannelProvider)
+        }
+        channel_descriptions = {
+            m.id: m.name for m in self._manifests if m.id in channel_ids
+        }
         router.set_channel_descriptions(channel_descriptions)
 
     async def start_all(self) -> None:

@@ -24,6 +24,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_response_delta_type() -> type | None:
+    """ResponseTextDeltaEvent type for stream delta detection; None if openai not available."""
+    try:
+        from openai.types.responses import ResponseTextDeltaEvent
+        return ResponseTextDeltaEvent
+    except Exception:
+        return None
+
+
 class MessageRouter:
     """Handles user_message -> agent -> channel; notify_user; pub/sub for middleware."""
 
@@ -220,6 +229,39 @@ class MessageRouter:
             except Exception as e:
                 logger.exception("Event handler error [%s]: %s", event, e)
 
+    async def _consume_stream_events(
+        self,
+        result: Any,
+        on_chunk: Callable[[str], Awaitable[None]],
+        on_tool_call: Callable[[str], Awaitable[None]] | None,
+        response_delta_type: type | None,
+    ) -> tuple[str, BaseException | None]:
+        """Consume stream events from Runner.run_streamed result.
+        Returns (accumulated_text, error). error is non-None if stream raised."""
+        full_text = ""
+        try:
+            async for event in result.stream_events():
+                if event.type == "raw_response_event":
+                    event_data = event.data
+                    delta = None
+                    if response_delta_type is not None and isinstance(event_data, response_delta_type):
+                        delta = event_data.delta
+                    elif hasattr(event_data, "delta"):
+                        delta = event_data.delta
+                    if delta is not None:
+                        full_text += delta
+                        await on_chunk(delta)
+                elif event.type == "run_item_stream_event":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) == "tool_call_item":
+                        raw_item = getattr(item, "raw_item", None)
+                        tool_name = getattr(raw_item, "name", "tool")
+                        if on_tool_call:
+                            await on_tool_call(str(tool_name))
+            return full_text, None
+        except BaseException as e:
+            return full_text, e
+
     async def _prepare_agent(
         self,
         prompt: str,
@@ -269,48 +311,20 @@ class MessageRouter:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-
-        response_delta_type = None
-        try:
-            from openai.types.responses import ResponseTextDeltaEvent
-
-            response_delta_type = ResponseTextDeltaEvent
-        except Exception:
-            response_delta_type = None
-
+        response_delta_type = _get_response_delta_type()
         full_text = ""
         async with self._user_lock:
             try:
                 from agents import Runner
 
                 result = Runner.run_streamed(
-                    agent,
-                    stripped,
-                    session=self._session,
+                    agent, stripped, session=self._session
                 )
-                async for event in result.stream_events():
-                    if event.type == "raw_response_event":
-                        event_data = event.data
-                        delta: str | None = None
-                        if response_delta_type is not None and isinstance(
-                            event_data, response_delta_type
-                        ):
-                            delta = event_data.delta
-                        elif hasattr(event_data, "delta"):
-                            delta = event_data.delta
-                        if delta is not None:
-                            full_text += delta
-                            await on_chunk(delta)
-                    elif (
-                        event.type == "run_item_stream_event"
-                        and getattr(getattr(event, "item", None), "type", None)
-                        == "tool_call_item"
-                    ):
-                        event_item = getattr(event, "item", None)
-                        raw_item = getattr(event_item, "raw_item", None)
-                        tool_name = getattr(raw_item, "name", "tool")
-                        if on_tool_call:
-                            await on_tool_call(str(tool_name))
+                full_text, stream_error = await self._consume_stream_events(
+                    result, on_chunk, on_tool_call, response_delta_type
+                )
+                if stream_error is not None:
+                    raise stream_error
                 return result.final_output or full_text
             except Exception as e:
                 logger.exception("Agent streaming invocation failed: %s", e)
@@ -366,48 +380,20 @@ class MessageRouter:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
         session = self._get_background_session()
-
-        response_delta_type = None
-        try:
-            from openai.types.responses import ResponseTextDeltaEvent
-
-            response_delta_type = ResponseTextDeltaEvent
-        except Exception:
-            response_delta_type = None
-
+        response_delta_type = _get_response_delta_type()
         full_text = ""
         async with self._background_lock:
             try:
                 from agents import Runner
 
                 result = Runner.run_streamed(
-                    agent,
-                    stripped,
-                    session=session,
+                    agent, stripped, session=session
                 )
-                async for event in result.stream_events():
-                    if event.type == "raw_response_event":
-                        event_data = event.data
-                        delta: str | None = None
-                        if response_delta_type is not None and isinstance(
-                            event_data, response_delta_type
-                        ):
-                            delta = event_data.delta
-                        elif hasattr(event_data, "delta"):
-                            delta = event_data.delta
-                        if delta is not None:
-                            full_text += delta
-                            await on_chunk(delta)
-                    elif (
-                        event.type == "run_item_stream_event"
-                        and getattr(getattr(event, "item", None), "type", None)
-                        == "tool_call_item"
-                    ):
-                        event_item = getattr(event, "item", None)
-                        raw_item = getattr(event_item, "raw_item", None)
-                        tool_name = getattr(raw_item, "name", "tool")
-                        if on_tool_call:
-                            await on_tool_call(str(tool_name))
+                full_text, stream_error = await self._consume_stream_events(
+                    result, on_chunk, on_tool_call, response_delta_type
+                )
+                if stream_error is not None:
+                    raise stream_error
                 return result.final_output or full_text
             except Exception as e:
                 logger.exception("Agent background streaming failed: %s", e)
@@ -501,8 +487,7 @@ class MessageRouter:
         if not self._channels:
             logger.warning("notify_user: no channels registered")
             return
-        if channel_id and channel_id in self._channels:
-            ch = self._channels[channel_id]
-        else:
+        ch = self._channels.get(channel_id) if channel_id else None
+        if ch is None:
             ch = next(iter(self._channels.values()))
         await ch.send_message(text)
