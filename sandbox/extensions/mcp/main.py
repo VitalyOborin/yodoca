@@ -148,14 +148,39 @@ class McpBridgeExtension:
     async def initialize(self, context: Any) -> None:
         self._ctx = context
 
-    async def start(self) -> None:
+    async def _resolve_and_build_server(
+        self, entry: dict[str, Any], alias: str
+    ) -> tuple[Any | None, dict[str, Any] | None]:
+        """Resolve secrets and build one server. Returns (server, resolved_entry) or (None, None)."""
+        resolved = await _resolve_all_secrets(entry, self._ctx.get_secret)
+        if resolved is None:
+            logger.warning(
+                "mcp: skipping server %s: missing secret(s) %s",
+                alias,
+                _find_missing_secret_names(entry),
+            )
+            return (None, None)
+        try:
+            server = _build_server(alias, resolved)
+        except Exception as e:
+            logger.exception("mcp: failed to build server %s: %s", alias, e)
+            return (None, None)
+        if server is None:
+            return (None, None)
+        return (server, resolved)
+
+    async def _build_servers_from_config(
+        self,
+    ) -> tuple[list[Any], list[str], dict[str, list[dict[str, Any]] | str]]:
+        """Build server list and prompts config from config.servers. Returns (servers, aliases, prompts_config)."""
         servers_cfg = self._ctx.get_config("servers") or []
         if not isinstance(servers_cfg, list):
             logger.warning("mcp: config.servers must be a list, got %s", type(servers_cfg))
-            return
+            return ([], [], {})
 
         servers: list[Any] = []
-        self._active_aliases = []
+        active_aliases: list[str] = []
+        server_prompts_config: dict[str, list[dict[str, Any]] | str] = {}
 
         for entry in servers_cfg:
             if not isinstance(entry, dict):
@@ -165,41 +190,29 @@ class McpBridgeExtension:
             if not alias or not transport:
                 logger.warning("mcp: server entry missing alias or transport, skip")
                 continue
-
-            resolved = await _resolve_all_secrets(entry, self._ctx.get_secret)
-            if resolved is None:
-                logger.warning(
-                    "mcp: skipping server %s: missing secret(s) %s",
-                    alias,
-                    _find_missing_secret_names(entry),
-                )
-                continue
-            entry = resolved
-
-            try:
-                server = _build_server(alias, entry)
-            except Exception as e:
-                logger.exception("mcp: failed to build server %s: %s", alias, e)
-                continue
+            server, resolved = await self._resolve_and_build_server(entry, alias)
             if server is None:
                 continue
-
             servers.append(server)
-            self._active_aliases.append(alias)
-            prompts_cfg = entry.get("prompts")
+            active_aliases.append(alias)
+            prompts_cfg = resolved.get("prompts") if resolved else None
             if prompts_cfg is not None:
-                self._server_prompts_config[alias] = prompts_cfg
+                server_prompts_config[alias] = prompts_cfg
 
+        return (servers, active_aliases, server_prompts_config)
+
+    async def start(self) -> None:
+        servers, active_aliases, server_prompts_config = await self._build_servers_from_config()
         if not servers:
             return
-
+        self._active_aliases = active_aliases
+        self._server_prompts_config = server_prompts_config
         self._manager = MCPServerManager(
             servers,
             drop_failed_servers=True,
             connect_timeout_seconds=10,
         )
         await self._manager.__aenter__()
-
         if self._manager.failed_servers:
             logger.warning(
                 "mcp: %d server(s) failed to connect: %s",
