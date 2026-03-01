@@ -141,6 +141,26 @@ This enables the agent to reliably detect delivery status and choose channels (e
 
 ---
 
+## Troubleshooting Delivery and Tool Availability
+
+Channels deliver messages, but they do not decide which non-channel tools exist. If the Orchestrator reports that a tool is unavailable (for example shell/web/kv), the root cause is usually extension loading, not channel routing.
+
+Use this quick triage:
+
+1. Confirm the channel path works:
+   - incoming `user.message` is emitted by the channel
+   - response is delivered through `send_to_user()` / streaming callbacks
+2. Check extension load status in `sandbox/logs/app.log`:
+   - look for `Failed to load extension <id>`
+   - look for import errors in extension `main.py` or sibling modules
+3. Restart the agent process after fixing extension code/config so Loader re-runs:
+   - `discover` → `load_all` → `initialize_all` → `detect_and_wire_all`
+4. Re-test from the same channel.
+
+Important: if a ToolProvider extension fails to load, its tools are excluded from Orchestrator capabilities, while channels can still remain fully functional.
+
+---
+
 ## Message Flow
 
 ```

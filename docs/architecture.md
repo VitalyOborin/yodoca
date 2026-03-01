@@ -117,6 +117,15 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/extensions/loader.py`
 - **Role:** Discovers extensions, loads them in dependency order, initializes, wires protocols, manages lifecycle.
 - **Wiring:** Detects all Protocol implementors above and registers them with the MessageRouter or internal registries.
+- **Import model:** Programmatic extensions are loaded via `importlib.util.spec_from_file_location(...)` using `manifest.entrypoint` (for example `main:MyExtension`). In this mode extension modules are not loaded as package modules, so `from .x import ...` may fail without a fallback.
+
+**Extension import rule (important):**
+
+- Prefer extension-local imports that work in both contexts:
+  - package context (relative import works)
+  - file-spec context used by Loader (relative import may not have a parent package)
+- For sibling modules in the same extension (for example `executors.py`), use a safe fallback import strategy (explicit file-based import) if relative import fails.
+- If an extension fails to import, Loader skips it and it is excluded from ToolProvider/AgentProvider wiring; consequently its tools are not available to the Orchestrator.
 
 ### EventBus
 

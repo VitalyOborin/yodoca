@@ -127,6 +127,10 @@ Guaranteed topics that always have a kernel-registered handler. Use these when y
 | `system.user.notify` | `{text, channel_id?}` | Delivers message to user via active channel |
 | `system.agent.task` | `{prompt, channel_id?, correlation_id?}` | Invokes Orchestrator; response to user |
 | `system.agent.background` | `{prompt, correlation_id?}` | Invokes Orchestrator silently |
+| `session.completed` | `{session_id, reason}` | Session lifecycle signal (used by memory/consolidation flows) |
+| `system.channel.secure_input_request` | `{secret_id, prompt, target_channel}` | Requests secure user input via channel without exposing secret to LLM |
+| `system.mcp.tool_approval_request` | `{request_id, tool_name, arguments, server_alias, channel_id?}` | Requests user approval for an MCP tool call |
+| `system.mcp.tool_approval_response` | `{request_id, approved, reason?}` | Resumes/denies paused MCP tool invocation |
 
 Use via `ctx.notify_user()`, `ctx.request_agent_task()`, `ctx.request_agent_background()`, or emit directly with `ctx.emit(SystemTopics.USER_NOTIFY, {...})`. The Scheduler extension uses these topics when the agent schedules reminders.
 
@@ -208,6 +212,23 @@ Handlers run sequentially per event. If any handler raises, the event is marked 
 2. Log total recovered count
 
 The dispatch loop then processes recovered events normally.
+
+---
+
+## Troubleshooting: Bus vs Extension Errors
+
+When the Orchestrator says a tool is unavailable, verify whether the issue is Event Bus delivery or extension loading:
+
+1. **EventBus health**
+   - `user.message` appears in flow and channels still receive/send messages
+   - `event_journal` progresses (`pending`/`processing` move to `done`)
+2. **Extension load state**
+   - Check `sandbox/logs/app.log` for `Failed to load extension <id>`
+   - Import/init failures prevent ToolProvider wiring, so tools never enter Orchestrator capabilities
+3. **After fix**
+   - Restart agent process so Loader re-runs `discover -> load_all -> initialize_all -> detect_and_wire_all`
+
+Important: a channel can keep working while a ToolProvider extension is unavailable. In that case EventBus may be healthy, but tool calls still fail due to missing extension wiring.
 
 ---
 
