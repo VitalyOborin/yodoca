@@ -264,17 +264,24 @@ class MessageRouter:
             return event_data.delta
         return None
 
+    async def _get_context_for_prompt(
+        self, prompt: str, turn_context: TurnContext | None
+    ) -> tuple[str, TurnContext, str]:
+        """Compute stripped prompt, turn context, and middleware context. Single source for _prepare_agent and enrich_prompt."""
+        stripped = prompt.strip()
+        ctx = turn_context or TurnContext(agent_id=self._agent_id)
+        context = ""
+        if self._invoke_middleware:
+            context = await self._invoke_middleware(stripped, ctx) or ""
+        return stripped, ctx, context
+
     async def _prepare_agent(
         self,
         prompt: str,
         turn_context: TurnContext | None = None,
     ) -> tuple[Any, str]:
         """Run middleware, clone agent with context if needed. Returns (agent, stripped_prompt)."""
-        ctx = turn_context or TurnContext(agent_id=self._agent_id)
-        stripped = prompt.strip()
-        context = ""
-        if self._invoke_middleware:
-            context = await self._invoke_middleware(stripped, ctx) or ""
+        stripped, _ctx, context = await self._get_context_for_prompt(prompt, turn_context)
         agent = self._agent
         if context and isinstance(getattr(self._agent, "instructions", None), str):
             agent = self._agent.clone(
@@ -393,19 +400,12 @@ class MessageRouter:
     async def enrich_prompt(
         self, prompt: str, turn_context: TurnContext | None = None
     ) -> str:
-        """Return context + separator + prompt for use as a single prompt by downstream agents.
-
-        Extensions that run their own Agent pass the result as one message.
-        For invoke_agent, context is injected into system role instead.
-        """
-        stripped = prompt.strip()
-        if not self._invoke_middleware:
+        """Return context + separator + prompt for use by downstream agents.
+        For invoke_agent, context is injected into system role via _prepare_agent."""
+        stripped, _ctx, context = await self._get_context_for_prompt(prompt, turn_context)
+        if not context:
             return stripped
-        ctx = turn_context or TurnContext(agent_id=self._agent_id)
-        context = await self._invoke_middleware(stripped, ctx) or ""
-        if context:
-            return context + "\n\n---\n\n" + stripped
-        return stripped
+        return context + "\n\n---\n\n" + stripped
 
     async def _maybe_rotate_session(self) -> None:
         """Rotate session if last message was longer than session_timeout ago."""
