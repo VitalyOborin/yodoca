@@ -1,19 +1,26 @@
 """Shell Exec extension: ToolProvider for executing shell commands with CWD tracking."""
 
 import asyncio
+import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import Any, List
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
+from typing import Any, Protocol, cast
 
 from agents import function_tool
 from pydantic import BaseModel
 
-from executors import BaseExecutor, LocalUnsafeExecutor
+try:
+    from .executors import BaseExecutor, LocalUnsafeExecutor
+except ImportError:  # pragma: no cover - fallback for direct module loading
+    _executors_path = Path(__file__).resolve().parent / "executors.py"
+    _spec = importlib.util.spec_from_file_location("ext_shell_exec_executors", _executors_path)
+    if _spec is None or _spec.loader is None:
+        raise ImportError(f"Cannot load executors module from {_executors_path}")
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    BaseExecutor = _mod.BaseExecutor
+    LocalUnsafeExecutor = _mod.LocalUnsafeExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +33,19 @@ class ShellExecResult(BaseModel):
     stderr: str = ""
 
 
+class ExtensionContext(Protocol):
+    """Minimal contract used by this extension at runtime."""
+
+    data_dir: Path
+
+    def get_config(self, key: str, default: Any = None) -> Any: ...
+
+
 class ShellExecExtension:
     """Extension providing shell execution tool with stateful CWD tracking."""
 
     def __init__(self) -> None:
-        self._ctx: Any = None
+        self._ctx: ExtensionContext | None = None
         self._executor: BaseExecutor | None = None
         self._timeout: int = 60
         self._max_output: int = 8000
@@ -39,52 +54,63 @@ class ShellExecExtension:
         self._sandbox_root: Path | None = None
 
     async def initialize(self, context: Any) -> None:
-        self._ctx = context
-        self._containered = context.get_config("containered", False)
-        self._timeout = context.get_config("timeout_seconds", 60)
-        self._max_output = context.get_config("max_output_length", 8000)
-        self._sandbox_root = context.data_dir.parent.parent
-
-        cwd_config = context.get_config("cwd", None)
-        if cwd_config is None or cwd_config == "":
-            self._current_cwd = context.data_dir
-        else:
-            resolved = (self._sandbox_root / str(cwd_config)).resolve()
-            try:
-                resolved.relative_to(self._sandbox_root.resolve())
-            except ValueError:
-                logger.warning(
-                    "cwd %r outside sandbox, falling back to data_dir",
-                    cwd_config,
-                )
-                resolved = context.data_dir
-            resolved.mkdir(parents=True, exist_ok=True)
-            self._current_cwd = resolved
-
-        if self._containered:
-            logger.error("Containered mode not implemented yet. Using unsafe local.")
-        self._executor = LocalUnsafeExecutor()
-
+        typed_context = cast(ExtensionContext, context)
+        self._ctx = typed_context
+        self._load_runtime_config(typed_context)
+        self._current_cwd = self._resolve_initial_cwd(typed_context)
+        self._executor = self._build_executor()
         logger.info("ShellExec initialized. containered=%s", self._containered)
 
     async def start(self) -> None:
-        pass
+        """No-op lifecycle hook kept for extension interface compatibility."""
+        return None
 
     async def stop(self) -> None:
-        pass
+        """No-op lifecycle hook kept for extension interface compatibility."""
+        return None
 
     async def destroy(self) -> None:
-        pass
+        """No-op lifecycle hook kept for extension interface compatibility."""
+        return None
 
     def health_check(self) -> bool:
         return True
 
-    def get_tools(self) -> List[Any]:
+    def get_tools(self) -> list[Any]:
         return [
             function_tool(name_override="execute_shell_command")(
                 self.execute_shell_command
             )
         ]
+
+    def _load_runtime_config(self, context: ExtensionContext) -> None:
+        self._containered = context.get_config("containered", False)
+        self._timeout = context.get_config("timeout_seconds", 60)
+        self._max_output = context.get_config("max_output_length", 8000)
+        self._sandbox_root = context.data_dir.parent.parent
+
+    def _resolve_initial_cwd(self, context: ExtensionContext) -> Path:
+        cwd_config = context.get_config("cwd", None)
+        if cwd_config is None or cwd_config == "":
+            return context.data_dir
+
+        sandbox_root = self._sandbox_root or context.data_dir.parent.parent
+        resolved = (sandbox_root / str(cwd_config)).resolve()
+        try:
+            resolved.relative_to(sandbox_root.resolve())
+        except ValueError:
+            logger.warning(
+                "cwd %r outside sandbox, falling back to data_dir",
+                cwd_config,
+            )
+            resolved = context.data_dir
+        resolved.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    def _build_executor(self) -> BaseExecutor:
+        if self._containered:
+            logger.error("Containered mode not implemented yet. Using unsafe local.")
+        return LocalUnsafeExecutor()
 
     def _truncate_head_tail(self, text: str) -> str:
         """Keep first and last halves with middle marker. LLM sees start and end."""
@@ -128,6 +154,24 @@ class ShellExecExtension:
         parts = stdout.split(self._CWD_MARKER, 1)
         return parts[0].rstrip()
 
+    def _error_result(self, error: str) -> ShellExecResult:
+        return ShellExecResult(
+            exit_code=1,
+            stdout="",
+            stderr=f"ExecutionError: {error}",
+        )
+
+    async def _run_wrapped_command(
+        self, wrapped_command: str, cwd: str
+    ) -> tuple[int, str, str]:
+        # Keep blocking subprocess work off the event loop thread.
+        return await asyncio.to_thread(
+            self._executor.execute,
+            wrapped_command,
+            cwd,
+            self._timeout,
+        )
+
     async def execute_shell_command(self, command: str) -> ShellExecResult:
         """
         Execute a shell command on the local machine. Use this to run scripts,
@@ -138,28 +182,15 @@ class ShellExecExtension:
             command: The shell command to execute.
         """
         if not self._executor or not self._ctx or self._current_cwd is None:
-            return ShellExecResult(
-                exit_code=1,
-                stdout="",
-                stderr="ExecutionError: Extension not initialized.",
-            )
+            return self._error_result("Extension not initialized.")
 
         wrapped = self._wrap_command_with_pwd(command)
         cwd = str(self._current_cwd)
 
         try:
-            exit_code, stdout, stderr = await asyncio.to_thread(
-                self._executor.execute,
-                wrapped,
-                cwd,
-                self._timeout,
-            )
+            exit_code, stdout, stderr = await self._run_wrapped_command(wrapped, cwd)
         except Exception as e:
-            return ShellExecResult(
-                exit_code=1,
-                stdout="",
-                stderr=f"ExecutionError: {str(e)}",
-            )
+            return self._error_result(str(e))
 
         new_cwd = self._parse_new_cwd(stdout)
         if new_cwd is not None:
