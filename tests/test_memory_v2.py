@@ -24,16 +24,25 @@ _memory_main = importlib.util.module_from_spec(_memory_main_spec)
 _memory_main_spec.loader.exec_module(_memory_main)
 MemoryExtension = _memory_main.MemoryExtension
 
-from agent_tools import build_write_path_tools
 from decay import DecayService
 from retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
-    MemoryRetrieval,
     classify_query_complexity,
     get_adaptive_params,
     parse_time_expression,
 )
+
+try:
+    from retrieval import MemoryRetrieval
+except ImportError:
+    MemoryRetrieval = None  # v3: replaced by HierarchicalRetriever
+
+pytestmark = pytest.mark.skipif(
+    MemoryRetrieval is None,
+    reason="v2 MemoryRetrieval removed in v3; use v3 tests",
+)
+
 from storage import MemoryStorage
 from tools import build_tools
 
@@ -602,6 +611,7 @@ class TestMemoryStoragePhase3:
         assert "u2" in uncons2
 
 
+@pytest.mark.skip(reason="v2 agent_tools removed in v3")
 class TestWritePathTools:
     """Write-path agent tools: save_nodes_batch, extract_and_link_entities, resolve_conflict."""
 
@@ -1178,6 +1188,7 @@ class TestEntityEnrichment:
         assert "RichEntity" not in names
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="v2 agent_tools removed in v3")
     async def test_update_entity_summary_tool(self, storage: MemoryStorage) -> None:
         now = int(time.time())
         eid = await storage.insert_entity(
@@ -1239,6 +1250,7 @@ class TestCausalEdgeInference:
         assert pairs[0][0]["id"] == ids[0] and pairs[0][1]["id"] == ids[1]
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="v2 agent_tools removed in v3")
     async def test_save_causal_edges_creates_edges(
         self, storage: MemoryStorage
     ) -> None:

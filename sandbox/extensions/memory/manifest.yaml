@@ -1,33 +1,55 @@
 id: memory
-name: Memory v2
-version: "2.0.0"
+name: Memory v3
+version: "3.0.0"
 
 entrypoint: main:MemoryExtension
 
 description: |
-  Graph-based cognitive memory. Stores episodes, facts, procedures, opinions
-  as nodes with typed relationships (temporal, causal, entity, provenance).
-  Intent-aware hybrid retrieval (FTS5 + vector + graph BFS + RRF).
-  LLM-powered write path for consolidation and entity resolution.
+  Hierarchical knowledge graph with atomic fact extraction.
+  Three-tier storage: episodes (non-lossy) → entities + facts (structured triples)
+  → communities (clustered summaries). Deterministic entity resolution and
+  conflict detection. Intent-aware three-tier retrieval with RRF fusion.
 
 depends_on:
   - embedding
 
 config:
   embedding_dimensions: 256
-  decay_threshold: 0.05
-  decay_rate_default: 0.1
-  entity_enrichment_min_mentions: 3
-  causal_inference_batch_size: 50
-  consolidation_episodes_per_chunk: 30
-  conflict_min_confidence: 0.8
+  # Entity resolution
+  entity_resolution_threshold: 0.85
+  entity_resolution_ambiguous_threshold: 0.70
+  # Fact dedup and decay
+  fact_dedup_threshold: 0.90
+  confidence_threshold: 0.05
+  decay_lambda: 0.1
+  # Retrieval
   context_token_budget: 2000
   rrf_k: 60
   rrf_weight_vector: 1.0
   rrf_weight_fts: 1.0
   rrf_weight_graph: 1.0
-  rrf_min_score_ratio: 0.4
   intent_similarity_threshold: 0.45
+  bfs_max_depth: 2
+  bfs_max_facts: 50
+  # Community
+  community_min_shared_facts: 2
+  community_refresh_interval_days: 7
+  # Predicate canonicalization
+  preferred_predicates:
+    - WORKS_AT
+    - LIVES_IN
+    - MANAGES
+    - CREATED
+    - USES_TECH
+    - PART_OF
+    - KNOWS
+    - PREFERS
+    - DISLIKES
+    - HAPPENED_AT
+    - CAUSED
+    - FOLLOWED_BY
+  # Pipeline
+  pipeline_max_attempts: 3
 
 agent_config:
   memory_agent:
@@ -37,6 +59,10 @@ schedules:
   - name: nightly_maintenance
     cron: "0 3 * * *"
     task: run_nightly_maintenance
-    description: "Consolidate pending sessions, apply decay, enrich entities"
+    description: "Consolidate pending sessions, expire low-confidence facts, enrich entities"
+  - name: community_refresh
+    cron: "0 4 * * 0"
+    task: run_community_refresh
+    description: "Full label propagation on entity-fact graph (weekly)"
 
 enabled: true

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. **Supersedes ADR 008.**
+Accepted. **Supersedes ADR 008.**
 
 ## Context
 
@@ -876,7 +876,6 @@ sandbox/extensions/memory/
 ├── community.py           — CommunityManager: label propagation, summary generation
 ├── decay.py               — Ebbinghaus decay on facts (pure algorithm)
 ├── tools.py               — Orchestrator tools
-├── agent_tools.py         — Write-path agent tools (internal)
 ├── migration.py           — V2 → V3 migration tool
 └── prompts/
     ├── decompose.jinja2   — Atomic decomposition prompt
@@ -884,7 +883,7 @@ sandbox/extensions/memory/
     └── community.jinja2   — Community summary generation prompt
 ```
 
-Changes from v2: `agent.py` → split into `pipeline.py` (atomic pipeline) + `community.py`. `prompt.jinja2` → split into three purpose-specific prompts in `prompts/`. Added `migration.py`.
+Changes from v2: `agent.py` → split into `pipeline.py` (atomic pipeline) + `community.py`. `prompt.jinja2` → split into three purpose-specific prompts in `prompts/`. Added `migration.py`. Write-path tools internalized into `pipeline.py` (no separate `agent_tools.py`).
 
 ## Implementation Phases
 

@@ -1,5 +1,6 @@
-"""MemoryRetrieval: intent classification, FTS5 search, context assembly. Memory v2."""
+"""HierarchicalRetriever: intent classification, hybrid fact search, BFS expansion, RRF fusion. Memory v3."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -235,36 +236,42 @@ def parse_time_expression(expr: str | None) -> int | None:
 
 
 async def _resolve_entity(storage: Any, name: str) -> dict[str, Any] | None:
-    """Resolve entity by canonical_name or alias. Returns entity dict or None."""
+    """Resolve entity by name or alias. Returns entity dict or None."""
     if not name or not name.strip():
         return None
-    entity = await storage.get_entity_by_name(name.strip())
+    entity = await storage.get_entity_by_normalized_name(name.strip())
     if entity:
         return entity
-    return await storage.search_entity_by_alias(name.strip())
+    return await storage.get_entity_by_alias(name.strip())
 
 
-class MemoryRetrieval:
-    """Hybrid FTS5 + vector + graph search with RRF fusion. Intent-aware retrieval."""
+class HierarchicalRetriever:
+    """Three-tier hierarchical retrieval: fact search (FTS5 + vector), BFS expansion, RRF fusion."""
 
     def __init__(
         self,
         storage: Any,
+        embed_fn: Callable[..., Any],
         intent_classifier: IntentClassifier,
         *,
         rrf_k: int = 60,
         rrf_weight_fts: float = 1.0,
         rrf_weight_vector: float = 1.0,
         rrf_weight_graph: float = 1.0,
-        min_score_ratio: float = 0.4,
+        bfs_max_depth: int = 2,
+        bfs_max_facts: int = 50,
+        context_token_budget: int = 2000,
     ) -> None:
         self._storage = storage
+        self._embed_fn = embed_fn
         self._intent_classifier = intent_classifier
         self._k = rrf_k
         self._w_fts = rrf_weight_fts
         self._w_vec = rrf_weight_vector
         self._w_graph = rrf_weight_graph
-        self._min_score_ratio = min_score_ratio
+        self._bfs_max_depth = bfs_max_depth
+        self._bfs_max_facts = bfs_max_facts
+        self._context_token_budget = context_token_budget
 
     def _rrf_merge(
         self,
@@ -273,27 +280,92 @@ class MemoryRetrieval:
         limit: int,
         graph_results: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Reciprocal Rank Fusion of FTS5, vector, and optional graph results."""
+        """Reciprocal Rank Fusion of FTS5, vector, and optional BFS graph results."""
         scores: dict[str, float] = {}
         all_items: dict[str, dict[str, Any]] = {}
         for rank, item in enumerate(fts_results, 1):
-            nid = item["id"]
-            scores[nid] = scores.get(nid, 0) + self._w_fts / (self._k + rank)
-            all_items.setdefault(nid, item)
+            fid = item["id"]
+            scores[fid] = scores.get(fid, 0) + self._w_fts / (self._k + rank)
+            all_items.setdefault(fid, item)
         for rank, item in enumerate(vec_results, 1):
-            nid = item["id"]
-            scores[nid] = scores.get(nid, 0) + self._w_vec / (self._k + rank)
-            all_items.setdefault(nid, item)
+            fid = item["id"]
+            scores[fid] = scores.get(fid, 0) + self._w_vec / (self._k + rank)
+            all_items.setdefault(fid, item)
         if graph_results:
             for rank, item in enumerate(graph_results, 1):
-                nid = item["id"]
-                scores[nid] = scores.get(nid, 0) + self._w_graph / (self._k + rank)
-                all_items.setdefault(nid, item)
+                fid = item["id"]
+                scores[fid] = scores.get(fid, 0) + self._w_graph / (self._k + rank)
+                all_items.setdefault(fid, item)
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
-        return [
-            {**all_items[nid], "_rrf_score": scores[nid]}
-            for nid in ranked
-        ]
+        return [{**all_items[fid], "_rrf_score": scores[fid]} for fid in ranked]
+
+    async def _search_facts(
+        self,
+        query: str,
+        embedding: list[float] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Hybrid FTS5 + vector fact search. Merges with RRF."""
+        fts_task = self._storage.fts_search_facts(query, limit=limit)
+        vec_facts: list[dict[str, Any]] = []
+        if embedding:
+            vec_raw = await self._storage.vec_search_facts(embedding, top_k=limit)
+            if vec_raw:
+                fact_ids = [r["fact_id"] for r in vec_raw]
+                vec_facts = await self._storage.get_facts_by_ids(fact_ids)
+                # Preserve rank order from vec search
+                by_id = {f["id"]: f for f in vec_facts}
+                vec_facts = [by_id[fid] for fid in fact_ids if fid in by_id]
+        fts_results = await fts_task
+        return self._rrf_merge(fts_results, vec_facts, limit, graph_results=None)
+
+    async def _search_entities(
+        self,
+        embedding: list[float] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Vector search on entities. Returns entity dicts for BFS expansion."""
+        if not embedding:
+            return []
+        raw = await self._storage.vec_search_entities(embedding, top_k=limit)
+        entity_ids = [r["entity_id"] for r in raw]
+        if not entity_ids:
+            return []
+        # Fetch full entity dicts for those we need for BFS (BFS only needs IDs)
+        return [{"id": eid} for eid in entity_ids]
+
+    async def _bfs_expand(
+        self,
+        entity_ids: list[str],
+        depth: int | None = None,
+        max_facts: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """BFS expansion from entities along fact-edges."""
+        if not entity_ids:
+            return []
+        depth = depth if depth is not None else self._bfs_max_depth
+        max_facts = max_facts if max_facts is not None else self._bfs_max_facts
+        return await self._storage.bfs_expand_facts(
+            entity_ids,
+            max_depth=depth,
+            max_facts=max_facts,
+        )
+
+    async def _search_communities(
+        self, embedding: list[float] | None, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """Vector search on vec_communities. Returns community dicts."""
+        if not embedding:
+            return []
+        raw = await self._storage.vec_search_communities(embedding, top_k=limit)
+        if not raw:
+            return []
+        result = []
+        for r in raw:
+            c = await self._storage.get_community_by_id(r["community_id"])
+            if c:
+                result.append(c)
+        return result
 
     async def search(
         self,
@@ -302,212 +374,160 @@ class MemoryRetrieval:
         query_embedding: list[float] | None = None,
         limit: int = 10,
         token_budget: int = 2000,
-        node_types: list[str] | None = None,
         entity_name: str | None = None,
         event_after: int | None = None,
         event_before: int | None = None,
-        graph_depth: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Intent-aware hybrid search: FTS5 + vector + graph with RRF fusion."""
-        if node_types is None:
-            node_types = ["semantic", "procedural", "opinion"]
-        cand_limit = max(limit * 2, 5)
-        seed_limit = 5
+        """Intent-aware hierarchical search. Returns ranked fact dicts."""
+        complexity = classify_query_complexity(query)
+        params = get_adaptive_params(complexity)
+        limit = min(limit, params["limit"])
+        graph_depth = params.get("graph_depth", self._bfs_max_depth)
 
-        fts_results = await self._storage.fts_search(
-            query,
-            node_types=node_types,
-            limit=cand_limit,
-        )
-        vec_results: list[dict[str, Any]] = []
-        if query_embedding is not None:
-            vec_results = await self._storage.vector_search(
-                query_embedding,
-                node_types=node_types,
-                limit=cand_limit,
-            )
+        embedding = query_embedding
+        if embedding is None and self._embed_fn:
+            try:
+                emb = self._embed_fn(query)
+                if asyncio.iscoroutine(emb):
+                    emb = await emb
+                embedding = emb if isinstance(emb, list) else getattr(emb, "embedding", None)
+            except Exception as e:
+                logger.debug("embed failed for search: %s", e)
 
         intent = self._intent_classifier.classify(
-            query, query_embedding=query_embedding
+            query, query_embedding=embedding
         )
-        depth = graph_depth if graph_depth is not None else 3
-        graph_results: list[dict[str, Any]] = []
 
-        if intent in ("why", "when", "who", "what"):
-            seed_ids = [
-                r["id"] for r in (fts_results[:seed_limit] or vec_results[:seed_limit])
-            ]
+        # Boost BFS depth for who/what
+        if intent in ("who", "what"):
+            graph_depth = min(graph_depth + 1, 4)
 
-            if intent == "why" and seed_ids:
-                graph_results = await self._storage.causal_chain_traversal(
-                    seed_ids[0], max_depth=depth, limit=limit
-                )
+        # Parallel: fact search + entity search
+        fact_limit = limit * 2
+        facts_task = self._search_facts(query, embedding, limit=fact_limit)
+        entities_task = self._search_entities(embedding, limit=10)
+        facts, entity_results = await asyncio.gather(facts_task, entities_task)
 
-            elif intent == "when" and seed_ids:
-                forward = await self._storage.temporal_chain_traversal(
-                    seed_ids,
-                    direction="forward",
-                    max_depth=depth,
-                    limit=limit,
-                    event_after=event_after,
-                    event_before=event_before,
-                )
-                backward = await self._storage.temporal_chain_traversal(
-                    seed_ids,
-                    direction="backward",
-                    max_depth=depth,
-                    limit=limit,
-                    event_after=event_after,
-                    event_before=event_before,
-                )
-                seen: set[str] = set()
-                for r in forward + backward:
-                    if r["id"] not in seen:
-                        seen.add(r["id"])
-                        graph_results.append(r)
+        entity_ids = [e["id"] for e in entity_results]
 
-            elif intent in ("who", "what"):
-                entity = await _resolve_entity(
-                    self._storage,
-                    entity_name or query,
-                )
-                if entity:
-                    graph_results = await self._storage.entity_nodes_for_entity(
-                        entity["id"],
-                        node_types=node_types,
-                        limit=limit,
-                    )
+        # Optional: include entity from entity_name for BFS
+        if entity_name:
+            resolved = await _resolve_entity(self._storage, entity_name)
+            if resolved:
+                entity_ids.insert(0, resolved["id"])
 
-        results = self._rrf_merge(
-            fts_results,
-            vec_results,
+        bfs_facts = await self._bfs_expand(
+            list(dict.fromkeys(entity_ids)),
+            depth=graph_depth,
+        )
+
+        # RRF fusion: facts + BFS
+        merged = self._rrf_merge(
+            facts,
+            bfs_facts,
             limit,
-            graph_results=graph_results if graph_results else None,
+            graph_results=bfs_facts if bfs_facts else None,
         )
-        if results:
-            max_score = results[0].get("_rrf_score", 1.0)
-            min_score = max_score * self._min_score_ratio
-            results = [r for r in results if r.get("_rrf_score", 0) >= min_score]
-            for r in results:
-                r.pop("_rrf_score", None)
-            node_ids = [r["id"] for r in results]
-            await self._storage.record_access_for_nodes(node_ids)
-        logger.debug(
-            "search: query=%r intent=%s fts=%d vec=%d graph=%d merged=%d",
-            query[:60],
-            intent,
-            len(fts_results),
-            len(vec_results),
-            len(graph_results),
-            len(results),
-        )
-        return results
 
-    def _normalize_content(self, content: str) -> str:
-        """Normalize for content deduplication: strip and collapse whitespace."""
-        if not content:
-            return ""
-        return " ".join(content.split())
+        # Filter by time if when intent
+        if intent == "when" and (event_after is not None or event_before is not None):
+            def in_range(f: dict[str, Any]) -> bool:
+                tv = f.get("t_valid") or f.get("t_created")
+                if tv is None:
+                    return True
+                if event_after is not None and tv < event_after:
+                    return False
+                if event_before is not None and tv > event_before:
+                    return False
+                return True
+
+            merged = [f for f in merged if in_range(f)]
+
+        result = merged[:limit]
+        if result and self._storage:
+            fact_ids = [f["id"] for f in result if f.get("id")]
+            if fact_ids:
+                self._storage.record_fact_access(fact_ids)
+        return result
 
     async def assemble_context(
         self,
         results: list[dict[str, Any]],
         token_budget: int = 2000,
+        community_summaries: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Format results with budget shares: Facts 65%, Entity profiles 35%.
+        """Three-section assembly: 50% facts, 25% entity profiles, 25% community."""
+        budget = token_budget or self._context_token_budget
+        fact_budget = int(budget * 0.5)
+        entity_budget = int(budget * 0.25)
+        community_budget = int(budget * 0.25)
 
-        Deduplicates by normalized content so duplicate nodes (same text, different id) appear once.
-        """
-        if not results:
-            return ""
-        char_per_token = 4
-        total_chars = token_budget * char_per_token
-        budget_facts = int(total_chars * 0.65)
-        budget_entities = int(total_chars * 0.35)
-        budget_temporal = 0
+        parts: list[str] = []
 
-        facts = [
-            r for r in results if r.get("type") in ("semantic", "procedural", "opinion")
-        ]
-        episodic = [r for r in results if r.get("type") == "episodic"]
-        node_ids = [r["id"] for r in results]
+        # Section 1: Facts
+        fact_ids = [f["id"] for f in results]
+        entities_map = await self._storage.get_entities_for_facts(fact_ids)
+        lines: list[str] = []
+        approx = 0
+        for f in results:
+            if approx >= fact_budget:
+                break
+            subj = entities_map.get(f["subject_id"], {}).get("name", f["subject_id"])
+            obj = entities_map.get(f["object_id"], {}).get("name", f["object_id"])
+            pred = f.get("predicate", "RELATED")
+            text = f.get("fact_text", "")
+            conf = f.get("confidence", 1.0)
+            tv = f.get("t_valid") or f.get("t_created")
+            line = f"[{subj}] --[{pred}]--> [{obj}]: {text} (confidence={conf}, t_valid={tv})"
+            lines.append(line)
+            approx += len(line.split()) * 2
+        if lines:
+            parts.append("## Facts\n" + "\n".join(lines))
 
-        sections: list[str] = []
-        seen_fact_content: set[str] = set()
-
-        max_fact_chars = 200
-        if facts:
-            lines = []
-            chars = 0
-            for r in facts:
-                c = r.get("content", "")
-                if len(c) > max_fact_chars:
-                    c = c[: max_fact_chars - 3] + "..."
-                key = self._normalize_content(c)
-                if key in seen_fact_content or not key:
+        # Section 2: Entity profiles (25%)
+        entity_ids = list(
+            dict.fromkeys(
+                eid
+                for f in results
+                for eid in (f.get("subject_id"), f.get("object_id"))
+                if eid and eid in entities_map
+            )
+        )[:5]
+        if entity_ids and entity_budget > 0:
+            profile_lines: list[str] = []
+            for eid in entity_ids:
+                ent = entities_map.get(eid)
+                if not ent:
                     continue
-                if chars + len(c) + 4 > budget_facts:
-                    break
-                seen_fact_content.add(key)
-                lines.append(f"- {c}")
-                chars += len(c) + 4
-            if lines:
-                sections.append("## Facts\n" + "\n".join(lines))
+                name = ent.get("name", eid)
+                summary = ent.get("summary") or "(no summary)"
+                profile_lines.append(f"- **{name}**: {summary}")
+            if profile_lines:
+                parts.append("## Entity profiles\n" + "\n".join(profile_lines))
 
-        entities = await self._storage.get_entities_for_nodes(node_ids)
-        if entities:
-            lines = []
-            chars = 0
-            seen_entity_block: set[str] = set()
-            for e in entities[:5]:
-                summary = e.get("summary") or ""
-                if not summary or summary.strip() == "(no summary)":
-                    continue
-                name = e.get("canonical_name", "")
-                block = f"**{name}**: {summary}"
-                key = self._normalize_content(block)
-                if key in seen_entity_block or not key:
-                    continue
-                if chars + len(block) + 2 > budget_entities:
-                    break
-                seen_entity_block.add(key)
-                lines.append(block)
-                chars += len(block) + 2
-            if lines:
-                sections.append("## Entity profiles\n" + "\n".join(lines))
+        # Section 3: Community context (25%)
+        if community_budget > 0 and community_summaries:
+            comm_lines = [
+                f"- **{c.get('name', '')}**: {c.get('summary', '')}"
+                for c in community_summaries[:3]
+            ]
+            if comm_lines:
+                parts.append("## Community context\n" + "\n".join(comm_lines))
 
-        seen_temporal_content: set[str] = set()
-        if episodic:
-            lines = []
-            chars = 0
-            for r in sorted(episodic, key=lambda x: x.get("event_time", 0)):
-                c = r.get("content", "")
-                key = self._normalize_content(c)
-                if key in seen_temporal_content or not key:
-                    continue
-                if chars + len(c) + 4 > budget_temporal:
-                    break
-                seen_temporal_content.add(key)
-                lines.append(f"- {c}")
-                chars += len(c) + 4
-            if lines:
-                sections.append("## Temporal context\n" + "\n".join(lines))
+        return "\n\n".join(parts) if parts else ""
 
-        if not sections:
-            lines = []
-            chars = 0
-            max_chars = total_chars
-            seen_fallback: set[str] = set()
-            for r in results:
-                c = r.get("content", "")
-                key = self._normalize_content(c)
-                if key in seen_fallback or not key:
-                    continue
-                if chars + len(c) + 4 > max_chars:
-                    break
-                seen_fallback.add(key)
-                lines.append(f"- {c}")
-                chars += len(c) + 4
-            return "## Relevant memory\n" + "\n".join(lines) if lines else ""
-
-        return "\n\n".join(sections)
+    async def get_timeline(
+        self,
+        entity_id: str | None = None,
+        *,
+        after: int | None = None,
+        before: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Direct temporal query on fact graph. No RRF fusion."""
+        return await self._storage.get_entity_facts_timeline(
+            entity_id,
+            after=after,
+            before=before,
+            limit=limit,
+        )

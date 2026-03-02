@@ -1,0 +1,19 @@
+{# Community summary generation. Tier 3 - high-level cluster summaries. #}
+Generate a 2-3 sentence thematic summary for this cluster of related entities.
+
+## Member entities
+{{ entity_names | join(", ") }}
+
+{% if sample_facts %}
+## Representative facts (relationships between members)
+{% for fact in sample_facts %}
+- {{ fact }}
+{% endfor %}
+{% endif %}
+
+## Output (JSON)
+Return a JSON object with:
+- "name": A short label for the cluster (e.g. "Acme Corp team", "Yodoca project ecosystem")
+- "summary": 2-3 sentences describing the theme, relationships, or context that unites these entities
+
+Example: {"name": "Tech team", "summary": "This cluster represents the core engineering team at Acme. Members work together on the Yodoca project and share expertise in Python and Rust."}

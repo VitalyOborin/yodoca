@@ -1,12 +1,14 @@
-"""Memory v2 extension: ToolProvider + ContextProvider + SchedulerProvider."""
+"""Memory v3 extension: ToolProvider + ContextProvider + SchedulerProvider."""
 
 import asyncio
+import json
 import logging
 import sys
 import time
 import uuid
 from pathlib import Path
 
+from agents import Agent, Runner
 from core.extensions.contract import TurnContext
 from core.events.topics import SystemTopics
 
@@ -14,53 +16,31 @@ _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
-from agents import ModelSettings
-
-from agent import create_memory_agent
-from agent_tools import build_write_path_tools
+from community import CommunityManager
 from decay import DecayService
-from retrieval import (
-    EmbeddingIntentClassifier,
-    KeywordIntentClassifier,
-    MemoryRetrieval,
-    classify_query_complexity,
-    get_adaptive_params,
-)
+from pipeline import AtomicWritePipeline
+from retrieval import EmbeddingIntentClassifier, HierarchicalRetriever, KeywordIntentClassifier
 from storage import MemoryStorage
 from tools import build_tools
 
 logger = logging.getLogger(__name__)
 
 
-def _build_embed_fns(
-    embedding_ext: object, dims: int
-) -> tuple[object | None, object | None]:
-    """Build embed_fn and embed_batch_fn from embedding extension. Returns (embed_fn, embed_batch_fn)."""
-    embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
-    embed_batch_fn = (
-        (lambda texts: embedding_ext.embed_batch(texts, dimensions=dims))
-        if hasattr(embedding_ext, "embed_batch")
-        else None
-    )
-    return embed_fn, embed_batch_fn
-
-
 class MemoryExtension:
-    """Graph-based cognitive memory. Phase 1: episodes, FTS5, temporal edges."""
+    """Hierarchical knowledge graph. Phase 3: dual-source context, full tools."""
 
     def __init__(self) -> None:
         self._storage: MemoryStorage | None = None
-        self._retrieval: MemoryRetrieval | None = None
-        self._embed_fn: object | None = None
-        self._write_agent: object | None = None
-        self._decay_service: DecayService | None = None
+        self._pipeline: AtomicWritePipeline | None = None
+        self._retriever: HierarchicalRetriever | None = None
+        self._community_manager: CommunityManager | None = None
+        self._decay: DecayService | None = None
         self._ctx: object | None = None
         self._current_session_id: str | None = None
-        self._token_budget: int = 2000
-        self._dedup_threshold: float = 0.92
         self._last_consolidation_at: str | None = None
         self._last_decay_at: str | None = None
         self._consolidation_pending: set[str] = set()
+        self._embed_fn: object | None = None
 
     @property
     def context_priority(self) -> int:
@@ -71,43 +51,62 @@ class MemoryExtension:
         prompt: str,
         turn_context: TurnContext,
     ) -> str | None:
-        """Return relevant memory context. Hybrid FTS5 + vector with RRF."""
-        if not self._retrieval:
+        """Dual-source: 70% long-term memory (retriever), 30% current-session episodes."""
+        if not self._storage:
             return None
-        complexity = classify_query_complexity(prompt)
-        params = get_adaptive_params(complexity)
-        query_embedding = None
-        if self._embed_fn:
-            query_embedding = await self._embed_fn(prompt)
-        results = await self._retrieval.search(
-            prompt,
-            query_embedding=query_embedding,
-            limit=params["limit"],
-            token_budget=params["token_budget"],
-            graph_depth=params.get("graph_depth"),
-        )
-        if not results:
-            logger.debug(
-                "get_context: no results for %r (complexity=%s)",
-                prompt[:80],
-                complexity,
+
+        token_budget = 2000
+        long_term_budget = int(token_budget * 0.7)
+        session_budget = int(token_budget * 0.3)
+        parts: list[str] = []
+
+        # Long-term memory (70%)
+        community_summaries: list[dict] = []
+        if self._retriever and prompt:
+            results = await self._retriever.search(
+                prompt,
+                query_embedding=None,
+                limit=15,
+                token_budget=long_term_budget,
             )
-            return None
-        context = await self._retrieval.assemble_context(
-            results,
-            token_budget=params["token_budget"],
-        )
-        logger.debug(
-            "get_context: %d results, %d chars (complexity=%s, agent=%s)",
-            len(results),
-            len(context or ""),
-            complexity,
-            turn_context.agent_id,
-        )
-        return context
+            if self._embed_fn:
+                try:
+                    emb = self._embed_fn(prompt)
+                    if asyncio.iscoroutine(emb):
+                        emb = await emb
+                    if emb:
+                        emb_list = emb if isinstance(emb, list) else getattr(emb, "embedding", None)
+                        if emb_list:
+                            community_summaries = await self._retriever._search_communities(
+                                emb_list, limit=3
+                            )
+                except Exception:
+                    pass
+            if results:
+                assembled = await self._retriever.assemble_context(
+                    results,
+                    token_budget=long_term_budget,
+                    community_summaries=community_summaries or None,
+                )
+                if assembled:
+                    parts.append("## Long-term memory\n" + assembled)
+
+        # Current-session episodes (30%)
+        if self._current_session_id:
+            episodes = await self._storage.get_recent_session_episodes(
+                self._current_session_id, limit=10
+            )
+            if episodes:
+                lines = [
+                    f"- [{ep['actor']}]: {ep['content'][:500]}"
+                    for ep in reversed(episodes)
+                ]
+                parts.append("## Recent conversation\n" + "\n".join(lines))
+
+        return "\n\n".join(parts) if parts else None
 
     def get_tools(self) -> list:
-        if not self._retrieval or not self._storage:
+        if not self._storage:
             return []
 
         def get_maintenance_info() -> dict:
@@ -117,75 +116,81 @@ class MemoryExtension:
             }
 
         return build_tools(
-            retrieval=self._retrieval,
             storage=self._storage,
+            retriever=self._retriever,
             embed_fn=self._embed_fn,
-            token_budget=self._token_budget,
+            pipeline=self._pipeline,
+            token_budget=2000,
             get_maintenance_info=get_maintenance_info,
-            dedup_threshold=self._dedup_threshold,
         )
 
     async def initialize(self, context: object) -> None:
         self._ctx = context
-        self._token_budget = context.get_config("context_token_budget", 2000)
-        self._dedup_threshold = context.get_config(
-            "remember_fact_dedup_threshold", 0.92
-        )
         db_path = context.data_dir / "memory.db"
         embedding_dims = context.get_config("embedding_dimensions", 256)
         self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
         await self._storage.initialize()
 
-        embedding_ext = context.get_extension("embedding")
-        self._embed_fn = None
-        embed_batch_fn = None
-        if embedding_ext and embedding_ext.health_check():
-            self._embed_fn, embed_batch_fn = _build_embed_fns(
-                embedding_ext, embedding_dims
-            )
+        # Phase 2: AtomicWritePipeline for consolidation
+        embed_ext = context.get_extension("embedding")
+        embed_fn = embed_ext.embed if embed_ext else None
+        embed_batch_fn = embed_ext.embed_batch if embed_ext else None
+        self._embed_fn = embed_fn
 
-        if self._embed_fn:
-            classifier = EmbeddingIntentClassifier(
-                embed_fn=self._embed_fn,
-                threshold=context.get_config("intent_similarity_threshold", 0.45),
+        model = context.model_router.get_model("memory_agent")
+        config = {
+            "entity_resolution_threshold": context.get_config("entity_resolution_threshold", 0.85),
+            "fact_dedup_threshold": context.get_config("fact_dedup_threshold", 0.90),
+            "preferred_predicates": context.get_config("preferred_predicates", []),
+            "pipeline_max_attempts": context.get_config("pipeline_max_attempts", 3),
+            "community_min_shared_facts": context.get_config("community_min_shared_facts", 2),
+        }
+        if model:
+            self._community_manager = CommunityManager(
+                storage=self._storage,
+                embed_fn=embed_fn,
+                model=model,
+                config=config,
+                extension_dir=_ext_dir,
+            )
+            self._pipeline = AtomicWritePipeline(
+                storage=self._storage,
+                embed_fn=embed_fn,
                 embed_batch_fn=embed_batch_fn,
-                cache_dir=context.data_dir,
+                model=model,
+                config=config,
+                extension_dir=_ext_dir,
+                community_manager=self._community_manager,
+            )
+        else:
+            logger.warning("memory_agent model not configured; pipeline disabled")
+
+        # Phase 3: HierarchicalRetriever for read path
+        if embed_fn:
+            classifier = EmbeddingIntentClassifier(
+                embed_fn=embed_fn,
+                embed_batch_fn=embed_batch_fn,
+                cache_dir=context.data_dir / "memory_cache",
             )
             await classifier.initialize()
         else:
             classifier = KeywordIntentClassifier()
-
-        self._retrieval = MemoryRetrieval(
+        retriever_config = {
+            "rrf_k": context.get_config("rrf_k", 60),
+            "bfs_max_depth": context.get_config("bfs_max_depth", 2),
+            "bfs_max_facts": context.get_config("bfs_max_facts", 50),
+        }
+        self._retriever = HierarchicalRetriever(
             storage=self._storage,
+            embed_fn=embed_fn,
             intent_classifier=classifier,
-            rrf_k=context.get_config("rrf_k", 60),
-            rrf_weight_fts=context.get_config("rrf_weight_fts", 1.0),
-            rrf_weight_vector=context.get_config("rrf_weight_vector", 1.0),
-            rrf_weight_graph=context.get_config("rrf_weight_graph", 1.0),
-            min_score_ratio=context.get_config("rrf_min_score_ratio", 0.4),
+            **retriever_config,
         )
 
-        self._write_agent = None
-        if context.model_router:
-            try:
-                model = context.model_router.get_model("memory_agent")
-                write_tools = build_write_path_tools(
-                    storage=self._storage,
-                    retrieval=self._retrieval,
-                    embed_fn=self._embed_fn,
-                    embed_batch_fn=embed_batch_fn,
-                )
-                self._write_agent = create_memory_agent(
-                    model=model,
-                    tools=write_tools,
-                    extension_dir=_ext_dir,
-                    model_settings=ModelSettings(parallel_tool_calls=True),
-                )
-                logger.info("Write-path agent initialized (model=%s)", model)
-            except Exception as e:
-                logger.warning("Write-path agent unavailable: %s", e)
-        self._decay_service = DecayService(
-            decay_threshold=context.get_config("decay_threshold", 0.05),
+        self._decay = DecayService(
+            storage=self._storage,
+            lambda_=context.get_config("decay_lambda", 0.1),
+            threshold=context.get_config("confidence_threshold", 0.05),
         )
 
         prev_session = await self._storage.get_latest_session_id()
@@ -210,15 +215,12 @@ class MemoryExtension:
         if self._storage:
             await self._storage.close()
             self._storage = None
-            self._retrieval = None
-        self._write_agent = None
-        self._decay_service = None
 
     def health_check(self) -> bool:
         return self._storage is not None
 
     async def execute_task(self, task_name: str) -> dict | None:
-        """SchedulerProvider. Nightly maintenance: consolidate, decay, enrich, causal."""
+        """SchedulerProvider. Phase 1: consolidation tracking only."""
         if task_name == "run_nightly_maintenance":
             if not self._storage:
                 return None
@@ -228,14 +230,49 @@ class MemoryExtension:
                 await self._consolidate_session(sid)
             n_consolidated = len(unconsolidated)
 
-            decay_stats = {"decayed": 0, "pruned": 0}
-            if self._decay_service:
-                decay_stats = await self._decay_service.apply(self._storage)
-                self._last_decay_at = time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime()
+            retried = 0
+            if self._pipeline:
+                retried = await self._pipeline.retry_failed()
+
+            facts_decayed = 0
+            facts_expired = 0
+            if self._decay:
+                facts_decayed, facts_expired = await self._decay.apply()
+
+            entities_enriched = 0
+            if self._pipeline and getattr(self._pipeline, "_model", None):
+                entities = await self._storage.get_entities_needing_enrichment(
+                    min_mentions=3
                 )
+                for ent in entities:
+                    try:
+                        facts = await self._storage.get_facts_for_entity(
+                            ent["id"], limit=20
+                        )
+                        fact_lines = [
+                            f.get("fact_text", "")
+                            for f in facts
+                            if f.get("fact_text")
+                        ]
+                        if not fact_lines:
+                            continue
+                        summary = await self._generate_entity_summary(
+                            ent["name"], fact_lines
+                        )
+                        if summary:
+                            await self._storage.update_entity(
+                                ent["id"], {"summary": summary}
+                            )
+                            entities_enriched += 1
+                    except Exception as e:
+                        logger.warning(
+                            "Entity enrichment failed for %s: %s", ent["id"], e
+                        )
 
             self._last_consolidation_at = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime()
+            )
+            self._last_decay_at = time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime()
             )
             await self._storage.set_maintenance_timestamps(
@@ -243,53 +280,54 @@ class MemoryExtension:
                 last_decay_run=self._last_decay_at,
             )
 
-            enrichment_count = await self._enrich_entities()
-            causal_count = await self._infer_causal_edges()
-
             summary = (
-                f"Nightly: consolidated {n_consolidated}, "
-                f"decayed {decay_stats['decayed']} pruned {decay_stats['pruned']}, "
-                f"enriched {enrichment_count}, causal_pairs_analyzed {causal_count}"
+                f"Nightly: consolidated {n_consolidated} sessions, retried {retried} queue items, "
+                f"decayed {facts_decayed} facts, expired {facts_expired} facts, "
+                f"enriched {entities_enriched} entities"
             )
             logger.info("Nightly maintenance finished: %s", summary)
             return {"text": summary}
+        if task_name == "run_community_refresh":
+            if not self._community_manager:
+                return {"text": "Community manager not available"}
+            logger.info("Community refresh started")
+            n = await self._community_manager.periodic_refresh()
+            logger.info("Community refresh finished: %d entities processed", n)
+            return {"text": f"Community refresh: {n} entities processed"}
         return None
 
-    async def _enrich_entities(self) -> int:
-        """Enrich entities with sparse summaries. Returns count enriched."""
-        if not self._write_agent or not self._storage or not self._ctx:
-            return 0
-        min_mentions = self._ctx.get_config("entity_enrichment_min_mentions", 3)
-        entities = await self._storage.get_entities_needing_enrichment(
-            min_mentions=min_mentions
+    async def _generate_entity_summary(
+        self, name: str, fact_lines: list[str]
+    ) -> str | None:
+        """Generate a concise entity summary from facts via LLM. Returns summary or None."""
+        if not fact_lines or not getattr(self._pipeline, "_model", None):
+            return None
+        prompt = (
+            f"Entity: {name}\n\n"
+            "Known facts:\n"
+            + "\n".join(f"- {f}" for f in fact_lines[:15] if f.strip())
+            + "\n\n"
+            "Generate a 1-2 sentence summary of this entity. Return JSON with key 'summary' only."
         )
-        count = 0
-        for ent in entities[:5]:
-            nodes = await self._storage.entity_nodes_for_entity(
-                ent["id"], node_types=["semantic", "procedural", "opinion"], limit=10
+        try:
+            agent = Agent(
+                name="MemoryEntityEnrichmentAgent",
+                instructions="Generate a brief entity summary. Return JSON: {\"summary\": \"...\"}",
+                model=self._pipeline._model,
             )
-            contents = [n.get("content", "") for n in nodes if n.get("content")]
-            if contents and await self._write_agent.enrich_entity(
-                ent["id"],
-                ent["canonical_name"],
-                ent["type"],
-                contents,
-            ):
-                count += 1
-        return count
-
-    async def _infer_causal_edges(self) -> int:
-        """Infer causal edges between consecutive episodes. Returns count of pairs analyzed."""
-        if not self._write_agent or not self._storage or not self._ctx:
-            return 0
-        batch_size = self._ctx.get_config("causal_inference_batch_size", 50)
-        pairs = await self._storage.get_consecutive_episode_pairs(limit=batch_size)
-        if not pairs:
-            return 0
-        return await self._write_agent.infer_causal_edges(pairs)
+            result = await Runner.run(agent, prompt, max_turns=1)
+            out = result.final_output
+            if isinstance(out, str) and out.strip():
+                if out.strip().startswith("{"):
+                    data = json.loads(out)
+                    return data.get("summary", "").strip() or None
+                return out.strip()[:500] or None
+        except Exception as e:
+            logger.debug("Entity summary generation failed: %s", e)
+        return None
 
     async def _on_user_message(self, data: dict) -> None:
-        """Hot path: save user episode, temporal edge."""
+        """Hot path: save user episode to episodes table."""
         if not self._storage:
             return
         text = (data.get("text") or "").strip()
@@ -314,103 +352,50 @@ class MemoryExtension:
         if not text:
             return
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
-        now = int(time.time())
-        node_id = str(uuid.uuid4())
-        node = {
-            "id": node_id,
-            "type": "episodic",
+        now_ms = int(time.time() * 1000)
+        episode = {
+            "id": str(uuid.uuid4()),
             "content": text,
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_type": "conversation",
-            "source_role": "user",
-            "session_id": session_id,
+            "actor": "user",
+            "session_id": session_id or "",
+            "t_obs": now_ms,
+            "created_at": now_ms,
         }
-        self._storage.insert_node(node)
-        if prev_id:
-            self._storage.insert_edge(
-                {
-                    "source_id": prev_id,
-                    "target_id": node_id,
-                    "relation_type": "temporal",
-                    "valid_from": now,
-                    "created_at": now,
-                }
-            )
+        episode_id = self._storage.insert_episode(episode)
         logger.debug(
-            "Episode saved: node=%s session=%s len=%d",
-            node_id[:8],
+            "Episode saved: id=%s session=%s len=%d",
+            episode_id[:8],
             session_id,
             len(text),
         )
-        if self._embed_fn:
-            asyncio.create_task(self._slow_path(node_id, text))
-
-    async def _slow_path(self, node_id: str, content: str) -> None:
-        """Generate embedding for episodic node and save to vec_nodes."""
-        if not self._embed_fn or not self._storage:
-            return
-        for attempt in range(3):
-            try:
-                embedding = await self._embed_fn(content)
-                if embedding:
-                    await self._storage.save_embedding(node_id, embedding)
-                return
-            except Exception:
-                if attempt == 2:
-                    logger.exception(
-                        "Slow-path embedding failed (all retries) for node %s",
-                        node_id[:8],
-                    )
-                else:
-                    await asyncio.sleep(2**attempt)
 
     async def _on_agent_response(self, data: dict) -> None:
-        """Hot path: save agent episode, temporal edge."""
+        """Hot path: save agent episode to episodes table."""
         if not self._storage:
             return
         text = (data.get("text") or "").strip()
         if not text:
             return
         session_id = data.get("session_id") or self._current_session_id
-        agent_id = data.get("agent_id") or "orchestrator"
+        agent_id = data.get("agent_id") or "assistant"
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
-        now = int(time.time())
-        node_id = str(uuid.uuid4())
-        node = {
-            "id": node_id,
-            "type": "episodic",
+        now_ms = int(time.time() * 1000)
+        episode = {
+            "id": str(uuid.uuid4()),
             "content": text,
-            "event_time": now,
-            "created_at": now,
-            "valid_from": now,
-            "source_type": "conversation",
-            "source_role": agent_id,
-            "session_id": session_id,
+            "actor": agent_id,
+            "session_id": session_id or "",
+            "t_obs": now_ms,
+            "created_at": now_ms,
         }
-        self._storage.insert_node(node)
-        if prev_id:
-            self._storage.insert_edge(
-                {
-                    "source_id": prev_id,
-                    "target_id": node_id,
-                    "relation_type": "temporal",
-                    "valid_from": now,
-                    "created_at": now,
-                }
-            )
+        episode_id = self._storage.insert_episode(episode)
         logger.debug(
-            "Agent episode saved: node=%s agent=%s session=%s len=%d",
-            node_id[:8],
+            "Agent episode saved: id=%s agent=%s session=%s len=%d",
+            episode_id[:8],
             agent_id,
             session_id,
             len(text),
         )
-        if self._embed_fn:
-            asyncio.create_task(self._slow_path(node_id, text))
 
     async def _on_session_completed(self, event: object) -> None:
         """EventBus: session.completed. Trigger consolidation."""
@@ -433,17 +418,21 @@ class MemoryExtension:
             )
 
     async def _consolidate_session(self, session_id: str) -> None:
-        """Consolidate session via write-path agent."""
+        """Phase 2: run AtomicWritePipeline, then mark consolidated."""
         try:
-            if not self._write_agent or not self._storage:
-                logger.info(
-                    "consolidate_session skipped (no write agent): %s", session_id
-                )
+            if not self._storage:
                 return
             if await self._storage.is_session_consolidated(session_id):
                 return
-            result = await self._write_agent.consolidate_session(session_id)
-            logger.info("Session %s consolidated: %s", session_id, result)
+            if self._pipeline:
+                result = await self._pipeline.process_session(session_id)
+                logger.info(
+                    "Session %s: %d episodes, %d facts (Phase 2)",
+                    session_id,
+                    result.episodes_processed,
+                    result.facts_created,
+                )
+            await self._storage.mark_session_consolidated(session_id)
         except Exception as e:
             logger.exception("consolidate_session failed for %s: %s", session_id, e)
         finally:

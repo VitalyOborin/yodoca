@@ -1,150 +1,161 @@
 -- ==========================================================================
--- Memory v2: Graph-based cognitive memory (ADR 008)
+-- Memory v3: Hierarchical knowledge graph (ADR 016)
 -- ==========================================================================
 
--- ==========================================================================
--- Nodes: memory atoms (episodes, facts, procedures, opinions)
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS nodes (
-    id               TEXT PRIMARY KEY,
-    type             TEXT NOT NULL CHECK(type IN ('episodic','semantic','procedural','opinion')),
-    content          TEXT NOT NULL,
-    embedding        BLOB,
-
-    -- Bi-temporal: event time + validity interval
-    event_time       INTEGER NOT NULL,    -- when the event actually occurred
-    created_at       INTEGER NOT NULL,    -- when recorded in DB (ingestion time)
-    valid_from       INTEGER NOT NULL,    -- start of fact validity
-    valid_until      INTEGER,             -- NULL = still valid (soft-delete sets this)
-
-    -- Confidence and lifecycle
-    confidence       REAL NOT NULL DEFAULT 1.0,
-    access_count     INTEGER NOT NULL DEFAULT 0,
-    last_accessed    INTEGER,
-    decay_rate       REAL NOT NULL DEFAULT 0.1,
-
-    -- Provenance
-    source_type      TEXT,     -- conversation | tool_result | extraction | consolidation
-    source_role      TEXT,     -- user | orchestrator | <agent_id>
-    session_id       TEXT,     -- links episodic nodes to their conversation session
-
-    -- Extensible metadata
-    attributes       TEXT DEFAULT '{}'
+-- ================================================================
+-- TIER 1: Episodes (non-lossy, immutable)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS episodes (
+    id          TEXT PRIMARY KEY,
+    content     TEXT NOT NULL,
+    actor       TEXT NOT NULL,        -- 'user' | 'assistant' | extension_id
+    session_id  TEXT NOT NULL,
+    t_obs       INTEGER NOT NULL,     -- observation timestamp (unix ms)
+    created_at  INTEGER NOT NULL      -- ingestion timestamp T'
 );
+CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_t_obs ON episodes(t_obs);
 
--- ==========================================================================
--- Edges: typed relationships between nodes
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS edges (
-    id               TEXT PRIMARY KEY,
-    source_id        TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    target_id        TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-
-    relation_type    TEXT NOT NULL CHECK(relation_type IN
-        ('temporal','causal','entity','derived_from','supersedes')),
-    predicate        TEXT,               -- human-readable label (e.g. "works_at", "caused_by")
-    weight           REAL NOT NULL DEFAULT 1.0,
-    confidence       REAL NOT NULL DEFAULT 1.0,
-
-    valid_from       INTEGER NOT NULL,
-    valid_until      INTEGER,
-
-    evidence         TEXT DEFAULT '[]',  -- JSON: supporting episode node IDs
-
-    created_at       INTEGER NOT NULL
-);
-
--- ==========================================================================
--- Entity anchors: canonical identities for real-world entities
--- ==========================================================================
+-- ================================================================
+-- TIER 2a: Entity Nodes
+-- ================================================================
 CREATE TABLE IF NOT EXISTS entities (
-    id               TEXT PRIMARY KEY,
-    canonical_name   TEXT NOT NULL,
-    type             TEXT NOT NULL CHECK(type IN
-        ('person','project','organization','place','concept','tool')),
-    aliases          TEXT DEFAULT '[]',   -- JSON: ["Sasha", "my boss", "Alex"]
-    summary          TEXT,                -- LLM-generated entity description
-    embedding        BLOB,
-    first_seen       INTEGER NOT NULL,
-    last_updated     INTEGER NOT NULL,
-    mention_count    INTEGER NOT NULL DEFAULT 1,
-    attributes       TEXT DEFAULT '{}'
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    aliases       TEXT DEFAULT '[]',  -- JSON: ["Ivan", "иван", "the senior engineer"]
+    summary       TEXT,
+    entity_type   TEXT,               -- open taxonomy, no CHECK constraint
+    embedding     BLOB,               -- embedding dimensions from config
+    mention_count INTEGER DEFAULT 1,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
 
--- Node-entity junction table (indexed for fast entity-based queries)
-CREATE TABLE IF NOT EXISTS node_entities (
-    node_id    TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    PRIMARY KEY (node_id, entity_id)
+-- ================================================================
+-- TIER 2b: Atomic Facts (edges as first-class objects)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS facts (
+    id                TEXT PRIMARY KEY,
+    subject_id        TEXT NOT NULL REFERENCES entities(id),
+    predicate         TEXT NOT NULL,   -- ALL_CAPS relation type
+    object_id         TEXT NOT NULL REFERENCES entities(id),
+    fact_text         TEXT NOT NULL,   -- human-readable detail
+    embedding         BLOB,
+    -- Dual-time model (ATOM + Graphiti)
+    t_valid           INTEGER,         -- when fact became true (event time T)
+    t_invalid         INTEGER,         -- when fact stopped being true
+    t_created         INTEGER NOT NULL, -- when ingested (T')
+    t_expired         INTEGER,         -- when superseded in system (T')
+    -- Provenance
+    source_episode_id TEXT REFERENCES episodes(id),
+    confidence        REAL DEFAULT 1.0,
+    invalidated_by    TEXT REFERENCES facts(id)
 );
-CREATE INDEX IF NOT EXISTS idx_ne_entity ON node_entities(entity_id);
+CREATE INDEX IF NOT EXISTS idx_facts_subject
+    ON facts(subject_id) WHERE t_expired IS NULL;
+CREATE INDEX IF NOT EXISTS idx_facts_object
+    ON facts(object_id) WHERE t_expired IS NULL;
+CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
 
--- ==========================================================================
--- Maintenance timestamps (persisted so script-run maintenance is visible to supervisor)
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS maintenance_metadata (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
--- ==========================================================================
--- Session consolidation tracking
--- ==========================================================================
-CREATE TABLE IF NOT EXISTS sessions_consolidations (
-    session_id       TEXT PRIMARY KEY,
-    first_seen_at    INTEGER NOT NULL,
-    consolidated_at  INTEGER
-);
-
--- ==========================================================================
--- Performance indexes
--- ==========================================================================
-CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
-CREATE INDEX IF NOT EXISTS idx_nodes_event_time ON nodes(event_time);
-CREATE INDEX IF NOT EXISTS idx_nodes_valid ON nodes(valid_from, valid_until);
-CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
-CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id);
-CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation_type);
-CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
-CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_valid ON edges(valid_from, valid_until);
-CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
-CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(canonical_name);
-
--- ==========================================================================
--- Full-text search (FTS5, built-in)
--- ==========================================================================
-CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
-    content,
-    content=nodes,
+-- FTS5 on fact_text only (not episodes — keeps index compact)
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+    fact_text,
+    content='facts',
     content_rowid=rowid,
     tokenize='unicode61'
 );
 
-CREATE TRIGGER IF NOT EXISTS nodes_fts_insert AFTER INSERT ON nodes BEGIN
-    INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
+CREATE TRIGGER IF NOT EXISTS facts_fts_insert AFTER INSERT ON facts BEGIN
+    INSERT INTO facts_fts(rowid, fact_text) VALUES (new.rowid, new.fact_text);
+END;
+CREATE TRIGGER IF NOT EXISTS facts_fts_update AFTER UPDATE OF fact_text ON facts BEGIN
+    INSERT INTO facts_fts(facts_fts, rowid, fact_text)
+        VALUES ('delete', old.rowid, old.fact_text);
+    INSERT INTO facts_fts(rowid, fact_text) VALUES (new.rowid, new.fact_text);
+END;
+CREATE TRIGGER IF NOT EXISTS facts_fts_delete AFTER DELETE ON facts BEGIN
+    INSERT INTO facts_fts(facts_fts, rowid, fact_text)
+        VALUES ('delete', old.rowid, old.fact_text);
 END;
 
-CREATE TRIGGER IF NOT EXISTS nodes_fts_update AFTER UPDATE OF content ON nodes BEGIN
-    INSERT INTO nodes_fts(nodes_fts, rowid, content)
-        VALUES ('delete', old.rowid, old.content);
-    INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS nodes_fts_delete AFTER DELETE ON nodes BEGIN
-    INSERT INTO nodes_fts(nodes_fts, rowid, content)
-        VALUES ('delete', old.rowid, old.content);
-END;
-
--- ==========================================================================
--- Vector search (sqlite-vec, optional)
--- ==========================================================================
-CREATE VIRTUAL TABLE IF NOT EXISTS vec_nodes USING vec0(
-    node_id TEXT PRIMARY KEY,
-    embedding float[256]
+-- ================================================================
+-- TIER 3: Communities (dynamic clusters)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS communities (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,       -- key terms for cosine search
+    summary       TEXT NOT NULL,
+    embedding     BLOB,
+    member_count  INTEGER DEFAULT 0,
+    updated_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS community_members (
+    community_id  TEXT REFERENCES communities(id),
+    entity_id     TEXT REFERENCES entities(id),
+    PRIMARY KEY (community_id, entity_id)
 );
 
+-- ================================================================
+-- Episode → Entity links (bidirectional index)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS episode_entities (
+    episode_id  TEXT REFERENCES episodes(id),
+    entity_id   TEXT REFERENCES entities(id),
+    PRIMARY KEY (episode_id, entity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ee_entity ON episode_entities(entity_id);
+
+-- ================================================================
+-- Vector search (sqlite-vec)
+-- ================================================================
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
     entity_id TEXT PRIMARY KEY,
     embedding float[256]
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(
+    fact_id TEXT PRIMARY KEY,
+    embedding float[256]
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS vec_communities USING vec0(
+    community_id TEXT PRIMARY KEY,
+    embedding float[256]
+);
+
+-- ================================================================
+-- Fact access tracking (for Ebbinghaus decay)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS fact_access_log (
+    fact_id     TEXT NOT NULL REFERENCES facts(id),
+    accessed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fal_fact ON fact_access_log(fact_id);
+
+-- ================================================================
+-- Pipeline intermediate state (retry semantics)
+-- ================================================================
+CREATE TABLE IF NOT EXISTS pipeline_queue (
+    id          TEXT PRIMARY KEY,
+    episode_id  TEXT NOT NULL REFERENCES episodes(id),
+    atomic_fact TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending','processing','done','failed')),
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pq_status ON pipeline_queue(status)
+    WHERE status IN ('pending','failed');
+
+-- ================================================================
+-- Maintenance / consolidation tracking
+-- ================================================================
+CREATE TABLE IF NOT EXISTS maintenance_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions_consolidations (
+    session_id       TEXT PRIMARY KEY,
+    first_seen_at    INTEGER NOT NULL,
+    consolidated_at  INTEGER
 );

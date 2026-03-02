@@ -1,9 +1,8 @@
-"""MemoryStorage: CRUD, graph operations, async writer queue. Memory v2."""
+"""MemoryStorage: CRUD, graph operations, async writer queue. Memory v3."""
 
 import asyncio
 import json
 import logging
-import math
 import os
 import re
 import time
@@ -25,6 +24,7 @@ class WriteOp:
     params: tuple | list[tuple]
     future: asyncio.Future[Any] | None = None  # None = fire-and-forget
     batch: bool = False  # if True, params is list[tuple] for executemany
+    return_rowcount: bool = False  # if True, future gets cursor.rowcount
 
 
 def _escape_fts5_query(q: str) -> str:
@@ -98,11 +98,13 @@ class MemoryStorage:
             try:
                 if op.batch:
                     await self._write_conn.executemany(op.sql, op.params)
+                    result = None
                 else:
-                    await self._write_conn.execute(op.sql, op.params)
+                    cursor = await self._write_conn.execute(op.sql, op.params)
+                    result = cursor.rowcount if op.return_rowcount else None
                 await self._write_conn.commit()
                 if op.future is not None and not op.future.done():
-                    op.future.set_result(None)
+                    op.future.set_result(result)
             except Exception as e:
                 logger.exception("Write op failed: %s", e)
                 if op.future is not None and not op.future.done():
@@ -129,11 +131,15 @@ class MemoryStorage:
             self._read_conn = None
 
     def _submit_write(
-        self, sql: str, params: tuple, wait: bool = False
+        self,
+        sql: str,
+        params: tuple,
+        wait: bool = False,
+        return_rowcount: bool = False,
     ) -> asyncio.Future[Any] | None:
         """Submit write to queue. If wait=True, returns Future to await."""
         future = asyncio.get_running_loop().create_future() if wait else None
-        op = WriteOp(sql=sql, params=params, future=future)
+        op = WriteOp(sql=sql, params=params, future=future, return_rowcount=return_rowcount)
         self._write_queue.put_nowait(op)
         return future
 
@@ -146,331 +152,92 @@ class MemoryStorage:
         self._write_queue.put_nowait(op)
         return future
 
-    def insert_node(self, node: dict[str, Any]) -> str:
-        """Insert node. Fire-and-forget. Returns node_id (caller must provide in node)."""
-        node_id = node.get("id") or str(uuid.uuid4())
+    def insert_episode(self, episode: dict[str, Any]) -> str:
+        """Insert episode into episodes table (v3). Fire-and-forget. Returns episode_id."""
+        episode_id = episode.get("id") or str(uuid.uuid4())
         sql = """
-            INSERT INTO nodes (
-                id, type, content, embedding,
-                event_time, created_at, valid_from, valid_until,
-                confidence, access_count, last_accessed, decay_rate,
-                source_type, source_role, session_id, attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO episodes (id, content, actor, session_id, t_obs, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         """
         params = (
-            node_id,
-            node["type"],
-            node["content"],
-            node.get("embedding"),
-            node["event_time"],
-            node["created_at"],
-            node["valid_from"],
-            node.get("valid_until"),
-            node.get("confidence", 1.0),
-            node.get("access_count", 0),
-            node.get("last_accessed"),
-            node.get("decay_rate", 0.1),
-            node.get("source_type"),
-            node.get("source_role"),
-            node.get("session_id"),
-            json.dumps(node.get("attributes") or {}),
+            episode_id,
+            episode["content"],
+            episode["actor"],
+            episode["session_id"],
+            episode["t_obs"],
+            episode["created_at"],
         )
         self._submit_write(sql, params)
-        return node_id
+        return episode_id
 
-    async def insert_node_awaitable(self, node: dict[str, Any]) -> str:
-        """Insert node and await write confirmation. Returns node_id."""
-        node_id = node.get("id") or str(uuid.uuid4())
+    async def insert_episode_awaitable(self, episode: dict[str, Any]) -> str:
+        """Insert episode and await write confirmation. Returns episode_id."""
+        episode_id = episode.get("id") or str(uuid.uuid4())
         sql = """
-            INSERT INTO nodes (
-                id, type, content, embedding,
-                event_time, created_at, valid_from, valid_until,
-                confidence, access_count, last_accessed, decay_rate,
-                source_type, source_role, session_id, attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO episodes (id, content, actor, session_id, t_obs, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         """
         params = (
-            node_id,
-            node["type"],
-            node["content"],
-            node.get("embedding"),
-            node["event_time"],
-            node["created_at"],
-            node["valid_from"],
-            node.get("valid_until"),
-            node.get("confidence", 1.0),
-            node.get("access_count", 0),
-            node.get("last_accessed"),
-            node.get("decay_rate", 0.1),
-            node.get("source_type"),
-            node.get("source_role"),
-            node.get("session_id"),
-            json.dumps(node.get("attributes") or {}),
+            episode_id,
+            episode["content"],
+            episode["actor"],
+            episode["session_id"],
+            episode["t_obs"],
+            episode["created_at"],
         )
         future = self._submit_write(sql, params, wait=True)
         if future:
             await future
-        return node_id
+        return episode_id
 
-    async def soft_delete_node(self, node_id: str) -> None:
-        """Soft-delete node: set valid_until = now."""
-        now = int(time.time())
-        future = self._submit_write(
-            "UPDATE nodes SET valid_until = ? WHERE id = ?", (now, node_id), wait=True
-        )
-        if future:
-            await future
-        logger.debug("soft_delete_node: %s", node_id[:8])
-
-    async def update_node_fields(self, node_id: str, fields: dict[str, Any]) -> None:
-        """Partial update of node fields (confidence, decay_rate, etc.)."""
-        allowed = {"confidence", "decay_rate", "access_count", "last_accessed"}
-        updates = [(k, v) for k, v in fields.items() if k in allowed]
-        if not updates:
-            return
-        set_clause = ", ".join(f"{k} = ?" for k, _ in updates)
-        params = tuple(v for _, v in updates) + (node_id,)
-        future = self._submit_write(
-            f"UPDATE nodes SET {set_clause} WHERE id = ?", params, wait=True
-        )
-        if future:
-            await future
-
-    async def get_decayable_nodes(self) -> list[dict[str, Any]]:
-        """Return nodes eligible for decay: decay_rate > 0, valid_until IS NULL, type != episodic."""
+    async def get_recent_session_episodes(
+        self, session_id: str, *, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Fetch recent episodes for session (v3), ordered by t_obs DESC."""
         if self._read_conn is None:
             return []
         cursor = await self._read_conn.execute(
             """
-            SELECT id, confidence, decay_rate, last_accessed, created_at, type
-            FROM nodes
-            WHERE decay_rate > 0 AND valid_until IS NULL AND type != 'episodic'
-            """
+            SELECT id, content, actor, session_id, t_obs, created_at
+            FROM episodes
+            WHERE session_id = ?
+            ORDER BY t_obs DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
         )
         rows = await cursor.fetchall()
         return [
             {
                 "id": r[0],
-                "confidence": r[1],
-                "decay_rate": r[2],
-                "last_accessed": r[3],
-                "created_at": r[4],
-                "type": r[5],
+                "content": r[1],
+                "actor": r[2],
+                "session_id": r[3],
+                "t_obs": r[4],
+                "created_at": r[5],
             }
             for r in rows
         ]
 
-    async def batch_update_confidence(self, updates: list[tuple[str, float]]) -> None:
-        """Batch update confidence for nodes. updates: [(node_id, confidence), ...]."""
-        if not updates:
-            return
-        future = self._submit_batch_write(
-            "UPDATE nodes SET confidence = ? WHERE id = ?",
-            [(c, nid) for nid, c in updates],
-            wait=True,
-        )
-        if future:
-            await future
-
-    async def soft_delete_nodes(self, node_ids: list[str]) -> None:
-        """Soft-delete nodes: set valid_until = now for given IDs."""
-        if not node_ids:
-            return
-        now = int(time.time())
-        params_list = [(now, nid) for nid in node_ids]
-        future = self._submit_batch_write(
-            "UPDATE nodes SET valid_until = ? WHERE id = ?", params_list, wait=True
-        )
-        if future:
-            await future
-
-    async def record_access_for_nodes(
-        self, node_ids: list[str], *, now: int | None = None
-    ) -> None:
-        """Record access: increment access_count, set last_accessed, apply confidence reinforcement.
-        Fire-and-forget writes. Call from retrieval after search results are returned.
-        Uses atomic UPDATE for confidence to avoid race with decay/concurrent updates."""
-        if not node_ids:
-            return
-        now = now or int(time.time())
-        if self._read_conn is None:
-            return
-        unique_ids = list(dict.fromkeys(node_ids))
-        placeholders = ",".join("?" * len(unique_ids))
-        cursor = await self._read_conn.execute(
-            f"SELECT id, access_count FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL",
-            unique_ids,
-        )
-        rows = await cursor.fetchall()
-        updates: list[tuple[int, float, str]] = []
-        for r in rows:
-            nid, acc = r[0], r[1] or 0
-            acc_new = acc + 1
-            delta = 0.05 * math.log(1 + acc_new / 20)
-            updates.append((now, delta, nid))
-        if updates:
-            self._submit_batch_write(
-                "UPDATE nodes SET access_count = access_count + 1, last_accessed = ?, confidence = MIN(1.0, confidence + ?) WHERE id = ? AND valid_until IS NULL",
-                updates,
-                wait=False,
-            )
-
-    def insert_edge(self, edge: dict[str, Any]) -> str:
-        """Insert edge. Fire-and-forget. Returns edge_id."""
-        edge_id = edge.get("id") or str(uuid.uuid4())
-        sql = """
-            INSERT INTO edges (
-                id, source_id, target_id, relation_type, predicate,
-                weight, confidence, valid_from, valid_until, evidence, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        params = (
-            edge_id,
-            edge["source_id"],
-            edge["target_id"],
-            edge["relation_type"],
-            edge.get("predicate"),
-            edge.get("weight", 1.0),
-            edge.get("confidence", 1.0),
-            edge["valid_from"],
-            edge.get("valid_until"),
-            json.dumps(edge.get("evidence") or []),
-            edge["created_at"],
-        )
-        self._submit_write(sql, params)
-        return edge_id
-
-    async def insert_edge_awaitable(self, edge: dict[str, Any]) -> str:
-        """Insert edge and await write confirmation. Returns edge_id."""
-        edge_id = edge.get("id") or str(uuid.uuid4())
-        sql = """
-            INSERT INTO edges (
-                id, source_id, target_id, relation_type, predicate,
-                weight, confidence, valid_from, valid_until, evidence, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        params = (
-            edge_id,
-            edge["source_id"],
-            edge["target_id"],
-            edge["relation_type"],
-            edge.get("predicate"),
-            edge.get("weight", 1.0),
-            edge.get("confidence", 1.0),
-            edge["valid_from"],
-            edge.get("valid_until"),
-            json.dumps(edge.get("evidence") or []),
-            edge["created_at"],
-        )
-        future = self._submit_write(sql, params, wait=True)
-        if future:
-            await future
-        return edge_id
-
-    async def insert_nodes_batch(self, nodes: list[dict[str, Any]]) -> list[str]:
-        """Batch insert nodes. Each is awaitable. Returns list of node_ids."""
-        logger.debug("insert_nodes_batch: %d nodes", len(nodes))
-        node_ids: list[str] = []
-        futures: list[asyncio.Future[Any]] = []
-        for node in nodes:
-            node_id = node.get("id") or str(uuid.uuid4())
-            node_ids.append(node_id)
-            sql = """
-                INSERT INTO nodes (
-                    id, type, content, embedding,
-                    event_time, created_at, valid_from, valid_until,
-                    confidence, access_count, last_accessed, decay_rate,
-                    source_type, source_role, session_id, attributes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            params = (
-                node_id,
-                node["type"],
-                node["content"],
-                node.get("embedding"),
-                node["event_time"],
-                node["created_at"],
-                node["valid_from"],
-                node.get("valid_until"),
-                node.get("confidence", 1.0),
-                node.get("access_count", 0),
-                node.get("last_accessed"),
-                node.get("decay_rate", 0.1),
-                node.get("source_type"),
-                node.get("source_role"),
-                node.get("session_id"),
-                json.dumps(node.get("attributes") or {}),
-            )
-            future = self._submit_write(sql, params, wait=True)
-            if future:
-                futures.append(future)
-        for f in futures:
-            await f
-        return node_ids
-
-    async def get_last_episode_id(self, session_id: str) -> str | None:
-        """Get the most recent episodic node id for a session."""
+    async def get_episode_by_id(self, episode_id: str) -> dict[str, Any] | None:
+        """Fetch episode by id (v3). For retry pipeline."""
         if self._read_conn is None:
             return None
         cursor = await self._read_conn.execute(
-            """
-            SELECT id FROM nodes
-            WHERE type = 'episodic' AND session_id = ? AND valid_until IS NULL
-            ORDER BY event_time DESC LIMIT 1
-            """,
-            (session_id,),
+            "SELECT id, content, actor, session_id, t_obs, created_at FROM episodes WHERE id = ?",
+            (episode_id,),
         )
         row = await cursor.fetchone()
-        return row[0] if row else None
-
-    async def fts_search(
-        self,
-        query: str,
-        *,
-        node_types: list[str] | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """FTS5 search. Returns list of node dicts."""
-        if not query or not query.strip():
-            return []
-        if self._read_conn is None:
-            return []
-
-        fts_query = _escape_fts5_query(query.strip())
-        type_filter = ""
-        params: list[Any] = [fts_query, limit]
-        if node_types:
-            placeholders = ",".join("?" * len(node_types))
-            type_filter = f" AND n.type IN ({placeholders})"
-            params = [fts_query, limit] + list(node_types)
-
-        sql = f"""
-            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
-            FROM nodes n
-            INNER JOIN (
-                SELECT rowid FROM nodes_fts
-                WHERE nodes_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            ) f ON n.rowid = f.rowid
-            WHERE n.valid_until IS NULL
-            {type_filter}
-        """
-        cursor = await self._read_conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        ]
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "content": row[1],
+            "actor": row[2],
+            "session_id": row[3],
+            "t_obs": row[4],
+            "created_at": row[5],
+        }
 
     def _serialize_embedding(self, embedding: list[float]) -> bytes:
         """Serialize float list to BLOB for sqlite-vec. Applies defensive truncation
@@ -501,22 +268,6 @@ class MemoryStorage:
 
             return struct.pack("%sf" % len(embedding), *embedding)
 
-    async def save_embedding(self, node_id: str, embedding: list[float]) -> None:
-        """Update node embedding and vec_nodes. Awaitable via write queue."""
-        blob = self._serialize_embedding(embedding)
-        f1 = self._submit_write(
-            "UPDATE nodes SET embedding = ? WHERE id = ?", (blob, node_id), wait=True
-        )
-        f2 = self._submit_write(
-            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-            (node_id, blob),
-            wait=True,
-        )
-        if f1:
-            await f1
-        if f2:
-            await f2
-
     async def save_entity_embedding(
         self, entity_id: str, embedding: list[float]
     ) -> None:
@@ -536,77 +287,6 @@ class MemoryStorage:
             await f1
         if f2:
             await f2
-
-    async def vector_search(
-        self,
-        query_embedding: list[float],
-        *,
-        node_types: list[str] | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """KNN search via vec_nodes MATCH. Returns same shape as fts_search plus distance."""
-        if self._read_conn is None:
-            return []
-        blob = self._serialize_embedding(query_embedding)
-        type_filter = ""
-        inner_limit = limit * 5 if node_types else limit
-        params: list[Any] = [blob, inner_limit]
-        if node_types:
-            placeholders = ",".join("?" * len(node_types))
-            type_filter = f" AND n.type IN ({placeholders})"
-            params = [blob, inner_limit] + list(node_types) + [limit]
-        else:
-            params = [blob, inner_limit, limit]
-        sql = f"""
-            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id, v.distance
-            FROM (
-                SELECT node_id, distance FROM vec_nodes
-                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
-            ) v
-            INNER JOIN nodes n ON n.id = v.node_id
-            WHERE n.valid_until IS NULL
-              {type_filter}
-            ORDER BY v.distance
-            LIMIT ?
-        """
-        cursor = await self._read_conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-                "distance": r[7],
-            }
-            for r in rows
-        ]
-
-    async def get_node(self, node_id: str) -> dict[str, Any] | None:
-        """Fetch node by id."""
-        if self._read_conn is None:
-            return None
-        cursor = await self._read_conn.execute(
-            "SELECT id, type, content, event_time, created_at, confidence, access_count, last_accessed FROM nodes WHERE id = ? AND valid_until IS NULL",
-            (node_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "type": row[1],
-            "content": row[2],
-            "event_time": row[3],
-            "created_at": row[4],
-            "confidence": row[5],
-            "access_count": row[6],
-            "last_accessed": row[7],
-        }
 
     def ensure_session(self, session_id: str) -> None:
         """Upsert session into sessions_consolidations. Fire-and-forget."""
@@ -638,15 +318,15 @@ class MemoryStorage:
         limit: int = 30,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Paginated fetch of episodic nodes for a session, ordered by event_time ASC."""
+        """Paginated fetch of episodes for a session (v3), ordered by t_obs ASC."""
         if self._read_conn is None:
             return []
         cursor = await self._read_conn.execute(
             """
-            SELECT id, type, content, event_time, created_at, confidence, session_id
-            FROM nodes
-            WHERE type = 'episodic' AND session_id = ? AND valid_until IS NULL
-            ORDER BY event_time ASC
+            SELECT id, content, actor, session_id, t_obs, created_at
+            FROM episodes
+            WHERE session_id = ?
+            ORDER BY t_obs ASC
             LIMIT ? OFFSET ?
             """,
             (session_id, limit, offset),
@@ -655,12 +335,11 @@ class MemoryStorage:
         return [
             {
                 "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
+                "content": r[1],
+                "actor": r[2],
+                "session_id": r[3],
+                "t_obs": r[4],
+                "created_at": r[5],
             }
             for r in rows
         ]
@@ -676,6 +355,1076 @@ class MemoryStorage:
         if future:
             await future
         logger.debug("mark_session_consolidated: %s", session_id)
+
+    # --- v3 Entity CRUD ---
+
+    def insert_entity(self, entity: dict[str, Any]) -> str:
+        """Insert entity (v3). Fire-and-forget. Returns entity_id."""
+        entity_id = entity.get("id") or str(uuid.uuid4())
+        now = int(time.time())
+        sql = """
+            INSERT INTO entities (id, name, aliases, summary, entity_type, mention_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            entity_id,
+            entity["name"],
+            json.dumps(entity.get("aliases") or [], ensure_ascii=False),
+            entity.get("summary"),
+            entity.get("entity_type", ""),
+            entity.get("mention_count", 1),
+            now,
+            now,
+        )
+        self._submit_write(sql, params)
+        return entity_id
+
+    async def insert_entity_awaitable(self, entity: dict[str, Any]) -> str:
+        """Insert entity (v3). Awaitable. Returns entity_id."""
+        entity_id = entity.get("id") or str(uuid.uuid4())
+        now = int(time.time())
+        sql = """
+            INSERT INTO entities (id, name, aliases, summary, entity_type, mention_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            entity_id,
+            entity["name"],
+            json.dumps(entity.get("aliases") or [], ensure_ascii=False),
+            entity.get("summary"),
+            entity.get("entity_type", ""),
+            entity.get("mention_count", 1),
+            now,
+            now,
+        )
+        future = self._submit_write(sql, params, wait=True)
+        if future:
+            await future
+        return entity_id
+
+    async def get_entity_by_id(self, entity_id: str) -> dict[str, Any] | None:
+        """Fetch entity by id (v3)."""
+        if self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT id, name, aliases, summary, entity_type, mention_count FROM entities WHERE id = ?",
+            (entity_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "aliases": json.loads(row[2]) if row[2] else [],
+            "summary": row[3],
+            "entity_type": row[4] or "",
+            "mention_count": row[5],
+        }
+
+    async def get_entity_by_normalized_name(self, name: str) -> dict[str, Any] | None:
+        """Lookup entity by normalized (lowercase) name (v3)."""
+        if self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT id, name, aliases, summary, entity_type, mention_count FROM entities WHERE lower(name) = lower(?)",
+            (name.strip(),),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "aliases": json.loads(row[2]) if row[2] else [],
+            "summary": row[3],
+            "entity_type": row[4] or "",
+            "mention_count": row[5],
+        }
+
+    async def get_entity_by_alias(self, alias: str) -> dict[str, Any] | None:
+        """Search entity by alias via JSON scan (v3)."""
+        if self._read_conn is None:
+            return None
+        alias_lower = alias.strip().lower()
+        cursor = await self._read_conn.execute(
+            """
+            SELECT e.id, e.name, e.aliases, e.summary, e.entity_type, e.mention_count
+            FROM entities e, json_each(e.aliases) j
+            WHERE lower(j.value) = ?
+            LIMIT 1
+            """,
+            (alias_lower,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "aliases": json.loads(row[2]) if row[2] else [],
+            "summary": row[3],
+            "entity_type": row[4] or "",
+            "mention_count": row[5],
+        }
+
+    async def update_entity(self, entity_id: str, fields: dict[str, Any]) -> None:
+        """Partial update of entity (v3). Allowed: summary, mention_count, aliases."""
+        allowed = {"summary", "mention_count", "aliases", "updated_at"}
+        updates = [(k, v) for k, v in fields.items() if k in allowed]
+        if not updates:
+            return
+        if "updated_at" not in fields:
+            updates.append(("updated_at", int(time.time())))
+        set_parts = []
+        params: list[Any] = []
+        for k, v in updates:
+            set_parts.append(f"{k} = ?")
+            params.append(
+                json.dumps(v, ensure_ascii=False) if k == "aliases" and isinstance(v, list) else v
+            )
+        params.append(entity_id)
+        future = self._submit_write(
+            f"UPDATE entities SET {', '.join(set_parts)} WHERE id = ?", tuple(params), wait=True
+        )
+        if future:
+            await future
+
+    async def save_entity_embedding(self, entity_id: str, embedding: list[float]) -> None:
+        """Upsert embedding into vec_entities (v3)."""
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception as e:
+            logger.warning("save_entity_embedding serialize failed: %s", e)
+            return
+        future = self._submit_write(
+            "INSERT OR REPLACE INTO vec_entities(entity_id, embedding) VALUES (?, ?)",
+            (entity_id, blob),
+            wait=True,
+        )
+        if future:
+            await future
+
+    # --- v3 Fact CRUD ---
+
+    async def insert_fact(self, fact: dict[str, Any]) -> str:
+        """Insert fact (v3). Awaitable. FTS5 trigger fires automatically."""
+        fact_id = fact.get("id") or str(uuid.uuid4())
+        now = int(time.time())
+        t_created = fact.get("t_created") or now
+        sql = """
+            INSERT INTO facts (id, subject_id, predicate, object_id, fact_text, t_valid, t_invalid, t_created, source_episode_id, confidence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            fact_id,
+            fact["subject_id"],
+            fact["predicate"],
+            fact["object_id"],
+            fact["fact_text"],
+            fact.get("t_valid"),
+            fact.get("t_invalid"),
+            t_created,
+            fact.get("source_episode_id"),
+            fact.get("confidence", 1.0),
+        )
+        future = self._submit_write(sql, params, wait=True)
+        if future:
+            await future
+        return fact_id
+
+    async def get_facts_for_entity_pair(
+        self, subject_id: str, object_id: str
+    ) -> list[dict[str, Any]]:
+        """Active facts between two entities (v3)."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, subject_id, predicate, object_id, fact_text, t_valid, t_invalid, embedding
+            FROM facts
+            WHERE subject_id = ? AND object_id = ? AND t_expired IS NULL
+            """,
+            (subject_id, object_id),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "t_valid": r[5],
+                "t_invalid": r[6],
+                "embedding": r[7],
+            }
+            for r in rows
+        ]
+
+    async def get_facts_by_subject_predicate(
+        self, subject_id: str, predicate: str
+    ) -> list[dict[str, Any]]:
+        """Facts by subject+predicate for temporal conflict detection (v3)."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, object_id, fact_text, t_valid, t_invalid
+            FROM facts
+            WHERE subject_id = ? AND predicate = ? AND t_expired IS NULL
+            """,
+            (subject_id, predicate),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "object_id": r[1],
+                "fact_text": r[2],
+                "t_valid": r[3],
+                "t_invalid": r[4],
+            }
+            for r in rows
+        ]
+
+    async def expire_fact(
+        self, fact_id: str, invalidated_by: str | None = None
+    ) -> None:
+        """Set t_expired and invalidated_by on fact (v3). Use invalidated_by=None for forget."""
+        now = int(time.time())
+        future = self._submit_write(
+            "UPDATE facts SET t_expired = ?, invalidated_by = ? WHERE id = ?",
+            (now, invalidated_by, fact_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def update_fact_confidence(
+        self, fact_id: str, confidence: float
+    ) -> None:
+        """Set confidence on an active fact (e.g. for confirm_fact). Only affects non-expired facts."""
+        future = self._submit_write(
+            "UPDATE facts SET confidence = ? WHERE id = ? AND t_expired IS NULL",
+            (confidence, fact_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def save_fact_embedding(self, fact_id: str, embedding: list[float]) -> None:
+        """Upsert embedding into vec_facts (v3)."""
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception as e:
+            logger.warning("save_fact_embedding serialize failed: %s", e)
+            return
+        future = self._submit_write(
+            "INSERT OR REPLACE INTO vec_facts(fact_id, embedding) VALUES (?, ?)",
+            (fact_id, blob),
+            wait=True,
+        )
+        if future:
+            await future
+
+    # --- v3 Vector search ---
+
+    async def vec_search_entities(
+        self, embedding: list[float], top_k: int = 10
+    ) -> list[dict[str, Any]]:
+        """KNN search on vec_entities. Returns entity_id and distance."""
+        if self._read_conn is None:
+            return []
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception:
+            return []
+        try:
+            cursor = await self._read_conn.execute(
+                """
+                SELECT entity_id, distance FROM vec_entities
+                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+                """,
+                (blob, top_k),
+            )
+        except Exception as e:
+            logger.debug("vec_search_entities failed (vec table may not exist): %s", e)
+            return []
+        rows = await cursor.fetchall()
+        return [{"entity_id": r[0], "distance": r[1]} for r in rows]
+
+    async def vec_search_facts(
+        self, embedding: list[float], top_k: int = 10
+    ) -> list[dict[str, Any]]:
+        """KNN search on vec_facts. Returns fact_id and distance."""
+        if self._read_conn is None:
+            return []
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception:
+            return []
+        try:
+            cursor = await self._read_conn.execute(
+                """
+                SELECT fact_id, distance FROM vec_facts
+                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+                """,
+                (blob, top_k),
+            )
+        except Exception as e:
+            logger.debug("vec_search_facts failed (vec table may not exist): %s", e)
+            return []
+        rows = await cursor.fetchall()
+        return [{"fact_id": r[0], "distance": r[1]} for r in rows]
+
+    async def vec_search_communities(
+        self, embedding: list[float], top_k: int = 5
+    ) -> list[dict[str, Any]]:
+        """KNN search on vec_communities. Returns community_id and distance."""
+        if self._read_conn is None:
+            return []
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception:
+            return []
+        try:
+            cursor = await self._read_conn.execute(
+                """
+                SELECT community_id, distance FROM vec_communities
+                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+                """,
+                (blob, top_k),
+            )
+        except Exception as e:
+            logger.debug("vec_search_communities failed (vec table may not exist): %s", e)
+            return []
+        rows = await cursor.fetchall()
+        return [{"community_id": r[0], "distance": r[1]} for r in rows]
+
+    # --- v3 Communities (Tier 3) ---
+
+    async def insert_community(self, community: dict[str, Any]) -> str:
+        """Insert community. Awaitable. Returns community_id."""
+        community_id = community.get("id") or str(uuid.uuid4())
+        now = int(time.time())
+        future = self._submit_write(
+            """
+            INSERT INTO communities (id, name, summary, member_count, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                community_id,
+                community.get("name", ""),
+                community.get("summary", ""),
+                community.get("member_count", 0),
+                now,
+            ),
+            wait=True,
+        )
+        if future:
+            await future
+        return community_id
+
+    async def get_community_by_id(self, community_id: str) -> dict[str, Any] | None:
+        """Fetch community by id."""
+        if not community_id or self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, name, summary, member_count, updated_at
+            FROM communities
+            WHERE id = ?
+            """,
+            (community_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "summary": row[2],
+            "member_count": row[3],
+            "updated_at": row[4],
+        }
+
+    async def update_community(
+        self, community_id: str, fields: dict[str, Any]
+    ) -> None:
+        """Update community fields (summary, member_count, updated_at)."""
+        if not community_id or not fields:
+            return
+        now = int(time.time())
+        set_parts = ["updated_at = ?"]
+        params: list[Any] = [now]
+        if "summary" in fields:
+            set_parts.append("summary = ?")
+            params.append(fields["summary"])
+        if "member_count" in fields:
+            set_parts.append("member_count = ?")
+            params.append(fields["member_count"])
+        if "name" in fields:
+            set_parts.append("name = ?")
+            params.append(fields["name"])
+        params.append(community_id)
+        future = self._submit_write(
+            f"UPDATE communities SET {', '.join(set_parts)} WHERE id = ?",
+            tuple(params),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def add_community_member(self, community_id: str, entity_id: str) -> None:
+        """Insert into community_members and sync member_count."""
+        future = self._submit_write(
+            "INSERT OR IGNORE INTO community_members (community_id, entity_id) VALUES (?, ?)",
+            (community_id, entity_id),
+            wait=True,
+        )
+        if future:
+            await future
+        if self._read_conn:
+            cursor = await self._read_conn.execute(
+                "SELECT COUNT(*) FROM community_members WHERE community_id = ?",
+                (community_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                future2 = self._submit_write(
+                    "UPDATE communities SET member_count = ?, updated_at = ? WHERE id = ?",
+                    (row[0], int(time.time()), community_id),
+                    wait=True,
+                )
+                if future2:
+                    await future2
+
+    async def get_entity_community(self, entity_id: str) -> str | None:
+        """Lookup community_id for entity from community_members."""
+        if not entity_id or self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT community_id FROM community_members WHERE entity_id = ?",
+            (entity_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def get_community_members(
+        self, community_id: str
+    ) -> list[dict[str, Any]]:
+        """Entities in community with name and summary."""
+        if not community_id or self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT e.id, e.name, e.summary
+            FROM entities e
+            JOIN community_members cm ON cm.entity_id = e.id
+            WHERE cm.community_id = ?
+            """,
+            (community_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {"id": r[0], "name": r[1], "summary": r[2] or ""}
+            for r in rows
+        ]
+
+    async def save_community_embedding(
+        self, community_id: str, embedding: list[float]
+    ) -> None:
+        """Upsert embedding into vec_communities."""
+        try:
+            blob = self._serialize_embedding(embedding)
+        except Exception as e:
+            logger.warning("save_community_embedding serialize failed: %s", e)
+            return
+        future = self._submit_write(
+            "INSERT OR REPLACE INTO vec_communities(community_id, embedding) VALUES (?, ?)",
+            (community_id, blob),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def get_all_entity_ids(
+        self, limit: int = 1000, offset: int = 0
+    ) -> list[str]:
+        """Paginated entity ids for periodic refresh."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            "SELECT id FROM entities ORDER BY id LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+    async def get_entities_needing_enrichment(
+        self, min_mentions: int = 3
+    ) -> list[dict[str, Any]]:
+        """Entities with sparse summary and enough mentions for enrichment (v3)."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, name, entity_type, aliases, summary, mention_count
+            FROM entities
+            WHERE (summary IS NULL OR summary = '') AND mention_count >= ?
+            ORDER BY mention_count DESC
+            """,
+            (min_mentions,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "entity_type": r[2],
+                "aliases": json.loads(r[3]) if r[3] else [],
+                "summary": r[4],
+                "mention_count": r[5],
+            }
+            for r in rows
+        ]
+
+    async def get_neighboring_communities(
+        self, entity_id: str, min_shared_facts: int = 2
+    ) -> list[str]:
+        """Community IDs of entities that share >= min_shared_facts active facts with entity."""
+        if not entity_id or self._read_conn is None:
+            return []
+        try:
+            cursor = await self._read_conn.execute(
+                """
+                SELECT cm.community_id
+                FROM facts f
+                JOIN community_members cm ON cm.entity_id = (
+                    CASE WHEN f.subject_id = ? THEN f.object_id ELSE f.subject_id END
+                )
+                WHERE (f.subject_id = ? OR f.object_id = ?)
+                  AND f.t_expired IS NULL
+                GROUP BY cm.community_id
+                HAVING COUNT(DISTINCT f.id) >= ?
+                """,
+                (entity_id, entity_id, entity_id, min_shared_facts),
+            )
+            rows = await cursor.fetchall()
+            return [r[0] for r in rows]
+        except Exception as e:
+            logger.debug("get_neighboring_communities failed: %s", e)
+            return []
+
+    async def get_facts_for_community(
+        self, community_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Facts where both subject and object are members of the community."""
+        if not community_id or self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT f.id, f.subject_id, f.predicate, f.object_id, f.fact_text
+            FROM facts f
+            JOIN community_members cm1 ON cm1.entity_id = f.subject_id AND cm1.community_id = ?
+            JOIN community_members cm2 ON cm2.entity_id = f.object_id AND cm2.community_id = ?
+            WHERE f.t_expired IS NULL
+            ORDER BY f.confidence DESC
+            LIMIT ?
+            """,
+            (community_id, community_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+            }
+            for r in rows
+        ]
+
+    async def remove_community_member(self, community_id: str, entity_id: str) -> None:
+        """Remove entity from community. Syncs member_count."""
+        future = self._submit_write(
+            "DELETE FROM community_members WHERE community_id = ? AND entity_id = ?",
+            (community_id, entity_id),
+            wait=True,
+        )
+        if future:
+            await future
+        if self._read_conn:
+            cursor = await self._read_conn.execute(
+                "SELECT COUNT(*) FROM community_members WHERE community_id = ?",
+                (community_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                future2 = self._submit_write(
+                    "UPDATE communities SET member_count = ?, updated_at = ? WHERE id = ?",
+                    (row[0], int(time.time()), community_id),
+                    wait=True,
+                )
+                if future2:
+                    await future2
+
+    # --- v3 Pipeline queue ---
+
+    async def enqueue_atomic_facts(
+        self, episode_id: str, texts: list[str]
+    ) -> list[str]:
+        """Batch insert into pipeline_queue. Returns list of queue item ids."""
+        if not texts:
+            return []
+        now = int(time.time())
+        ids: list[str] = []
+        params_list: list[tuple] = []
+        for t in texts:
+            qid = str(uuid.uuid4())
+            ids.append(qid)
+            params_list.append((qid, episode_id, t.strip(), "pending", 0, now))
+        sql = """
+            INSERT INTO pipeline_queue (id, episode_id, atomic_fact, status, attempts, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """
+        future = self._submit_batch_write(sql, params_list, wait=True)
+        if future:
+            await future
+        return ids
+
+    async def get_pending_queue_items(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Queue items with status IN ('pending','failed') and attempts < max."""
+        if self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, episode_id, atomic_fact, status, attempts, last_error
+            FROM pipeline_queue
+            WHERE status IN ('pending', 'failed')
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "episode_id": r[1],
+                "atomic_fact": r[2],
+                "status": r[3],
+                "attempts": r[4],
+                "last_error": r[5],
+            }
+            for r in rows
+        ]
+
+    async def update_queue_item_status(
+        self, item_id: str, status: str, error: str | None = None
+    ) -> None:
+        """Update status, last_error, increment attempts."""
+        future = self._submit_write(
+            """
+            UPDATE pipeline_queue SET status = ?, last_error = ?, attempts = attempts + 1
+            WHERE id = ?
+            """,
+            (status, error, item_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    async def mark_queue_item_done(self, item_id: str) -> None:
+        """Set status='done'."""
+        future = self._submit_write(
+            "UPDATE pipeline_queue SET status = 'done' WHERE id = ?",
+            (item_id,),
+            wait=True,
+        )
+        if future:
+            await future
+
+    # --- v3 Episode-entity link ---
+
+    async def link_episode_entity(self, episode_id: str, entity_id: str) -> None:
+        """Insert into episode_entities (v3)."""
+        future = self._submit_write(
+            "INSERT OR IGNORE INTO episode_entities (episode_id, entity_id) VALUES (?, ?)",
+            (episode_id, entity_id),
+            wait=True,
+        )
+        if future:
+            await future
+
+    # --- fact_access_log (Ebbinghaus decay) ---
+
+    def record_fact_access(self, fact_ids: list[str]) -> None:
+        """Batch insert into fact_access_log. Fire-and-forget. Called from retrieval after search."""
+        if not fact_ids:
+            return
+        now = int(time.time() * 1000)
+        params_list = [(fid, now) for fid in fact_ids]
+        self._submit_batch_write(
+            "INSERT INTO fact_access_log (fact_id, accessed_at) VALUES (?, ?)",
+            params_list,
+            wait=False,
+        )
+
+    async def apply_fact_decay(
+        self, lambda_: float, threshold: float, now: int
+    ) -> tuple[int, int]:
+        """Ebbinghaus decay on facts.confidence. Returns (facts_decayed, facts_expired)."""
+        # 1. Decay confidence (exclude user-confirmed facts with confidence=1.0)
+        decay_sql = """
+            UPDATE facts
+            SET confidence = confidence * exp(
+                -? * power(
+                    (? - COALESCE(
+                        (SELECT MAX(accessed_at) FROM fact_access_log WHERE fact_id = facts.id),
+                        facts.t_created
+                    )) / 86400000.0,
+                    0.8
+                )
+            )
+            WHERE t_expired IS NULL AND confidence < 1.0
+        """
+        future1 = self._submit_write(
+            decay_sql, (lambda_, now), wait=True, return_rowcount=True
+        )
+        decayed = 0
+        if future1:
+            decayed = await future1
+
+        # 2. Expire facts below threshold
+        expire_sql = """
+            UPDATE facts SET t_expired = ?
+            WHERE t_expired IS NULL AND confidence < ?
+        """
+        future2 = self._submit_write(
+            expire_sql, (now, threshold), wait=True, return_rowcount=True
+        )
+        expired = 0
+        if future2:
+            expired = await future2
+
+        return (decayed, expired)
+
+    async def compact_fact_access_log(self, keep_days: int = 7) -> int:
+        """Keep only most recent access per fact, drop entries older than keep_days. Returns rows deleted."""
+        if self._read_conn is None:
+            return 0
+        cursor = await self._read_conn.execute(
+            "SELECT COALESCE(MAX(accessed_at), 0) FROM fact_access_log"
+        )
+        row = await cursor.fetchone()
+        if not row or not row[0]:
+            return 0
+        cutoff = row[0] - (keep_days * 24 * 60 * 60 * 1000)
+        if cutoff <= 0:
+            return 0
+        # Delete older entries, but keep latest per fact: delete all where accessed_at < cutoff
+        # and the fact has a newer entry. Simpler: just delete rows with accessed_at < cutoff.
+        future = self._submit_write(
+            "DELETE FROM fact_access_log WHERE accessed_at < ?",
+            (cutoff,),
+            wait=True,
+            return_rowcount=True,
+        )
+        if future:
+            return await future
+        return 0
+
+    # --- v3 Read-path (Phase 3) ---
+
+    async def fts_search_facts(
+        self, query: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """FTS5 search on facts_fts. Returns active fact dicts."""
+        if not query or not query.strip() or self._read_conn is None:
+            return []
+        fts_query = _escape_fts5_query(query.strip())
+        if not fts_query:
+            return []
+        try:
+            cursor = await self._read_conn.execute(
+                """
+                SELECT f.id, f.subject_id, f.predicate, f.object_id, f.fact_text,
+                       f.confidence, f.t_valid, f.t_created, f.source_episode_id
+                FROM facts f
+                INNER JOIN (
+                    SELECT rowid FROM facts_fts
+                    WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?
+                ) fts ON f.rowid = fts.rowid
+                WHERE f.t_expired IS NULL
+                """,
+                (fts_query, limit),
+            )
+        except Exception as e:
+            logger.debug("fts_search_facts failed: %s", e)
+            return []
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "confidence": r[5],
+                "t_valid": r[6],
+                "t_created": r[7],
+                "source_episode_id": r[8],
+            }
+            for r in rows
+        ]
+
+    async def bfs_expand_facts(
+        self,
+        entity_ids: list[str],
+        *,
+        max_depth: int = 2,
+        max_facts: int = 50,
+    ) -> list[dict[str, Any]]:
+        """BFS expansion from entities along fact-edges. Returns fact dicts ordered by confidence."""
+        if not entity_ids or self._read_conn is None:
+            return []
+        placeholders = ",".join("?" * len(entity_ids))
+        try:
+            cursor = await self._read_conn.execute(
+                f"""
+                WITH RECURSIVE graph_bfs(entity_id, depth) AS (
+                    SELECT id, 0 FROM entities WHERE id IN ({placeholders})
+                    UNION ALL
+                    SELECT
+                        CASE WHEN f.subject_id = g.entity_id
+                             THEN f.object_id
+                             ELSE f.subject_id END,
+                        g.depth + 1
+                    FROM facts f
+                    JOIN graph_bfs g ON (f.subject_id = g.entity_id OR f.object_id = g.entity_id)
+                    WHERE g.depth < ? AND f.t_expired IS NULL
+                )
+                SELECT DISTINCT f.id, f.subject_id, f.predicate, f.object_id, f.fact_text,
+                       f.confidence, f.t_valid, f.t_created, f.source_episode_id
+                FROM facts f
+                JOIN graph_bfs g ON (f.subject_id = g.entity_id OR f.object_id = g.entity_id)
+                WHERE f.t_expired IS NULL
+                ORDER BY f.confidence DESC
+                LIMIT ?
+                """,
+                tuple(entity_ids) + (max_depth, max_facts),
+            )
+        except Exception as e:
+            logger.debug("bfs_expand_facts failed: %s", e)
+            return []
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "confidence": r[5],
+                "t_valid": r[6],
+                "t_created": r[7],
+                "source_episode_id": r[8],
+            }
+            for r in rows
+        ]
+
+    async def get_facts_for_entity(
+        self, entity_id: str, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """All active facts where entity is subject or object."""
+        if not entity_id or self._read_conn is None:
+            return []
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, subject_id, predicate, object_id, fact_text,
+                   confidence, t_valid, t_created, source_episode_id
+            FROM facts
+            WHERE (subject_id = ? OR object_id = ?) AND t_expired IS NULL
+            ORDER BY confidence DESC, t_valid ASC
+            LIMIT ?
+            """,
+            (entity_id, entity_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "confidence": r[5],
+                "t_valid": r[6],
+                "t_created": r[7],
+                "source_episode_id": r[8],
+            }
+            for r in rows
+        ]
+
+    async def get_entity_facts_timeline(
+        self,
+        entity_id: str | None,
+        *,
+        after: int | None = None,
+        before: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Chronological facts ordered by t_valid. Optional entity and time filters."""
+        if self._read_conn is None:
+            return []
+        conditions = ["t_expired IS NULL"]
+        params: list[Any] = []
+        if entity_id:
+            conditions.append("(subject_id = ? OR object_id = ?)")
+            params.extend([entity_id, entity_id])
+        if after is not None:
+            conditions.append("(t_valid IS NULL OR t_valid >= ?)")
+            params.append(after)
+        if before is not None:
+            conditions.append("(t_valid IS NULL OR t_valid <= ?)")
+            params.append(before)
+        params.append(limit)
+        where = " AND ".join(conditions)
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT id, subject_id, predicate, object_id, fact_text,
+                   confidence, t_valid, t_created, source_episode_id
+            FROM facts
+            WHERE {where}
+            ORDER BY COALESCE(t_valid, t_created) ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "confidence": r[5],
+                "t_valid": r[6],
+                "t_created": r[7],
+                "source_episode_id": r[8],
+            }
+            for r in rows
+        ]
+
+    async def get_facts_by_ids(
+        self, fact_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Batch fetch facts by id. Returns active facts only."""
+        if not fact_ids or self._read_conn is None:
+            return []
+        seen = {fid for fid in fact_ids if fid}
+        if not seen:
+            return []
+        placeholders = ",".join("?" * len(seen))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT id, subject_id, predicate, object_id, fact_text,
+                   confidence, t_valid, t_created, source_episode_id
+            FROM facts
+            WHERE id IN ({placeholders}) AND t_expired IS NULL
+            """,
+            tuple(seen),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "subject_id": r[1],
+                "predicate": r[2],
+                "object_id": r[3],
+                "fact_text": r[4],
+                "confidence": r[5],
+                "t_valid": r[6],
+                "t_created": r[7],
+                "source_episode_id": r[8],
+            }
+            for r in rows
+        ]
+
+    async def get_fact_by_id(self, fact_id: str) -> dict[str, Any] | None:
+        """Single fact lookup by id."""
+        if not fact_id or self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            """
+            SELECT id, subject_id, predicate, object_id, fact_text,
+                   confidence, t_valid, t_invalid, t_created, t_expired,
+                   source_episode_id, invalidated_by
+            FROM facts
+            WHERE id = ?
+            """,
+            (fact_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "subject_id": row[1],
+            "predicate": row[2],
+            "object_id": row[3],
+            "fact_text": row[4],
+            "confidence": row[5],
+            "t_valid": row[6],
+            "t_invalid": row[7],
+            "t_created": row[8],
+            "t_expired": row[9],
+            "source_episode_id": row[10],
+            "invalidated_by": row[11],
+        }
+
+    async def get_entities_for_facts(
+        self, fact_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve entity id -> entity dict for subject/object of given facts."""
+        if not fact_ids or self._read_conn is None:
+            return {}
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT DISTINCT subject_id, object_id FROM facts
+            WHERE id IN ({",".join("?" * len(fact_ids))})
+            """,
+            tuple(fact_ids),
+        )
+        rows = await cursor.fetchall()
+        entity_ids = list({e for r in rows for e in (r[0], r[1])})
+        if not entity_ids:
+            return {}
+        placeholders = ",".join("?" * len(entity_ids))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT id, name, aliases, summary, entity_type, mention_count
+            FROM entities
+            WHERE id IN ({placeholders})
+            """,
+            tuple(entity_ids),
+        )
+        rows = await cursor.fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            result[r[0]] = {
+                "id": r[0],
+                "name": r[1],
+                "aliases": json.loads(r[2]) if r[2] else [],
+                "summary": r[3],
+                "entity_type": r[4] or "",
+                "mention_count": r[5],
+            }
+        return result
 
     async def get_unconsolidated_sessions(self) -> list[str]:
         """Return session_ids where consolidated_at IS NULL. For nightly maintenance."""
@@ -736,524 +1485,51 @@ class MemoryStorage:
         row = await cursor.fetchone()
         return row[0] if row else None
 
-    async def insert_entity(self, entity: dict[str, Any]) -> str:
-        """Insert entity. Awaitable. Returns entity_id."""
-        entity_id = entity.get("id") or str(uuid.uuid4())
-        now = int(time.time())
-        sql = """
-            INSERT INTO entities (
-                id, canonical_name, type, aliases, summary, embedding,
-                first_seen, last_updated, mention_count, attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        params = (
-            entity_id,
-            entity["canonical_name"],
-            entity["type"],
-            json.dumps(entity.get("aliases") or [], ensure_ascii=False),
-            entity.get("summary"),
-            entity.get("embedding"),
-            entity.get("first_seen", now),
-            entity.get("last_updated", now),
-            entity.get("mention_count", 1),
-            json.dumps(entity.get("attributes") or {}),
-        )
-        future = self._submit_write(sql, params, wait=True)
-        if future:
-            await future
-        return entity_id
-
-    async def get_entity_by_name(self, canonical_name: str) -> dict[str, Any] | None:
-        """Case-insensitive lookup by canonical_name."""
-        if self._read_conn is None:
-            return None
-        cursor = await self._read_conn.execute(
-            "SELECT id, canonical_name, type, aliases, summary, mention_count FROM entities WHERE LOWER(canonical_name) = LOWER(?)",
-            (canonical_name,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "canonical_name": row[1],
-            "type": row[2],
-            "aliases": json.loads(row[3]) if row[3] else [],
-            "summary": row[4],
-            "mention_count": row[5],
-        }
-
-    async def search_entity_by_alias(self, alias: str) -> dict[str, Any] | None:
-        """Search entities by alias (case-insensitive, full Unicode support).
-
-        SQLite LIKE is case-insensitive for ASCII only, so Cyrillic and other
-        non-ASCII characters require Python-side comparison after fetching
-        candidates that have a non-empty aliases field.
-        """
-        if self._read_conn is None:
-            return None
-        alias_lower = alias.lower()
-        cursor = await self._read_conn.execute(
-            "SELECT id, canonical_name, type, aliases, summary, mention_count"
-            " FROM entities WHERE aliases IS NOT NULL AND aliases != '[]' AND aliases != ''",
-        )
-        rows = await cursor.fetchall()
-        for row in rows:
-            aliases: list[str] = json.loads(row[3]) if row[3] else []
-            if any(a.lower() == alias_lower for a in aliases):
-                return {
-                    "id": row[0],
-                    "canonical_name": row[1],
-                    "type": row[2],
-                    "aliases": aliases,
-                    "summary": row[4],
-                    "mention_count": row[5],
-                }
-        return None
-
-    async def link_node_entity(self, node_id: str, entity_id: str) -> None:
-        """Link node to entity via node_entities junction. Awaitable."""
-        future = self._submit_write(
-            "INSERT OR IGNORE INTO node_entities (node_id, entity_id) VALUES (?, ?)",
-            (node_id, entity_id),
-            wait=True,
-        )
-        if future:
-            await future
-
-    async def update_entity(self, entity_id: str, fields: dict[str, Any]) -> None:
-        """Partial update of entity fields. Awaitable."""
-        allowed = {"summary", "embedding", "mention_count", "last_updated", "aliases"}
-        params_list: list[Any] = []
-        set_parts: list[str] = []
-        for k, v in fields.items():
-            if k not in allowed:
-                continue
-            set_parts.append(f"{k} = ?")
-            params_list.append(
-                json.dumps(v, ensure_ascii=False)
-                if k == "aliases" and isinstance(v, list)
-                else v
-            )
-        if not set_parts:
-            return
-        set_clause = ", ".join(set_parts)
-        params = tuple(params_list) + (entity_id,)
-        future = self._submit_write(
-            f"UPDATE entities SET {set_clause} WHERE id = ?", params, wait=True
-        )
-        if future:
-            await future
-
-    async def get_consecutive_episode_pairs(
-        self, limit: int = 50
-    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """Pairs of temporally adjacent episodic nodes (cause, effect) without existing causal edge."""
-        if self._read_conn is None:
-            return []
-        cursor = await self._read_conn.execute(
-            """
-            SELECT id, type, content, event_time, session_id
-            FROM nodes
-            WHERE type = 'episodic' AND valid_until IS NULL AND session_id IS NOT NULL
-            ORDER BY session_id, event_time
-            """
-        )
-        rows = await cursor.fetchall()
-        by_session: dict[str, list[dict[str, Any]]] = {}
-        for r in rows:
-            rec = {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "session_id": r[4],
-            }
-            by_session.setdefault(r[4], []).append(rec)
-        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        for episodes in by_session.values():
-            for i in range(len(episodes) - 1):
-                pairs.append((episodes[i], episodes[i + 1]))
-                if len(pairs) >= limit:
-                    break
-            if len(pairs) >= limit:
-                break
-        if not pairs:
-            return []
-        cursor = await self._read_conn.execute(
-            """
-            SELECT source_id, target_id FROM edges
-            WHERE relation_type = 'causal' AND valid_until IS NULL
-            """
-        )
-        existing = {(r[0], r[1]) for r in await cursor.fetchall()}
-        return [
-            (prev, curr)
-            for prev, curr in pairs
-            if (prev["id"], curr["id"]) not in existing
-        ][:limit]
-
-    async def get_entities_needing_enrichment(
-        self, min_mentions: int = 3
-    ) -> list[dict[str, Any]]:
-        """Entities with sparse summary and enough mentions for enrichment."""
-        if self._read_conn is None:
-            return []
-        cursor = await self._read_conn.execute(
-            """
-            SELECT id, canonical_name, type, aliases, summary, mention_count
-            FROM entities
-            WHERE (summary IS NULL OR summary = '') AND mention_count >= ?
-            ORDER BY mention_count DESC
-            """,
-            (min_mentions,),
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "canonical_name": r[1],
-                "type": r[2],
-                "aliases": json.loads(r[3]) if r[3] else [],
-                "summary": r[4],
-                "mention_count": r[5],
-            }
-            for r in rows
-        ]
-
-    async def temporal_chain_traversal(
-        self,
-        seed_node_ids: list[str],
-        *,
-        direction: str = "forward",
-        max_depth: int = 3,
-        limit: int = 20,
-        event_after: int | None = None,
-        event_before: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Follow temporal edges from seed nodes. direction: forward (targets) or backward (sources)."""
-        if not self._read_conn or not seed_node_ids:
-            return []
-        seeds = seed_node_ids[:10]
-        placeholders = ",".join("?" * len(seeds))
-        time_filter = ""
-        time_params: list[Any] = []
-        if event_after is not None:
-            time_filter += " AND n.event_time >= ?"
-            time_params.append(event_after)
-        if event_before is not None:
-            time_filter += " AND n.event_time <= ?"
-            time_params.append(event_before)
-
-        if direction == "forward":
-            join_col, follow_col = "source_id", "target_id"
-        else:
-            join_col, follow_col = "target_id", "source_id"
-
-        sql = f"""
-            WITH RECURSIVE chain(node_id, depth) AS (
-                SELECT id, 0 FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL
-                UNION ALL
-                SELECT e.{follow_col}, c.depth + 1 FROM edges e
-                JOIN chain c ON e.{join_col} = c.node_id
-                WHERE e.relation_type = 'temporal' AND e.valid_until IS NULL
-                  AND c.depth < ?
-            )
-            SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
-            FROM nodes n
-            JOIN chain c ON n.id = c.node_id
-            WHERE n.valid_until IS NULL {time_filter}
-            ORDER BY n.event_time ASC
-            LIMIT ?
-        """
-        params: list[Any] = list(seeds) + [max_depth] + time_params + [limit]
-        cursor = await self._read_conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        ]
-
-    async def causal_chain_traversal(
-        self,
-        seed_node_id: str,
-        *,
-        max_depth: int = 3,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """BFS following causal edges: source=cause, target=effect. Traverse from effect to causes."""
-        if not self._read_conn:
-            return []
-        sql = """
-            WITH RECURSIVE causal_chain(node_id, depth) AS (
-                SELECT source_id, 1 FROM edges
-                WHERE target_id = ? AND relation_type = 'causal'
-                  AND valid_until IS NULL
-                UNION ALL
-                SELECT e.source_id, cc.depth + 1 FROM edges e
-                JOIN causal_chain cc ON e.target_id = cc.node_id
-                WHERE e.relation_type = 'causal'
-                  AND e.valid_until IS NULL
-                  AND cc.depth < ?
-            )
-            SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
-            FROM nodes n
-            JOIN causal_chain cc ON n.id = cc.node_id
-            WHERE n.valid_until IS NULL
-            ORDER BY n.event_time DESC
-            LIMIT ?
-        """
-        cursor = await self._read_conn.execute(sql, (seed_node_id, max_depth, limit))
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        ]
-
-    async def entity_nodes_for_entity(
-        self,
-        entity_id: str,
-        *,
-        node_types: list[str] | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Nodes linked to entity via node_entities."""
-        if not self._read_conn:
-            return []
-        type_filter = ""
-        params: list[Any] = [entity_id, limit]
-        if node_types:
-            placeholders = ",".join("?" * len(node_types))
-            type_filter = f" AND n.type IN ({placeholders})"
-            params = [entity_id] + list(node_types) + [limit]
-        sql = f"""
-            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
-            FROM nodes n
-            INNER JOIN node_entities ne ON n.id = ne.node_id
-            WHERE ne.entity_id = ? AND n.valid_until IS NULL {type_filter}
-            ORDER BY n.event_time DESC
-            LIMIT ?
-        """
-        cursor = await self._read_conn.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        ]
-
-    async def get_timeline(
-        self,
-        *,
-        entity_id: str | None = None,
-        event_after: int | None = None,
-        event_before: int | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Get chronological episodic events. Optional entity and time range filters."""
-        if not self._read_conn:
-            return []
-        conditions = ["n.type = 'episodic'", "n.valid_until IS NULL"]
-        params: list[Any] = []
-        if entity_id:
-            conditions.append(
-                "n.id IN (SELECT node_id FROM node_entities WHERE entity_id = ?)"
-            )
-            params.append(entity_id)
-        if event_after is not None:
-            conditions.append("n.event_time >= ?")
-            params.append(event_after)
-        if event_before is not None:
-            conditions.append("n.event_time <= ?")
-            params.append(event_before)
-        where = " AND ".join(conditions)
-        params.append(limit)
-        cursor = await self._read_conn.execute(
-            f"""
-            SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
-            FROM nodes n
-            WHERE {where}
-            ORDER BY n.event_time ASC
-            LIMIT ?
-            """,
-            params,
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        ]
-
-    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[dict[str, Any]]:
-        """Batch fetch nodes by ID. Preserves order where possible."""
-        if not self._read_conn or not node_ids:
-            return []
-        seen: set[str] = set()
-        order: list[str] = []
-        for nid in node_ids:
-            if nid not in seen:
-                seen.add(nid)
-                order.append(nid)
-        placeholders = ",".join("?" * len(order))
-        cursor = await self._read_conn.execute(
-            f"""
-            SELECT id, type, content, event_time, created_at, confidence, session_id
-            FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL
-            """,
-            tuple(order),
-        )
-        rows = await cursor.fetchall()
-        by_id = {
-            r[0]: {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "event_time": r[3],
-                "created_at": r[4],
-                "confidence": r[5],
-                "session_id": r[6],
-            }
-            for r in rows
-        }
-        return [by_id[nid] for nid in order if nid in by_id]
-
-    async def get_entities_for_nodes(self, node_ids: list[str]) -> list[dict[str, Any]]:
-        """Entities linked to these nodes via node_entities. Deduplicated by entity id."""
-        if not self._read_conn or not node_ids:
-            return []
-        placeholders = ",".join("?" * len(node_ids))
-        cursor = await self._read_conn.execute(
-            f"""
-            SELECT DISTINCT e.id, e.canonical_name, e.type, e.aliases, e.summary, e.mention_count
-            FROM entities e
-            INNER JOIN node_entities ne ON e.id = ne.entity_id
-            WHERE ne.node_id IN ({placeholders})
-            """,
-            tuple(node_ids),
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": row[0],
-                "canonical_name": row[1],
-                "type": row[2],
-                "aliases": json.loads(row[3]) if row[3] else [],
-                "summary": row[4],
-                "mention_count": row[5],
-            }
-            for row in rows
-        ]
-
-    async def get_derived_from_targets(self, node_id: str) -> list[str]:
-        """Target node IDs for derived_from edges from this node (source -> target)."""
-        if not self._read_conn:
-            return []
-        cursor = await self._read_conn.execute(
-            """
-            SELECT target_id FROM edges
-            WHERE source_id = ? AND relation_type = 'derived_from'
-              AND valid_until IS NULL
-            """,
-            (node_id,),
-        )
-        rows = await cursor.fetchall()
-        return [r[0] for r in rows]
-
     async def get_graph_stats(self) -> dict[str, Any]:
-        """Graph-level metrics: node counts by type, edge counts by relation_type, entities, orphans, avg edges/node."""
+        """Graph-level metrics for v3: episodes, facts, entities, communities, pending_queue_items."""
         if self._read_conn is None:
             return {
-                "nodes": {"episodic": 0, "semantic": 0, "procedural": 0, "opinion": 0},
-                "edges": {
-                    "temporal": 0,
-                    "causal": 0,
-                    "entity": 0,
-                    "derived_from": 0,
-                    "supersedes": 0,
-                },
+                "episodes": 0,
+                "facts": 0,
                 "entities": 0,
-                "orphan_nodes": 0,
-                "avg_edges_per_node": 0.0,
+                "communities": 0,
+                "pending_queue_items": 0,
             }
-        node_counts: dict[str, int] = {
-            "episodic": 0,
-            "semantic": 0,
-            "procedural": 0,
-            "opinion": 0,
-        }
+        episodes = 0
+        cursor = await self._read_conn.execute("SELECT COUNT(*) FROM episodes")
+        row = await cursor.fetchone()
+        if row:
+            episodes = row[0]
+        facts = 0
         cursor = await self._read_conn.execute(
-            "SELECT type, COUNT(*) FROM nodes WHERE valid_until IS NULL GROUP BY type"
+            "SELECT COUNT(*) FROM facts WHERE t_expired IS NULL"
         )
-        for row in await cursor.fetchall():
-            node_counts[row[0]] = row[1]
-        edge_counts: dict[str, int] = {
-            "temporal": 0,
-            "causal": 0,
-            "entity": 0,
-            "derived_from": 0,
-            "supersedes": 0,
-        }
-        cursor = await self._read_conn.execute(
-            "SELECT relation_type, COUNT(*) FROM edges WHERE valid_until IS NULL GROUP BY relation_type"
-        )
-        for row in await cursor.fetchall():
-            if row[0] in edge_counts:
-                edge_counts[row[0]] = row[1]
+        row = await cursor.fetchone()
+        if row:
+            facts = row[0]
+        entities = 0
         cursor = await self._read_conn.execute("SELECT COUNT(*) FROM entities")
-        entity_count = (await cursor.fetchone())[0]
+        row = await cursor.fetchone()
+        if row:
+            entities = row[0]
+        communities = 0
+        cursor = await self._read_conn.execute("SELECT COUNT(*) FROM communities")
+        row = await cursor.fetchone()
+        if row:
+            communities = row[0]
+        pending_queue = 0
         cursor = await self._read_conn.execute(
-            """
-            SELECT COUNT(*) FROM nodes n
-            WHERE n.valid_until IS NULL
-              AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.source_id = n.id AND e.valid_until IS NULL)
-              AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.target_id = n.id AND e.valid_until IS NULL)
-            """
+            "SELECT COUNT(*) FROM pipeline_queue WHERE status IN ('pending', 'failed')"
         )
-        orphan_count = (await cursor.fetchone())[0]
-        total_nodes = sum(node_counts.values())
-        total_edges = sum(edge_counts.values())
-        avg_edges = total_edges / total_nodes if total_nodes > 0 else 0.0
+        row = await cursor.fetchone()
+        if row:
+            pending_queue = row[0]
         return {
-            "nodes": node_counts,
-            "edges": edge_counts,
-            "entities": entity_count,
-            "orphan_nodes": orphan_count,
-            "avg_edges_per_node": round(avg_edges, 1),
+            "episodes": episodes,
+            "facts": facts,
+            "entities": entities,
+            "communities": communities,
+            "pending_queue_items": pending_queue,
         }
 
     def get_storage_size_mb(self) -> float:
@@ -1261,81 +1537,3 @@ class MemoryStorage:
         if not self._db_path or not self._db_path.exists():
             return 0.0
         return round(os.path.getsize(self._db_path) / (1024 * 1024), 1)
-
-    async def get_provenance_chain(self, node_id: str) -> dict[str, Any]:
-        """Provenance chain: node, source episodes (derived_from), supersedes/superseded_by, linked entities."""
-        node = await self.get_node(node_id)
-        if not node:
-            return {
-                "node": None,
-                "source_episodes": [],
-                "supersedes": [],
-                "superseded_by": [],
-                "entities": [],
-            }
-        source_ids = await self.get_derived_from_targets(node_id)
-        source_episodes = await self.get_nodes_by_ids(source_ids) if source_ids else []
-        supersedes_ids = await self._get_supersedes_targets(node_id)
-        superseded_by_ids = await self._get_supersedes_sources(node_id)
-        supersedes = (
-            await self.get_nodes_by_ids(supersedes_ids) if supersedes_ids else []
-        )
-        superseded_by = (
-            await self.get_nodes_by_ids(superseded_by_ids) if superseded_by_ids else []
-        )
-        entities = await self.get_entities_for_nodes([node_id])
-        return {
-            "node": node,
-            "source_episodes": source_episodes,
-            "supersedes": supersedes,
-            "superseded_by": superseded_by,
-            "entities": entities,
-        }
-
-    async def _get_supersedes_targets(self, node_id: str) -> list[str]:
-        """Node IDs that this node supersedes (source_id=node_id, relation_type=supersedes)."""
-        if not self._read_conn:
-            return []
-        cursor = await self._read_conn.execute(
-            "SELECT target_id FROM edges WHERE source_id = ? AND relation_type = 'supersedes' AND valid_until IS NULL",
-            (node_id,),
-        )
-        return [r[0] for r in await cursor.fetchall()]
-
-    async def _get_supersedes_sources(self, node_id: str) -> list[str]:
-        """Node IDs that supersede this node (target_id=node_id, relation_type=supersedes)."""
-        if not self._read_conn:
-            return []
-        cursor = await self._read_conn.execute(
-            "SELECT source_id FROM edges WHERE target_id = ? AND relation_type = 'supersedes' AND valid_until IS NULL",
-            (node_id,),
-        )
-        return [r[0] for r in await cursor.fetchall()]
-
-    async def get_weak_nodes(
-        self, threshold: float = 0.3, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        """Nodes with low confidence (non-episodic), ordered by confidence ASC."""
-        if self._read_conn is None:
-            return []
-        cursor = await self._read_conn.execute(
-            """
-            SELECT id, type, content, confidence, last_accessed
-            FROM nodes
-            WHERE valid_until IS NULL AND type != 'episodic' AND confidence < ?
-            ORDER BY confidence ASC
-            LIMIT ?
-            """,
-            (threshold, limit),
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "id": r[0],
-                "type": r[1],
-                "content": r[2],
-                "confidence": r[3],
-                "last_accessed": r[4],
-            }
-            for r in rows
-        ]
