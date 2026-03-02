@@ -1,20 +1,19 @@
-"""Manually trigger the Memory v2 nightly maintenance pipeline.
+"""Manually trigger the Memory v3 nightly maintenance pipeline.
 
 Bootstraps the full extension stack (including embedding + model_router),
 then calls MemoryExtension.execute_task("run_nightly_maintenance").
 
-Pipeline steps:
-  1. Consolidate pending sessions (LLM write-path agent)
-  2. Apply Ebbinghaus decay + prune low-confidence nodes
-  3. Enrich sparse entities (LLM summaries)
-  4. Infer causal edges between consecutive episodes (LLM)
+Pipeline steps (Memory v3, ADR 016):
+  1. Consolidate pending sessions via AtomicWritePipeline
+  2. Retry failed pipeline queue items
+  3. Apply Ebbinghaus decay on facts + expire low-confidence facts
+  4. Enrich sparse entities (LLM summaries)
 
 Usage:
-    cd yodoca
-    python scripts/run_memory_maintenance.py [--dry-run]
+    uv run python scripts/run_memory_maintenance.py [--dry-run]
 
 Options:
-    --dry-run   Show stats only; skip consolidation, decay, and LLM calls.
+    --dry-run   Show stats only; skip maintenance.
 """
 
 import asyncio
@@ -40,12 +39,12 @@ async def print_stats(storage: object) -> None:
     size_mb = storage.get_storage_size_mb()
     unconsolidated = await storage.get_unconsolidated_sessions()
 
-    print("\n=== Memory Graph Stats ===")
-    print(f"  Nodes: {stats.get('nodes', {})}")
-    print(f"  Edges: {stats.get('edges', {})}")
-    print(f"  Entities: {stats.get('entities', 0)}")
-    print(f"  Orphan nodes: {stats.get('orphan_nodes', 0)}")
-    print(f"  Avg edges/node: {stats.get('avg_edges_per_node', 0):.2f}")
+    print("\n=== Memory v3 Graph Stats ===")
+    print(f"  Episodes:             {stats.get('episodes', 0)}")
+    print(f"  Entities:             {stats.get('entities', 0)}")
+    print(f"  Facts (active):       {stats.get('facts', 0)}")
+    print(f"  Communities:          {stats.get('communities', 0)}")
+    print(f"  Pending queue items:  {stats.get('pending_queue_items', 0)}")
     print(f"  Unconsolidated sessions: {len(unconsolidated)} {unconsolidated}")
     print(f"  Storage size: {size_mb:.2f} MB\n")
 

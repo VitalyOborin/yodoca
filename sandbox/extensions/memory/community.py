@@ -9,8 +9,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agents import Agent, Runner
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+class CommunitySummaryResult(BaseModel):
+    """Structured output for community summary generation."""
+
+    name: str = ""
+    summary: str = ""
 
 
 class CommunityManager:
@@ -92,20 +100,22 @@ class CommunityManager:
         try:
             agent = Agent(
                 name="MemoryCommunityAgent",
-                instructions="Generate a 2-3 sentence thematic summary for this cluster. Return JSON with 'name' and 'summary'.",
+                instructions="Generate a 2-3 sentence thematic summary for this cluster.",
                 model=self._model,
+                output_type=CommunitySummaryResult,
             )
             result = await Runner.run(agent, prompt, max_turns=1)
             out = result.final_output
-            if isinstance(out, str) and out.strip():
-                if out.strip().startswith("{"):
-                    data = json.loads(out)
-                else:
-                    data = {"name": entity_names[0] if entity_names else "Community", "summary": out[:500]}
+            if isinstance(out, CommunitySummaryResult):
+                name = out.name or (entity_names[0] if entity_names else "Community")
+                summary = out.summary or ""
+            elif isinstance(out, str) and out.strip().startswith("{"):
+                data = json.loads(out)
+                name = data.get("name", entity_names[0] if entity_names else "Community")
+                summary = data.get("summary", "")
             else:
-                data = {"name": entity_names[0] if entity_names else "Community", "summary": "Cluster of related entities."}
-            name = data.get("name", entity_names[0] if entity_names else "Community")
-            summary = data.get("summary", "")
+                name = entity_names[0] if entity_names else "Community"
+                summary = (out[:500] if isinstance(out, str) and out.strip() else "") or "Cluster of related entities."
             await self._storage.update_community(
                 community_id, {"name": name, "summary": summary}
             )

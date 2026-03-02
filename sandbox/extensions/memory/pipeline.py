@@ -233,7 +233,7 @@ class AtomicWritePipeline:
         try:
             agent = Agent(
                 name="MemoryExtractAgent",
-                instructions="Extract the subject, predicate, object and return as JSON.",
+                instructions="Extract the subject, predicate, and object from the atomic fact.",
                 model=self._model,
                 output_type=ExtractionResult,
             )

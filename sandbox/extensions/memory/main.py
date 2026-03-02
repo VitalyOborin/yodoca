@@ -9,7 +9,15 @@ import uuid
 from pathlib import Path
 
 from agents import Agent, Runner
+from pydantic import BaseModel
+
 from core.extensions.contract import TurnContext
+
+
+class EntitySummaryResult(BaseModel):
+    """Structured output for entity enrichment."""
+
+    summary: str = ""
 from core.events.topics import SystemTopics
 
 _ext_dir = Path(__file__).resolve().parent
@@ -307,16 +315,19 @@ class MemoryExtension:
             "Known facts:\n"
             + "\n".join(f"- {f}" for f in fact_lines[:15] if f.strip())
             + "\n\n"
-            "Generate a 1-2 sentence summary of this entity. Return JSON with key 'summary' only."
+            "Generate a 1-2 sentence summary of this entity."
         )
         try:
             agent = Agent(
                 name="MemoryEntityEnrichmentAgent",
-                instructions="Generate a brief entity summary. Return JSON: {\"summary\": \"...\"}",
+                instructions="Generate a brief entity summary.",
                 model=self._pipeline._model,
+                output_type=EntitySummaryResult,
             )
             result = await Runner.run(agent, prompt, max_turns=1)
             out = result.final_output
+            if isinstance(out, EntitySummaryResult):
+                return out.summary.strip() or None
             if isinstance(out, str) and out.strip():
                 if out.strip().startswith("{"):
                     data = json.loads(out)
