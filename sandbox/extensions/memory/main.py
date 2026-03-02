@@ -71,23 +71,19 @@ class MemoryExtension:
         # Long-term memory (70%)
         community_summaries: list[dict] = []
         if self._retriever and prompt:
-            results = await self._retriever.search(
+            search_result = await self._retriever.search(
                 prompt,
                 query_embedding=None,
                 limit=15,
                 token_budget=long_term_budget,
+                return_embedding=True,
             )
-            if self._embed_fn:
+            results, query_embedding = search_result
+            if query_embedding:
                 try:
-                    emb = self._embed_fn(prompt)
-                    if asyncio.iscoroutine(emb):
-                        emb = await emb
-                    if emb:
-                        emb_list = emb if isinstance(emb, list) else getattr(emb, "embedding", None)
-                        if emb_list:
-                            community_summaries = await self._retriever._search_communities(
-                                emb_list, limit=3
-                            )
+                    community_summaries = await self._retriever.search_communities(
+                        query_embedding, limit=3
+                    )
                 except Exception:
                     pass
             if results:

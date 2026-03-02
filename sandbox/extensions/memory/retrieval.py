@@ -201,7 +201,7 @@ def classify_query_complexity(query: str) -> str:
                 "сравни",
             )
         ):
-            conjunctions = len(re.findall(r"\b(and|or|but)\b", query.lower()))
+            conjunctions = len(re.findall(r"\b(and|or|but|и|или|но)\b", query.lower()))
             if conjunctions < 2:
                 return "simple"
     return "complex"
@@ -377,8 +377,10 @@ class HierarchicalRetriever:
         entity_name: str | None = None,
         event_after: int | None = None,
         event_before: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Intent-aware hierarchical search. Returns ranked fact dicts."""
+        return_embedding: bool = False,
+    ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], list[float] | None]:
+        """Intent-aware hierarchical search. Returns ranked fact dicts.
+        If return_embedding=True, returns (results, embedding) to avoid re-embedding for community search."""
         complexity = classify_query_complexity(query)
         params = get_adaptive_params(complexity)
         limit = min(limit, params["limit"])
@@ -421,10 +423,10 @@ class HierarchicalRetriever:
             depth=graph_depth,
         )
 
-        # RRF fusion: facts + BFS
+        # RRF fusion: facts + BFS (bfs_facts only as graph_results, not vec_results)
         merged = self._rrf_merge(
             facts,
-            bfs_facts,
+            [],
             limit,
             graph_results=bfs_facts if bfs_facts else None,
         )
@@ -448,7 +450,18 @@ class HierarchicalRetriever:
             fact_ids = [f["id"] for f in result if f.get("id")]
             if fact_ids:
                 self._storage.record_fact_access(fact_ids)
+        if return_embedding:
+            return (result, embedding)
         return result
+
+    async def search_communities(
+        self,
+        embedding: list[float],
+        *,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Vector search on communities. Public wrapper for _search_communities."""
+        return await self._search_communities(embedding, limit=limit)
 
     async def assemble_context(
         self,

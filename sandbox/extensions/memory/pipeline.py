@@ -163,6 +163,17 @@ class AtomicWritePipeline:
             output_type=DecompositionResult,
         )
 
+        # Extract agent
+        extract_instructions = self._render_prompt(
+            "extract.jinja2",
+            {"atomic_fact": "", "preferred_predicates": self._preferred_predicates},
+        )
+        self._extract_agent = Agent(
+            name="MemoryExtractAgent",
+            instructions=extract_instructions,
+            model=self._model,
+            output_type=ExtractionResult,
+        )
 
     def _render_prompt(self, template_name: str, vars: dict[str, Any]) -> str:
         """Render Jinja2 prompt from prompts/."""
@@ -231,13 +242,7 @@ class AtomicWritePipeline:
             },
         )
         try:
-            agent = Agent(
-                name="MemoryExtractAgent",
-                instructions="Extract the subject, predicate, and object from the atomic fact.",
-                model=self._model,
-                output_type=ExtractionResult,
-            )
-            result = await Runner.run(agent, prompt, max_turns=1)
+            result = await Runner.run(self._extract_agent, prompt, max_turns=1)
             out = result.final_output
             if isinstance(out, ExtractionResult):
                 return out
@@ -314,22 +319,30 @@ class AtomicWritePipeline:
             existing = await self._storage.get_facts_for_entity_pair(subject_id, object_id)
             fact_text = (ext.fact_text or "").strip() or f"{sub_name} {ext.predicate} {obj_name}"
 
-            skip_duplicate = False
+            fact_emb: list[float] | None = None
             if embed_fn:
                 try:
-                    fact_emb = await embed_fn(fact_text)
-                    if fact_emb:
-                        candidates = await self._storage.vec_search_facts(fact_emb, top_k=10)
-                        for c in candidates:
-                            if c["fact_id"] in {f["id"] for f in existing}:
-                                dist = c.get("distance", float("inf"))
-                                sim = max(0.0, 1.0 - (dist * dist) / 2.0)
-                                if sim >= self._fact_dedup_threshold:
-                                    skip_duplicate = True
-                                    break
+                    raw = embed_fn(fact_text)
+                    if asyncio.iscoroutine(raw):
+                        raw = await raw
+                    fact_emb = raw if isinstance(raw, list) else None
                 except Exception:
                     pass
-            else:
+
+            skip_duplicate = False
+            if fact_emb:
+                try:
+                    candidates = await self._storage.vec_search_facts(fact_emb, top_k=10)
+                    for c in candidates:
+                        if c["fact_id"] in {f["id"] for f in existing}:
+                            dist = c.get("distance", float("inf"))
+                            sim = max(0.0, 1.0 - (dist * dist) / 2.0)
+                            if sim >= self._fact_dedup_threshold:
+                                skip_duplicate = True
+                                break
+                except Exception:
+                    pass
+            elif not embed_fn:
                 for f in existing:
                     if (f.get("fact_text") or "").strip() == fact_text:
                         skip_duplicate = True
@@ -385,11 +398,9 @@ class AtomicWritePipeline:
                 if cf["id"] != fact_id and cf["object_id"] != object_id:
                     await self._storage.expire_fact(cf["id"], invalidated_by=fact_id)
 
-            if embed_fn:
+            if fact_emb:
                 try:
-                    fact_emb = await embed_fn(fact_text)
-                    if fact_emb:
-                        await self._storage.save_fact_embedding(fact_id, fact_emb)
+                    await self._storage.save_fact_embedding(fact_id, fact_emb)
                 except Exception:
                     pass
 
@@ -436,17 +447,25 @@ class AtomicWritePipeline:
         fact_text = (ext.fact_text or "").strip() or f"{sub_name} {ext.predicate} {obj_name}"
         existing = await self._storage.get_facts_for_entity_pair(subject_id, object_id)
 
+        fact_emb: list[float] | None = None
         if self._embed_fn:
             try:
-                fact_emb = await self._embed_fn(fact_text)
-                if fact_emb:
-                    candidates = await self._storage.vec_search_facts(fact_emb, top_k=10)
-                    for c in candidates:
-                        if c["fact_id"] in {f["id"] for f in existing}:
-                            dist = c.get("distance", float("inf"))
-                            sim = max(0.0, 1.0 - (dist * dist) / 2.0)
-                            if sim >= self._fact_dedup_threshold:
-                                return 0
+                raw = self._embed_fn(fact_text)
+                if asyncio.iscoroutine(raw):
+                    raw = await raw
+                fact_emb = raw if isinstance(raw, list) else None
+            except Exception:
+                pass
+
+        if fact_emb:
+            try:
+                candidates = await self._storage.vec_search_facts(fact_emb, top_k=10)
+                for c in candidates:
+                    if c["fact_id"] in {f["id"] for f in existing}:
+                        dist = c.get("distance", float("inf"))
+                        sim = max(0.0, 1.0 - (dist * dist) / 2.0)
+                        if sim >= self._fact_dedup_threshold:
+                            return 0
             except Exception:
                 pass
         else:
@@ -476,11 +495,9 @@ class AtomicWritePipeline:
             if cf["id"] != fact_id and cf["object_id"] != object_id:
                 await self._storage.expire_fact(cf["id"], invalidated_by=fact_id)
 
-        if self._embed_fn:
+        if fact_emb:
             try:
-                fact_emb = await self._embed_fn(fact_text)
-                if fact_emb:
-                    await self._storage.save_fact_embedding(fact_id, fact_emb)
+                await self._storage.save_fact_embedding(fact_id, fact_emb)
             except Exception:
                 pass
 

@@ -1123,19 +1123,30 @@ class MemoryStorage:
         if not row or not row[0]:
             return 0
         cutoff = row[0] - (keep_days * 24 * 60 * 60 * 1000)
-        if cutoff <= 0:
-            return 0
-        # Delete older entries, but keep latest per fact: delete all where accessed_at < cutoff
-        # and the fact has a newer entry. Simpler: just delete rows with accessed_at < cutoff.
-        future = self._submit_write(
-            "DELETE FROM fact_access_log WHERE accessed_at < ?",
-            (cutoff,),
+        total_deleted = 0
+        if cutoff > 0:
+            future = self._submit_write(
+                "DELETE FROM fact_access_log WHERE accessed_at < ?",
+                (cutoff,),
+                wait=True,
+                return_rowcount=True,
+            )
+            if future:
+                total_deleted = await future
+        # Dedup: keep only most recent access per fact_id (handles 1000 accesses/week → 1 row)
+        future2 = self._submit_write(
+            """
+            DELETE FROM fact_access_log WHERE rowid NOT IN (
+                SELECT MAX(rowid) FROM fact_access_log GROUP BY fact_id
+            )
+            """,
+            (),
             wait=True,
             return_rowcount=True,
         )
-        if future:
-            return await future
-        return 0
+        if future2:
+            total_deleted += await future2
+        return total_deleted
 
     # --- v3 Read-path (Phase 3) ---
 
