@@ -456,7 +456,7 @@ class SchedulerExtension:
             else:
                 fire_at = time.time() + delay_seconds  # type: ignore[operator]
 
-            row_id = await store.insert_one_shot(topic, json.dumps(payload), fire_at)
+            row_id = await store.insert_one_shot(topic, json.dumps(payload, ensure_ascii=False), fire_at)
             return f"Scheduled one-shot #{row_id}: topic={topic}, fires in {int(fire_at - time.time())}s."
 
         @function_tool(name_override="schedule_recurring", strict_mode=False)
@@ -521,7 +521,7 @@ class SchedulerExtension:
 
             row_id = await store.insert_recurring(
                 topic,
-                json.dumps(payload),
+                json.dumps(payload, ensure_ascii=False),
                 cron.strip() if cron else None,
                 every_seconds if every_seconds else None,
                 until_at,
