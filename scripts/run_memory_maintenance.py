@@ -30,9 +30,14 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 from dotenv import load_dotenv
 
-from core import secrets
-
 load_dotenv(_PROJECT_ROOT / ".env")
+
+# Disable OpenAI Agents SDK tracing (avoids "OPENAI_API_KEY is not set, skipping trace export")
+from agents import set_tracing_disabled
+
+set_tracing_disabled(True)
+
+from core import secrets
 
 
 async def print_stats(storage: object) -> None:
