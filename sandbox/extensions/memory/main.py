@@ -61,6 +61,7 @@ class MemoryExtension:
         self._last_consolidation_at: str | None = None
         self._last_decay_at: str | None = None
         self._consolidation_pending: set[str] = set()
+        self._last_episode_id: str | None = None
 
     @property
     def context_priority(self) -> int:
@@ -123,6 +124,7 @@ class MemoryExtension:
             token_budget=self._token_budget,
             get_maintenance_info=get_maintenance_info,
             dedup_threshold=self._dedup_threshold,
+            get_last_episode_id=lambda: self._last_episode_id,
         )
 
     async def initialize(self, context: object) -> None:
@@ -339,6 +341,7 @@ class MemoryExtension:
                     "created_at": now,
                 }
             )
+        self._last_episode_id = node_id
         logger.debug(
             "Episode saved: node=%s session=%s len=%d",
             node_id[:8],
@@ -402,6 +405,7 @@ class MemoryExtension:
                     "created_at": now,
                 }
             )
+        self._last_episode_id = node_id
         logger.debug(
             "Agent episode saved: node=%s agent=%s session=%s len=%d",
             node_id[:8],

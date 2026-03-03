@@ -1,15 +1,17 @@
 """Orchestrator tools for Memory v2. Phase 2: search_memory, remember_fact, correct_fact, confirm_fact."""
 
 import logging
+import re
 import time
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from agents import function_tool
 from pydantic import BaseModel, Field
+from retrieval import _resolve_entity, parse_time_expression
 
 from core.utils.formatting import format_event_time as _format_event_time
-from retrieval import parse_time_expression, _resolve_entity
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ def build_tools(
     token_budget: int = 2000,
     get_maintenance_info: Callable[[], dict] | None = None,
     dedup_threshold: float = 0.92,
+    get_last_episode_id: Callable[[], str | None] | None = None,
 ) -> list[Any]:
     """Build Orchestrator tools. Phase 2: search, remember, correct, confirm."""
 
@@ -226,6 +229,18 @@ def build_tools(
                         await storage.update_node_fields(
                             existing_id, {"last_accessed": now}
                         )
+                        if get_last_episode_id:
+                            episode_id = get_last_episode_id()
+                            if episode_id:
+                                await storage.insert_edge_awaitable(
+                                    {
+                                        "source_id": existing_id,
+                                        "target_id": episode_id,
+                                        "relation_type": "derived_from",
+                                        "valid_from": now,
+                                        "created_at": now,
+                                    }
+                                )
                         logger.info(
                             "remember_fact: already_exists node=%s sim=%.3f",
                             existing_id[:8],
@@ -248,10 +263,32 @@ def build_tools(
             "confidence": safe_confidence,
         }
         await storage.insert_node_awaitable(node)
+        if get_last_episode_id:
+            episode_id = get_last_episode_id()
+            if episode_id:
+                await storage.insert_edge_awaitable(
+                    {
+                        "source_id": node_id,
+                        "target_id": episode_id,
+                        "relation_type": "derived_from",
+                        "valid_from": now,
+                        "created_at": now,
+                    }
+                )
         if embed_fn:
             embedding = await embed_fn(fact_text)
             if embedding:
                 await storage.save_embedding(node_id, embedding)
+        mentions = list(
+            set(
+                re.findall(r"\b[A-ZА-Я][a-zа-я]{2,}\b", fact_text)
+                + re.findall(r"\b[A-Z][a-z]{2,}\b", fact_text)
+            )
+        )
+        for name in set(mentions):
+            entity = await _resolve_entity(storage, name)
+            if entity:
+                await storage.link_node_entity(node_id, entity["id"])
         logger.info("remember_fact: node=%s len=%d", node_id[:8], len(fact_text))
         return RememberResult(node_id=node_id, status="saved")
 
