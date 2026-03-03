@@ -1047,6 +1047,19 @@ class MemoryStorage:
         if future:
             await future
 
+    async def mark_queue_items_done(self, item_ids: list[str]) -> None:
+        """Batch set status='done' for multiple queue items."""
+        if not item_ids:
+            return
+        params_list = [(qid,) for qid in item_ids]
+        future = self._submit_batch_write(
+            "UPDATE pipeline_queue SET status = 'done' WHERE id = ?",
+            params_list,
+            wait=True,
+        )
+        if future:
+            await future
+
     # --- v3 Episode-entity link ---
 
     async def link_episode_entity(self, episode_id: str, entity_id: str) -> None:

@@ -30,12 +30,6 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 # --- Pydantic models for LLM structured output ---
 
 
-class DecompositionResult(BaseModel):
-    """Result of atomic decomposition. Module 1."""
-
-    facts: list[str] = []
-
-
 class ExtractedEntity(BaseModel):
     """Subject or object in extracted triple."""
 
@@ -52,6 +46,12 @@ class ExtractionResult(BaseModel):
     fact_text: str
     t_valid: int | None = None
     t_invalid: int | None = None
+
+
+class BatchExtractionResult(BaseModel):
+    """Combined decompose+extract in a single LLM call."""
+
+    triples: list[ExtractionResult] = []
 
 
 @dataclass
@@ -154,26 +154,16 @@ class AtomicWritePipeline:
             threshold=self._entity_resolution_threshold,
         )
 
-        # Decompose agent
-        decompose_instructions = self._render_prompt("decompose.jinja2", {})
-        self._decompose_agent = Agent(
-            name="MemoryDecomposeAgent",
-            instructions=decompose_instructions,
-            model=self._model,
-            output_type=DecompositionResult,
-            model_settings=ModelSettings(parallel_tool_calls=True),
+        # Batch agent: single LLM call per episode (decompose + extract combined)
+        batch_instructions = self._render_prompt(
+            "extract_batch_instructions.jinja2",
+            {"preferred_predicates": self._preferred_predicates},
         )
-
-        # Extract agent
-        extract_instructions = self._render_prompt(
-            "extract.jinja2",
-            {"atomic_fact": "", "preferred_predicates": self._preferred_predicates},
-        )
-        self._extract_agent = Agent(
-            name="MemoryExtractAgent",
-            instructions=extract_instructions,
+        self._batch_agent = Agent(
+            name="MemoryBatchExtractAgent",
+            instructions=batch_instructions,
             model=self._model,
-            output_type=ExtractionResult,
+            output_type=BatchExtractionResult,
             model_settings=ModelSettings(parallel_tool_calls=True),
         )
 
@@ -210,58 +200,42 @@ class AtomicWritePipeline:
                 logger.debug("Embed preferred predicate %r failed: %s", pp, e)
         self._preferred_predicate_embeddings = result
 
-    async def _decompose_to_atomic_facts(self, episode: dict[str, Any]) -> list[str]:
-        """Module 1: LLM decomposes episode into atomic facts. Returns list of fact strings."""
-        prompt = self._render_prompt(
-            "decompose.jinja2",
-            {
-                "actor": episode.get("actor", "user"),
-                "content": episode.get("content", ""),
-            },
-        )
-        try:
-            result = await Runner.run(self._decompose_agent, prompt, max_turns=1)
-            out = result.final_output
-            if isinstance(out, DecompositionResult):
-                return out.facts or []
-            if isinstance(out, str):
-                data = json.loads(out) if out.strip().startswith("{") else {"facts": []}
-                return data.get("facts", [])
-            return []
-        except Exception as e:
-            logger.warning("Decompose failed for episode %s: %s", episode.get("id", ""), e)
-            return []
+    _MAX_EPISODE_CHARS = 2000
 
-    async def _process_atomic_fact(
-        self, atomic_text: str, episode: dict[str, Any]
-    ) -> ExtractionResult | None:
-        """Modules 2+3: LLM extracts structured triple from one atomic fact."""
-        prompt = self._render_prompt(
-            "extract.jinja2",
-            {
-                "atomic_fact": atomic_text,
-                "preferred_predicates": self._preferred_predicates,
-            },
+    async def _extract_episode_triples(
+        self, episode: dict[str, Any]
+    ) -> list[ExtractionResult]:
+        """Single LLM call: decompose + extract all triples from episode."""
+        content = episode.get("content", "")
+        if len(content) > self._MAX_EPISODE_CHARS:
+            logger.info(
+                "Episode %s truncated: %d → %d chars",
+                episode.get("id", "")[:8],
+                len(content),
+                self._MAX_EPISODE_CHARS,
+            )
+            content = content[: self._MAX_EPISODE_CHARS] + "\n[truncated]"
+
+        prompt = (
+            f"Actor: {episode.get('actor', 'user')}\n"
+            f"Content: {content}"
         )
         try:
-            result = await Runner.run(self._extract_agent, prompt, max_turns=1)
+            result = await Runner.run(self._batch_agent, prompt, max_turns=1)
             out = result.final_output
-            if isinstance(out, ExtractionResult):
-                return out
-            if isinstance(out, str):
+            if isinstance(out, BatchExtractionResult):
+                return out.triples or []
+            if isinstance(out, str) and out.strip().startswith("{"):
                 data = json.loads(out)
-                return ExtractionResult(
-                    subject=ExtractedEntity(**data.get("subject", {"name": "", "entity_type": ""})),
-                    predicate=data.get("predicate", "RELATED_TO"),
-                    object=ExtractedEntity(**data.get("object", {"name": "", "entity_type": ""})),
-                    fact_text=data.get("fact_text", atomic_text),
-                    t_valid=data.get("t_valid"),
-                    t_invalid=data.get("t_invalid"),
-                )
-            return None
+                return [ExtractionResult(**t) for t in data.get("triples", [])]
+            return []
         except Exception as e:
-            logger.warning("Extract failed for atomic fact %r: %s", atomic_text[:50], e)
-            return None
+            logger.warning(
+                "Batch extract failed for episode %s: %s",
+                episode.get("id", "")[:8],
+                e,
+            )
+            return []
 
     async def _merge_and_persist(
         self,
@@ -519,123 +493,142 @@ class AtomicWritePipeline:
         return fact_id
 
     async def process_episode(self, episode: dict[str, Any]) -> int:
-        """Process one episode through the pipeline. Returns fact count."""
+        """Process one episode: single LLM call → merge & persist. Returns fact count."""
         episode_id = episode.get("id", "")
         if not episode_id:
             return 0
 
-        # Module 1: Decompose
-        facts = await self._decompose_to_atomic_facts(episode)
-        if not facts:
+        triples = await self._extract_episode_triples(episode)
+        if not triples:
             return 0
 
-        await self._storage.enqueue_atomic_facts(episode_id, facts)
+        # Audit trail: store atomic fact texts in queue
+        atomic_texts = [t.fact_text for t in triples if t.fact_text]
+        queue_ids: list[str] = []
+        if atomic_texts:
+            queue_ids = await self._storage.enqueue_atomic_facts(episode_id, atomic_texts)
 
-        # Modules 2+3: Extract (parallel)
-        extract_tasks = [self._process_atomic_fact(f, episode) for f in facts]
-        raw_results = await asyncio.gather(*extract_tasks)
-        results = [r for r in raw_results if r is not None]
+        n = await self._merge_and_persist(triples, episode_id, self._embed_fn)
 
-        # Module 4: Merge and persist
-        return await self._merge_and_persist(results, episode_id, self._embed_fn)
+        if queue_ids:
+            await self._storage.mark_queue_items_done(queue_ids)
 
-    async def process_session(self, session_id: str) -> PipelineResult:
-        """Process all episodes for a session. Returns aggregate stats."""
-        episodes = await self._storage.get_session_episodes(session_id, limit=100)
+        return n
+
+    async def process_session(self, session_id: str, max_parallel: int = 2) -> PipelineResult:
+        """Process user episodes for a session in parallel. Returns aggregate stats."""
+        all_episodes = await self._storage.get_session_episodes(session_id, limit=100)
+        episodes = [ep for ep in all_episodes if ep.get("actor") == "user"]
+
         result = PipelineResult(session_id=session_id)
         result.episodes_processed = len(episodes)
         n_eps = len(episodes)
-        logger.info("Processing session %s: %d episode(s)", session_id, n_eps)
+        skipped = len(all_episodes) - n_eps
+        logger.info(
+            "Processing session %s: %d user episode(s), skipped %d assistant",
+            session_id,
+            n_eps,
+            skipped,
+        )
 
-        for i, ep in enumerate(episodes):
-            try:
-                n = await self.process_episode(ep)
-                result.facts_created += n
-                if (i + 1) % 5 == 0 or i + 1 == n_eps:
-                    logger.info("  Episode %d/%d: %d fact(s) so far", i + 1, n_eps, result.facts_created)
-            except Exception as e:
-                logger.exception("process_episode failed: %s", e)
-                result.errors.append(str(e))
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def process_one(ep: dict[str, Any]) -> int:
+            async with semaphore:
+                try:
+                    return await self.process_episode(ep)
+                except Exception as e:
+                    logger.exception("process_episode failed for %s: %s", ep.get("id", ""), e)
+                    result.errors.append(str(e))
+                    return 0
+
+        counts = await asyncio.gather(*[process_one(ep) for ep in episodes])
+        result.facts_created = sum(counts)
+        logger.info(
+            "Session %s done: %d fact(s) from %d episode(s)",
+            session_id,
+            result.facts_created,
+            n_eps,
+        )
 
         return result
 
-    async def retry_failed(self, max_parallel: int = 5) -> int:
-        """Re-process failed/pending queue items in parallel. Returns count retried."""
-        max_attempts = self._pipeline_max_attempts
+    async def retry_failed(self, max_parallel: int = 2) -> int:
+        """Re-process failed/pending queue items grouped by episode. Returns facts retried."""
         items = await self._storage.get_pending_queue_items(limit=50)
-        eligible = [it for it in items if it.get("attempts", 0) < max_attempts]
+        eligible = [
+            it for it in items
+            if it.get("attempts", 0) < self._pipeline_max_attempts
+        ]
         if not eligible:
             return 0
 
-        n_eligible = len(eligible)
+        by_episode: dict[str, list[dict[str, Any]]] = {}
+        for item in eligible:
+            by_episode.setdefault(item["episode_id"], []).append(item)
+
         logger.info(
-            "Retrying %d eligible queue item(s) (of %d pending)",
-            n_eligible,
-            len(items),
+            "Retrying %d queue item(s) across %d episode(s)",
+            len(eligible),
+            len(by_episode),
         )
         semaphore = asyncio.Semaphore(max_parallel)
 
-        async def process_one(item: dict[str, Any]) -> int:
+        async def retry_episode_group(
+            episode_id: str, group_items: list[dict[str, Any]]
+        ) -> int:
             async with semaphore:
-                item_id = item["id"]
-                episode_id = item["episode_id"]
-                atomic_fact = item.get("atomic_fact", "")
-
                 episode = await self._storage.get_episode_by_id(episode_id)
                 if not episode:
-                    await self._storage.update_queue_item_status(
-                        item_id, "failed", "episode not found"
-                    )
-                    return 0
-
-                try:
-                    ext = await self._process_atomic_fact(atomic_fact, episode)
-                    if ext:
-                        n = await self._merge_and_persist(
-                            [ext], episode_id, self._embed_fn
+                    for item in group_items:
+                        await self._storage.update_queue_item_status(
+                            item["id"], "failed", "episode not found"
                         )
-                        if n > 0:
-                            await self._storage.mark_queue_item_done(item_id)
-                            return 1
-                    await self._storage.mark_queue_item_done(item_id)
                     return 0
+                try:
+                    triples = await self._extract_episode_triples(episode)
+                    n = await self._merge_and_persist(
+                        triples, episode_id, self._embed_fn
+                    )
+                    await self._storage.mark_queue_items_done(
+                        [item["id"] for item in group_items]
+                    )
+                    return n
                 except Exception as e:
-                    await self._storage.update_queue_item_status(
-                        item_id, "failed", str(e)
-                    )
-                    logger.warning(
-                        "retry_failed item %s: %s", item_id[:8], e
-                    )
+                    for item in group_items:
+                        await self._storage.update_queue_item_status(
+                            item["id"], "failed", str(e)
+                        )
+                    logger.warning("retry_failed episode %s: %s", episode_id[:8], e)
                     return 0
 
         results = await asyncio.gather(
-            *[process_one(item) for item in eligible],
+            *[
+                retry_episode_group(eid, items)
+                for eid, items in by_episode.items()
+            ],
             return_exceptions=True,
         )
-        retried = sum(
-            r for r in results if not isinstance(r, Exception) and r == 1
-        )
-        return retried
+        return sum(r for r in results if isinstance(r, int))
 
     async def remember_fact_from_text(
         self, fact_text: str, confidence: float = 1.0
     ) -> tuple[str, str]:
         """Process a single user-provided fact (remember_fact tool). Returns (fact_id, status)."""
-        import time as _time
-
         fact_text = (fact_text or "").strip()
         if not fact_text:
             return ("", "error: empty fact")
 
-        synthetic_episode = {
+        synthetic_episode: dict[str, Any] = {
             "id": "",
             "content": fact_text,
-            "t_obs": int(_time.time() * 1000),
+            "actor": "user",
         }
-        ext = await self._process_atomic_fact(fact_text, synthetic_episode)
-        if not ext:
+        triples = await self._extract_episode_triples(synthetic_episode)
+        if not triples:
             return ("", "error: could not extract fact")
 
+        ext = triples[0]
         sub_name = (ext.subject.name or "").strip()
         obj_name = (ext.object.name or "").strip()
         if not sub_name or not obj_name:
