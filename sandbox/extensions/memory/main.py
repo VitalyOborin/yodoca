@@ -49,6 +49,7 @@ class MemoryExtension:
         self._last_decay_at: str | None = None
         self._consolidation_pending: set[str] = set()
         self._embed_fn: object | None = None
+        self._last_user_episode_id: str | None = None
 
     @property
     def context_priority(self) -> int:
@@ -100,6 +101,9 @@ class MemoryExtension:
             episodes = await self._storage.get_recent_session_episodes(
                 self._current_session_id, limit=10
             )
+            # Exclude current turn's user episode (already in prompt)
+            if self._last_user_episode_id:
+                episodes = [e for e in episodes if e["id"] != self._last_user_episode_id]
             if episodes:
                 lines = [
                     f"- [{ep['actor']}]: {ep['content'][:500]}"
@@ -147,6 +151,7 @@ class MemoryExtension:
             "fact_dedup_threshold": context.get_config("fact_dedup_threshold", 0.90),
             "preferred_predicates": context.get_config("preferred_predicates", []),
             "pipeline_max_attempts": context.get_config("pipeline_max_attempts", 3),
+            "community_min_members": context.get_config("community_min_members", 3),
             "community_min_shared_facts": context.get_config("community_min_shared_facts", 2),
         }
         if model:
@@ -386,6 +391,7 @@ class MemoryExtension:
             "created_at": now_ms,
         }
         episode_id = self._storage.insert_episode(episode)
+        self._last_user_episode_id = episode_id
         logger.debug(
             "Episode saved: id=%s session=%s len=%d",
             episode_id[:8],

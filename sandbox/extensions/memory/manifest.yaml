@@ -32,6 +32,7 @@ config:
   bfs_max_depth: 2
   bfs_max_facts: 50
   # Community
+  community_min_members: 3
   community_min_shared_facts: 2
   community_refresh_interval_days: 7
   # Predicate canonicalization

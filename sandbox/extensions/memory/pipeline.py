@@ -559,41 +559,62 @@ class AtomicWritePipeline:
 
         return result
 
-    async def retry_failed(self) -> int:
-        """Re-process failed/pending queue items. Returns count retried."""
+    async def retry_failed(self, max_parallel: int = 5) -> int:
+        """Re-process failed/pending queue items in parallel. Returns count retried."""
         max_attempts = self._pipeline_max_attempts
-        items = await self._storage.get_pending_queue_items(limit=100)
-        # Filter out items that exceeded max_attempts
+        items = await self._storage.get_pending_queue_items(limit=50)
         eligible = [it for it in items if it.get("attempts", 0) < max_attempts]
+        if not eligible:
+            return 0
+
         n_eligible = len(eligible)
-        logger.info("Retrying %d eligible queue item(s) (of %d pending)", n_eligible, len(items))
-        retried = 0
+        logger.info(
+            "Retrying %d eligible queue item(s) (of %d pending)",
+            n_eligible,
+            len(items),
+        )
+        semaphore = asyncio.Semaphore(max_parallel)
 
-        for idx, item in enumerate(eligible):
-            item_id = item["id"]
-            episode_id = item["episode_id"]
-            atomic_fact = item.get("atomic_fact", "")
+        async def process_one(item: dict[str, Any]) -> int:
+            async with semaphore:
+                item_id = item["id"]
+                episode_id = item["episode_id"]
+                atomic_fact = item.get("atomic_fact", "")
 
-            episode = await self._storage.get_episode_by_id(episode_id)
-            if not episode:
-                await self._storage.update_queue_item_status(
-                    item_id, "failed", "episode not found"
-                )
-                continue
+                episode = await self._storage.get_episode_by_id(episode_id)
+                if not episode:
+                    await self._storage.update_queue_item_status(
+                        item_id, "failed", "episode not found"
+                    )
+                    return 0
 
-            try:
-                logger.info("  Retrying item %d/%d: %s", idx + 1, n_eligible, item_id[:8])
-                ext = await self._process_atomic_fact(atomic_fact, episode)
-                if ext:
-                    n = await self._merge_and_persist([ext], episode_id, self._embed_fn)
-                    if n > 0:
-                        retried += 1
-                        logger.info("    -> persisted %d fact(s)", n)
-                await self._storage.mark_queue_item_done(item_id)
-            except Exception as e:
-                await self._storage.update_queue_item_status(item_id, "failed", str(e))
-                logger.warning("retry_failed item %s: %s", item_id[:8], e)
+                try:
+                    ext = await self._process_atomic_fact(atomic_fact, episode)
+                    if ext:
+                        n = await self._merge_and_persist(
+                            [ext], episode_id, self._embed_fn
+                        )
+                        if n > 0:
+                            await self._storage.mark_queue_item_done(item_id)
+                            return 1
+                    await self._storage.mark_queue_item_done(item_id)
+                    return 0
+                except Exception as e:
+                    await self._storage.update_queue_item_status(
+                        item_id, "failed", str(e)
+                    )
+                    logger.warning(
+                        "retry_failed item %s: %s", item_id[:8], e
+                    )
+                    return 0
 
+        results = await asyncio.gather(
+            *[process_one(item) for item in eligible],
+            return_exceptions=True,
+        )
+        retried = sum(
+            r for r in results if not isinstance(r, Exception) and r == 1
+        )
         return retried
 
     async def remember_fact_from_text(

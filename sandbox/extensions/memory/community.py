@@ -38,6 +38,7 @@ class CommunityManager:
         self._config = config
         self._extension_dir = extension_dir or Path(__file__).resolve().parent
         self._min_shared_facts = config.get("community_min_shared_facts", 2)
+        self._min_members = config.get("community_min_members", 3)
 
     def _render_prompt(self, template_name: str, vars: dict[str, Any]) -> str:
         """Render Jinja2 prompt from prompts/."""
@@ -59,7 +60,9 @@ class CommunityManager:
                 entity_id, min_shared_facts=self._min_shared_facts
             )
             if not neighbors:
-                await self._create_new_community(entity_id)
+                logger.debug(
+                    "Entity %s has no neighbors yet, skipping community", entity_id[:8]
+                )
                 return
             community_id = Counter(neighbors).most_common(1)[0][0]
             await self._storage.add_community_member(community_id, entity_id)
@@ -84,6 +87,13 @@ class CommunityManager:
         members = await self._storage.get_community_members(community_id)
         facts = await self._storage.get_facts_for_community(community_id, limit=5)
         if not members:
+            return
+        if len(members) < self._min_members:
+            logger.debug(
+                "Community %s has %d members, skipping LLM summary",
+                community_id[:8],
+                len(members),
+            )
             return
         entity_names = [m.get("name", "") for m in members]
         fact_lines = [
@@ -162,7 +172,10 @@ class CommunityManager:
                             )
                             await self._update_community_summary(old_community)
                         else:
-                            await self._create_new_community(entity_id)
+                            logger.debug(
+                                "Entity %s has no neighbors yet, skipping community",
+                                entity_id[:8],
+                            )
                         processed += 1
                         continue
                     new_community = Counter(neighbors).most_common(1)[0][0]

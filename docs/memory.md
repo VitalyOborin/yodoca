@@ -338,6 +338,7 @@ All configuration is in `sandbox/extensions/memory/manifest.yaml`:
 | `intent_similarity_threshold` | 0.45 | Min cosine for embedding intent classifier |
 | `bfs_max_depth` | 2 | Max BFS expansion depth |
 | `bfs_max_facts` | 50 | Max facts from BFS expansion |
+| `community_min_members` | 3 | Min members before LLM summary (avoids singleton summaries) |
 | `community_min_shared_facts` | 2 | Min shared facts for community neighbor |
 | `community_refresh_interval_days` | 7 | Community refresh schedule |
 | `preferred_predicates` | […] | Canonical predicate list for extraction |
