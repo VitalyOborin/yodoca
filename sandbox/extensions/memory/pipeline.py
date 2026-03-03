@@ -544,11 +544,15 @@ class AtomicWritePipeline:
         episodes = await self._storage.get_session_episodes(session_id, limit=100)
         result = PipelineResult(session_id=session_id)
         result.episodes_processed = len(episodes)
+        n_eps = len(episodes)
+        logger.info("Processing session %s: %d episode(s)", session_id, n_eps)
 
-        for ep in episodes:
+        for i, ep in enumerate(episodes):
             try:
                 n = await self.process_episode(ep)
                 result.facts_created += n
+                if (i + 1) % 5 == 0 or i + 1 == n_eps:
+                    logger.info("  Episode %d/%d: %d fact(s) so far", i + 1, n_eps, result.facts_created)
             except Exception as e:
                 logger.exception("process_episode failed: %s", e)
                 result.errors.append(str(e))
@@ -559,12 +563,13 @@ class AtomicWritePipeline:
         """Re-process failed/pending queue items. Returns count retried."""
         max_attempts = self._pipeline_max_attempts
         items = await self._storage.get_pending_queue_items(limit=100)
+        # Filter out items that exceeded max_attempts
+        eligible = [it for it in items if it.get("attempts", 0) < max_attempts]
+        n_eligible = len(eligible)
+        logger.info("Retrying %d eligible queue item(s) (of %d pending)", n_eligible, len(items))
         retried = 0
 
-        for item in items:
-            if item.get("attempts", 0) >= max_attempts:
-                continue
-
+        for idx, item in enumerate(eligible):
             item_id = item["id"]
             episode_id = item["episode_id"]
             atomic_fact = item.get("atomic_fact", "")
@@ -577,11 +582,13 @@ class AtomicWritePipeline:
                 continue
 
             try:
+                logger.info("  Retrying item %d/%d: %s", idx + 1, n_eligible, item_id[:8])
                 ext = await self._process_atomic_fact(atomic_fact, episode)
                 if ext:
                     n = await self._merge_and_persist([ext], episode_id, self._embed_fn)
                     if n > 0:
                         retried += 1
+                        logger.info("    -> persisted %d fact(s)", n)
                 await self._storage.mark_queue_item_done(item_id)
             except Exception as e:
                 await self._storage.update_queue_item_status(item_id, "failed", str(e))

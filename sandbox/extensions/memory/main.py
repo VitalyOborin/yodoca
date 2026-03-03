@@ -230,25 +230,34 @@ class MemoryExtension:
                 return None
             logger.info("Nightly maintenance started")
             unconsolidated = await self._storage.get_unconsolidated_sessions()
-            for sid in unconsolidated:
+            n_sessions = len(unconsolidated)
+            logger.info("Step 1/4: Consolidating %d session(s): %s", n_sessions, unconsolidated)
+            for i, sid in enumerate(unconsolidated, 1):
+                logger.info("  Consolidating session %d/%d: %s", i, n_sessions, sid)
                 await self._consolidate_session(sid)
-            n_consolidated = len(unconsolidated)
+            n_consolidated = n_sessions
 
             retried = 0
             if self._pipeline:
+                logger.info("Step 2/4: Retrying failed queue items...")
                 retried = await self._pipeline.retry_failed()
+                logger.info("  Retried %d queue item(s)", retried)
 
             facts_decayed = 0
             facts_expired = 0
             if self._decay:
+                logger.info("Step 3/4: Applying Ebbinghaus decay...")
                 facts_decayed, facts_expired = await self._decay.apply()
+                logger.info("  Decayed %d fact(s), expired %d fact(s)", facts_decayed, facts_expired)
 
             entities_enriched = 0
             if self._pipeline and getattr(self._pipeline, "_model", None):
                 entities = await self._storage.get_entities_needing_enrichment(
                     min_mentions=3
                 )
-                for ent in entities:
+                n_entities = len(entities)
+                logger.info("Step 4/4: Enriching %d entity(ies)...", n_entities)
+                for idx, ent in enumerate(entities):
                     try:
                         facts = await self._storage.get_facts_for_entity(
                             ent["id"], limit=20
@@ -268,10 +277,17 @@ class MemoryExtension:
                                 ent["id"], {"summary": summary}
                             )
                             entities_enriched += 1
+                            logger.info(
+                                "  Enriched entity %d/%d: %s",
+                                idx + 1,
+                                n_entities,
+                                ent.get("name", ent["id"])[:40],
+                            )
                     except Exception as e:
                         logger.warning(
                             "Entity enrichment failed for %s: %s", ent["id"], e
                         )
+                logger.info("  Enriched %d entity(ies) total", entities_enriched)
 
             self._last_consolidation_at = time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime()

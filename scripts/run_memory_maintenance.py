@@ -17,6 +17,7 @@ Options:
 """
 
 import asyncio
+import logging
 import sys
 import time
 from pathlib import Path
@@ -39,6 +40,20 @@ load_dotenv(_PROJECT_ROOT / ".env")
 set_tracing_disabled(True)
 
 
+def _setup_script_logging() -> None:
+    """Configure logging so maintenance progress is visible on console."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stdout,
+        force=True,
+    )
+    # Reduce HTTP client noise
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
 async def print_stats(storage: object) -> None:
     stats = await storage.get_graph_stats()
     size_mb = storage.get_storage_size_mb()
@@ -56,7 +71,9 @@ async def print_stats(storage: object) -> None:
 
 async def main() -> None:
     dry_run = "--dry-run" in sys.argv
+    _setup_script_logging()
 
+    print("Discovering extensions...")
     from core.events import EventBus
     from core.extensions import Loader, MessageRouter
     from core.llm import ModelRouter
@@ -79,7 +96,9 @@ async def main() -> None:
 
     try:
         await loader.discover()
+        print("Loading extensions...")
         await loader.load_all()
+        print("Initializing extensions...")
         await loader.initialize_all(router)
         loader.detect_and_wire_all(router)
 
