@@ -29,9 +29,14 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 from dotenv import load_dotenv
 
+from agents import set_tracing_disabled
+
 from core import secrets
 
 load_dotenv(_PROJECT_ROOT / ".env")
+
+# Match core/runner.py: disable SDK tracing (avoids "OPENAI_API_KEY is not set" when key is in keyring)
+set_tracing_disabled(True)
 
 
 async def print_stats(storage: object) -> None:

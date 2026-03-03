@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,7 @@ class CommunityManager:
                 instructions="Generate a 2-3 sentence thematic summary for this cluster.",
                 model=self._model,
                 output_type=CommunitySummaryResult,
+                model_settings=ModelSettings(parallel_tool_calls=True),
             )
             result = await Runner.run(agent, prompt, max_turns=1)
             out = result.final_output

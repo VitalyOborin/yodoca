@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -161,6 +161,7 @@ class AtomicWritePipeline:
             instructions=decompose_instructions,
             model=self._model,
             output_type=DecompositionResult,
+            model_settings=ModelSettings(parallel_tool_calls=True),
         )
 
         # Extract agent
@@ -173,6 +174,7 @@ class AtomicWritePipeline:
             instructions=extract_instructions,
             model=self._model,
             output_type=ExtractionResult,
+            model_settings=ModelSettings(parallel_tool_calls=True),
         )
 
     def _render_prompt(self, template_name: str, vars: dict[str, Any]) -> str:

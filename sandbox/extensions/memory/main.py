@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel
 
 from core.extensions.contract import TurnContext
@@ -319,6 +319,7 @@ class MemoryExtension:
                 instructions="Generate a brief entity summary.",
                 model=self._pipeline._model,
                 output_type=EntitySummaryResult,
+                model_settings=ModelSettings(parallel_tool_calls=True),
             )
             result = await Runner.run(agent, prompt, max_turns=1)
             out = result.final_output
