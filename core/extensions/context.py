@@ -12,6 +12,7 @@ from core.extensions.router import MessageRouter
 from core.secrets import get_secret_async, set_secret_async
 
 if TYPE_CHECKING:
+    from core.agents.registry import AgentRegistry
     from core.events.bus import EventBus
     from core.events.models import Event
 
@@ -34,6 +35,7 @@ class ExtensionContext:
         model_router: ModelRouterProtocol | None = None,
         agent_id: str | None = None,
         event_bus: "EventBus | None" = None,
+        agent_registry: "AgentRegistry | None" = None,
         restart_file_path: Path | None = None,
     ) -> None:
         self.extension_id = extension_id
@@ -49,11 +51,19 @@ class ExtensionContext:
         self._model_router = model_router
         self.agent_id: str | None = agent_id or extension_id
         self._event_bus = event_bus
-        self._restart_file_path = restart_file_path; self.on_user_message = self._router.handle_user_message
+        self._agent_registry = agent_registry
+        self._restart_file_path = restart_file_path
+        self.on_user_message = self._router.handle_user_message
+
     @property
     def model_router(self) -> ModelRouterProtocol | None:
         """ModelRouter for get_model(agent_id). None if not set (e.g. legacy runner)."""
         return self._model_router
+
+    @property
+    def agent_registry(self) -> "AgentRegistry | None":
+        """AgentRegistry for agent discovery and delegation. None if not set."""
+        return self._agent_registry
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         """Send notification to user via system.user.notify. Guaranteed delivery."""

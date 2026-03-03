@@ -1,7 +1,8 @@
 """ModelRouter: bridge from config to Model instances. Core only."""
 
 import logging
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
 
@@ -73,6 +74,13 @@ class ModelRouter:
         """Return provider id from default agent config, or None."""
         cfg = self._agent_configs.get("default")
         return cfg.provider if cfg else None
+
+    def get_default_agent_config(self) -> dict[str, Any] | None:
+        """Return default agent config for dynamic agents when model is omitted."""
+        cfg = self._agent_configs.get("default")
+        if not cfg:
+            return None
+        return {"provider": cfg.provider, "model": cfg.model}
 
     def register_agent_config(self, agent_id: str, config: dict[str, Any]) -> None:
         """Register agent config from extension manifest (agent_config block).

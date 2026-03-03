@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.agents.registry import AgentRecord, AgentRegistry
 from core.events import EventBus
 from core.events.topics import SystemTopics
 from core.extensions.contract import (
@@ -220,7 +221,17 @@ class TestProactiveLoop:
         ]
         loader._extensions = {"email_agent": mock_agent}
         loader._state = {"email_agent": ExtensionState.INACTIVE}
-        loader._agent_providers = {"email_agent": mock_agent}
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                id="email_agent",
+                name="Email Agent",
+                description="Triage emails",
+                integration_mode="tool",
+            ),
+            mock_agent,
+        )
+        loader._agent_registry = registry
 
         result = loader._collect_proactive_subscriptions()
         assert result == {"email.received": "email_agent"}
@@ -235,7 +246,7 @@ class TestProactiveLoop:
         ]
         loader._extensions = {"not_an_agent": MagicMock()}
         loader._state = {"not_an_agent": ExtensionState.INACTIVE}
-        loader._agent_providers = {}  # not an AgentProvider
+        loader._agent_registry = AgentRegistry()  # empty: not_an_agent not registered
 
         result = loader._collect_proactive_subscriptions()
         assert result == {}
@@ -262,7 +273,17 @@ class TestProactiveLoop:
         ]
         loader._extensions = {"email_agent": mock_agent}
         loader._state = {"email_agent": ExtensionState.INACTIVE}
-        loader._agent_providers = {"email_agent": mock_agent}
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                id="email_agent",
+                name="Email Agent",
+                description="Triage",
+                integration_mode="tool",
+            ),
+            mock_agent,
+        )
+        loader._agent_registry = registry
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
         await event_bus.recover()
@@ -285,7 +306,7 @@ class TestProactiveLoop:
         loader._manifests = []
         loader._extensions = {}
         loader._state = {}
-        loader._agent_providers = {}
+        loader._agent_registry = AgentRegistry()
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
         await event_bus.recover()

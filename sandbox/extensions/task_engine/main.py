@@ -53,7 +53,7 @@ class TaskEngineExtension:
     def __init__(self) -> None:
         self._ctx: "ExtensionContext | None" = None
         self._db: TaskEngineDb | None = None
-        self._agent_registry: dict[str, "AgentProvider"] = {}
+        self._registry: Any = None
         self._tick_sec: float = 1.0
         self._lease_ttl: float = 90.0
         self._max_retries: int = 5
@@ -70,16 +70,7 @@ class TaskEngineExtension:
         self._db = TaskEngineDb(db_path)
         await self._db.ensure_conn()
 
-        for ext_id in context.get_config("agent_extensions") or []:
-            try:
-                provider = context.get_extension(ext_id)
-                if provider and hasattr(provider, "get_agent_descriptor"):
-                    self._agent_registry[ext_id] = provider
-                    logger.info(
-                        "task_engine: registered agent '%s' (ext=%s)", ext_id, ext_id
-                    )
-            except Exception as e:
-                logger.warning("task_engine: could not load agent %s: %s", ext_id, e)
+        self._registry = context.agent_registry
 
         context.subscribe_event("task.completed", self._on_task_completed)
 
@@ -166,7 +157,7 @@ class TaskEngineExtension:
             await self._db.close()
             self._db = None
         self._ctx = None
-        self._agent_registry.clear()
+        self._registry = None
 
     def health_check(self) -> bool:
         return self._db is not None and self._ctx is not None
@@ -191,12 +182,20 @@ class TaskEngineExtension:
                 task_id="", status="error", message="Extension not initialized"
             )
 
-        if agent_id != "orchestrator" and agent_id not in self._agent_registry:
-            return SubmitTaskResult(
-                task_id="",
-                status="error",
-                message=f"Unknown agent: {agent_id}. Available: orchestrator, {', '.join(self._agent_registry.keys())}",
-            )
+        if agent_id != "orchestrator":
+            pair = self._registry.get(agent_id) if self._registry else None
+            if not pair:
+                available = (
+                    [r.id for r in self._registry.list_agents()]
+                    if self._registry
+                    else []
+                )
+                avail_str = ", ".join(["orchestrator"] + available)
+                return SubmitTaskResult(
+                    task_id="",
+                    status="error",
+                    message=f"Unknown agent: {agent_id}. Available: {avail_str}",
+                )
 
         if parent_task_id:
             depth = await self._get_subtask_depth(parent_task_id)
@@ -279,6 +278,11 @@ class TaskEngineExtension:
             return ActiveTasksResult(tasks=[], total=0)
         return await query_list_active_tasks(self._db)
 
+    def _get_agent_provider(self, agent_id: str) -> "AgentProvider | None":
+        """Resolve agent_id to AgentProvider via registry."""
+        pair = self._registry.get(agent_id) if self._registry else None
+        return pair[1] if pair else None
+
     async def _cancel_task(self, task_id: str, reason: str = "") -> CancelTaskResult:
         """Cancel a task. Works on pending, running, waiting, and human_review tasks."""
         if not self._db:
@@ -302,7 +306,7 @@ class TaskEngineExtension:
                         self._db,
                         self._ctx,
                         task,
-                        lambda a: self._agent_registry.get(a),
+                        self._get_agent_provider,
                         self._worker_id,
                         self._lease_ttl,
                         self._max_retries,
