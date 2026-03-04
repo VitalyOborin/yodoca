@@ -131,3 +131,37 @@ Use these when implementing or reviewing the corresponding areas:
 ---
 
 *This file is the single AGENTS.md at project root. Nested AGENTS.md in subprojects are not used currently. Update this file when project-wide protocol or conventions change; keep references to rules and skills in sync with `.cursor/`.*
+
+---
+
+## Cursor Cloud specific instructions
+
+### Services overview
+
+Yodoca is a single-process Python application (no Docker, no external databases). All storage is embedded SQLite under `sandbox/data/`. The only external dependency at runtime is an LLM provider API (OpenAI by default).
+
+### Running the application
+
+- **Config required:** `config/settings.yaml` must exist (copy from `config/settings.example.yaml`). The `OPENAI_API_KEY` (or other provider key) must be available via `.env` or environment variable.
+- **Entry point:** `uv run python -m supervisor` (recommended) or `uv run python -m core` (direct, skips process supervision).
+- **Onboarding:** If config is missing/incomplete, the supervisor auto-launches the interactive onboarding wizard (`uv run python -m onboarding`). This wizard uses `questionary` and **requires an interactive TTY** — it cannot be run in piped/non-interactive mode.
+- **CLI channel:** The default channel reads from stdin (`input()` via `asyncio.to_thread`). When piping input, the process exits on EOF after delivering the response.
+
+### Non-obvious caveats
+
+- **No headless keyring:** On a cloud VM, the OS keyring (SecretService/D-Bus) is typically unavailable. Secrets fall back to `.env` file. Do not rely on `keyring` working in cloud environments.
+- **Supervisor shutdown in piped mode:** When stdin is a pipe, the supervisor receives SIGPIPE/EOF and the signal handler may print a `RuntimeError: reentrant call` traceback. This is cosmetic and does not indicate a real failure.
+- **Test failures:** 4 tests in `test_memory_v2.py` and `test_router.py` have pre-existing failures unrelated to environment setup. These are known.
+- **Ruff check/format:** The codebase has pre-existing lint and formatting issues flagged by `ruff check .` and `ruff format --check .`. The `lint-imports` check passes cleanly.
+
+### Quick reference (commands from §2–3 of AGENTS.md)
+
+| Task | Command |
+|------|---------|
+| Install deps | `uv sync --extra dev` |
+| Lint | `uv run ruff check .` |
+| Format check | `uv run ruff format . --check` |
+| Import layers | `uv run lint-imports` |
+| Types | `uv run mypy` |
+| Tests | `uv run pytest` |
+| Run app | `uv run python -m supervisor` |
