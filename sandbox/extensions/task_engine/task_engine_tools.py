@@ -31,8 +31,8 @@ def build_tools(ext: Any) -> list[Any]:
         - The task should run in the background while the user continues chatting
         - The task needs a specialized agent
 
-        agent_id: 'orchestrator' (default, general-purpose) or 'builder_agent'
-        (creates new extensions). Returns task_id for tracking.
+        agent_id: 'orchestrator' (default) or any agent from list_agents.
+        Returns task_id for tracking.
         output_channel: optional target channel id for final delivery
         (e.g. 'telegram_channel', 'cli_channel').
         """

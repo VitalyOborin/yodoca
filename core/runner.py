@@ -7,16 +7,18 @@ from typing import Any
 from dotenv import load_dotenv
 
 from core import secrets
-from core.terminal import reset_terminal_for_input
-
+from core.agents.delegation_tools import make_delegation_tools
+from core.agents.lifecycle import start_lifecycle_loop
 from core.agents.orchestrator import create_orchestrator_agent
+from core.agents.registry import AgentRegistry
 from core.events import EventBus
-from core.tools.channel import make_channel_tools
-from core.tools.secure_input import make_secure_input_tool
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter, ModelRouterProtocol
 from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
+from core.terminal import reset_terminal_for_input
+from core.tools.channel import make_channel_tools
+from core.tools.secure_input import make_secure_input_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -58,13 +60,22 @@ def _create_agent(
     event_bus: EventBus,
     settings: dict,
     model_router: ModelRouterProtocol,
+    registry: AgentRegistry,
 ) -> Any:
+    from core.agents.factory import AgentFactory
+
+    def tool_resolver(tool_ids: list, agent_id: str | None = None):
+        return loader.resolve_tools(tool_ids, agent_id)
+
+    factory = AgentFactory(model_router, tool_resolver, registry)
     channel_tools = make_channel_tools(router) + [make_secure_input_tool(event_bus)]
     return create_orchestrator_agent(
         model_router=model_router,
         settings=settings,
         extension_tools=loader.get_all_tools(),
-        agent_tools=loader.get_agent_tools(),
+        delegation_tools=make_delegation_tools(
+            registry, factory, loader.get_available_tool_ids
+        ),
         capabilities_summary=loader.get_capabilities_summary(),
         channel_tools=channel_tools,
     )
@@ -98,22 +109,30 @@ async def main_async() -> None:
     settings = load_settings()
     setup_logging(_PROJECT_ROOT, settings)
     model_router = ModelRouter(settings=settings, secrets_getter=secrets.get_secret)
+    registry = AgentRegistry(on_unregister=model_router.remove_agent_config)
     loader, router, _ext_dir, data_dir, shutdown_event = _build_loader_router(settings)
     loader.set_model_router(model_router)
+    loader.set_agent_registry(registry)
     event_bus = _build_event_bus(settings)
     await event_bus.recover()
     loader.set_event_bus(event_bus)
     await _wire_extensions(loader, router, event_bus)
-    agent = _create_agent(loader, router, event_bus, settings, model_router)
+    agent = _create_agent(loader, router, event_bus, settings, model_router, registry)
     router.set_agent(agent)
     await event_bus.start()
     await loader.start_all()
+    lifecycle_task = start_lifecycle_loop(registry, interval_seconds=60.0)
     _configure_session_and_context(router, loader, agent, settings, data_dir, event_bus)
     try:
         await shutdown_event.wait()
     except asyncio.CancelledError:
         pass
     finally:
+        lifecycle_task.cancel()
+        try:
+            await lifecycle_task
+        except asyncio.CancelledError:
+            pass
         await event_bus.stop()
         await loader.shutdown()
 

@@ -4,33 +4,36 @@ import asyncio
 import importlib.util
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from core.events import EventBus
-from core.llm import ModelRouterProtocol
+
+if TYPE_CHECKING:
+    from core.agents.registry import AgentRegistry
 from core.events.models import Event
 from core.events.topics import SystemTopics
 from core.extensions.builtin_context import ActiveChannelContextProvider
+from core.extensions.context import ExtensionContext
 from core.extensions.contract import (
-    AgentDescriptor,
     AgentInvocationContext,
     AgentProvider,
     ChannelProvider,
     ContextProvider,
     Extension,
     ExtensionState,
-    ServiceProvider,
     SchedulerProvider,
+    ServiceProvider,
     ToolProvider,
     TurnContext,
 )
-from core.extensions.context import ExtensionContext
 from core.extensions.health_check import HealthCheckManager
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
 from core.extensions.router import MessageRouter
 from core.extensions.scheduler_manager import SchedulerManager
+from core.llm import ModelRouterProtocol
 from core.settings import get_setting
 
 logger = logging.getLogger(__name__)
@@ -54,7 +57,7 @@ class Loader:
         self._extensions: dict[str, Extension] = {}
         self._state: dict[str, ExtensionState] = {}
         self._tool_providers: list[ToolProvider] = []
-        self._agent_providers: dict[str, AgentProvider] = {}
+        self._agent_registry: AgentRegistry | None = None
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
         self._health_manager = HealthCheckManager(self._extensions, self._state)
         self._scheduler_manager: SchedulerManager | None = None
@@ -71,6 +74,10 @@ class Loader:
     def set_event_bus(self, event_bus: EventBus) -> None:
         """Inject EventBus for durable event flows."""
         self._event_bus = event_bus
+
+    def set_agent_registry(self, registry: "AgentRegistry") -> None:
+        """Inject AgentRegistry for agent discovery and delegation."""
+        self._agent_registry = registry
 
     async def discover(self) -> None:
         """Scan extensions_dir for manifest.yaml; load and filter enabled."""
@@ -179,21 +186,25 @@ class Loader:
             self._settings, "supervisor.restart_file", "sandbox/.restart_requested"
         )
 
-    def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
-        """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
-        if not manifest.agent:
-            return []
+    def resolve_tools(
+        self, tool_ids: list[str], agent_id: str | None = None
+    ) -> list[Any]:
+        """Resolve tool IDs to actual tools from ToolProvider extensions or core_tools.
+
+        Called by Loader for manifests and by AgentFactory for dynamic agents.
+        agent_id is used for core_tools (e.g. restart_file_path, model resolution).
+        """
         tools: list[Any] = []
-        for ext_id in manifest.agent.uses_tools:
+        for ext_id in tool_ids:
             if ext_id == "core_tools":
                 from core.tools.provider import CoreToolsProvider
 
-                agent_id = getattr(manifest, "agent_id", None) or manifest.id
+                aid = agent_id
                 restart_file_path = self._get_restart_file_path()
                 tools.extend(
                     CoreToolsProvider(
                         model_router=self._model_router,
-                        agent_id=agent_id,
+                        agent_id=aid,
                         restart_file_path=restart_file_path,
                     ).get_tools()
                 )
@@ -202,6 +213,13 @@ class Loader:
             if ext and isinstance(ext, ToolProvider):
                 tools.extend(ext.get_tools())
         return tools
+
+    def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
+        """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
+        if not manifest.agent:
+            return []
+        agent_id = getattr(manifest, "agent_id", None) or manifest.id
+        return self.resolve_tools(manifest.agent.uses_tools, agent_id)
 
     def _resolve_agent_instructions(
         self, manifest: ExtensionManifest, ext_id: str
@@ -272,6 +290,7 @@ class Loader:
             model_router=self._model_router,
             agent_id=agent_id,
             event_bus=self._event_bus,
+            agent_registry=self._agent_registry,
             restart_file_path=self._get_restart_file_path(),
         )
 
@@ -299,7 +318,7 @@ class Loader:
             ext_id = manifest.id
             if self._state.get(ext_id) == ExtensionState.ERROR:
                 continue
-            if ext_id not in self._agent_providers:
+            if not self._agent_registry or self._agent_registry.get(ext_id) is None:
                 continue
             for sub in manifest.events.subscribes:
                 if sub.handler != "invoke_agent":
@@ -438,7 +457,8 @@ class Loader:
             return
         proactive_map = self._collect_proactive_subscriptions()
         for topic, ext_id in proactive_map.items():
-            agent = self._agent_providers.get(ext_id)
+            pair = self._agent_registry.get(ext_id) if self._agent_registry else None
+            agent = pair[1] if pair else None
             if not agent:
                 logger.debug(
                     "Proactive topic %s: ext %s is not AgentProvider, skip",
@@ -501,7 +521,8 @@ class Loader:
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
-        self._agent_providers = {}
+        if self._agent_registry:
+            self._agent_registry.clear()
         self._scheduler_manager = SchedulerManager(state=self._state, router=router)
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) == ExtensionState.ERROR:
@@ -509,8 +530,21 @@ class Loader:
             manifest = next((m for m in self._manifests if m.id == ext_id), None)
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
-            if isinstance(ext, AgentProvider):
-                self._agent_providers[ext_id] = ext
+            if isinstance(ext, AgentProvider) and manifest and self._agent_registry:
+                from core.agents.registry import AgentRecord
+
+                descriptor = ext.get_agent_descriptor()
+                record = AgentRecord(
+                    id=ext_id,
+                    name=descriptor.name,
+                    description=descriptor.description,
+                    model=manifest.agent.model if manifest.agent else None,
+                    integration_mode=descriptor.integration_mode,
+                    tools=manifest.agent.uses_tools if manifest.agent else [],
+                    limits=manifest.agent.limits if manifest.agent else None,
+                    source="static",
+                )
+                self._agent_registry.register(record, ext)
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider) and manifest:
@@ -551,7 +585,7 @@ class Loader:
             if self._state.get(ext_id) != ExtensionState.ACTIVE:
                 continue
             if not hasattr(ext, "get_mcp_servers") or not callable(
-                getattr(ext, "get_mcp_servers")
+                ext.get_mcp_servers
             ):
                 continue
             try:
@@ -561,6 +595,19 @@ class Loader:
             except Exception as e:
                 logger.exception("get_mcp_servers failed for %s: %s", ext_id, e)
         return servers
+
+    def get_available_tool_ids(self) -> list[str]:
+        """Return tool IDs usable in agent uses_tools or create_agent.
+
+        Includes 'core_tools' plus all ToolProvider extension IDs.
+        """
+        ids = ["core_tools"]
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if isinstance(ext, ToolProvider):
+                ids.append(ext_id)
+        return sorted(set(ids))
 
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
@@ -572,31 +619,9 @@ class Loader:
                 logger.exception("get_tools failed: %s", e)
         return tools
 
-    def get_agent_tools(self) -> list[Any]:
-        """Wrap AgentProvider extensions (tool mode) as callable tools for the Orchestrator."""
-        tools: list[Any] = []
-        for ext_id, ext in self._agent_providers.items():
-            descriptor = ext.get_agent_descriptor()
-            if descriptor.integration_mode == "tool":
-                tools.append(self._wrap_agent_as_tool(ext_id, ext, descriptor))
-        return tools
-
-    def _wrap_agent_as_tool(
-        self, ext_id: str, ext: AgentProvider, descriptor: AgentDescriptor
-    ) -> Any:
-        from agents import function_tool
-
-        async def invoke_agent(task: str) -> str:
-            response = await ext.invoke(task)
-            if response.status == "success":
-                return response.content
-            return f"Agent error: {response.error or response.content}"
-
-        invoke_agent.__doc__ = descriptor.description or ""
-        return function_tool(name_override=ext_id)(invoke_agent)
-
     def _collect_tool_agent_parts(self) -> tuple[list[str], list[str]]:
-        """Return (tool_parts, agent_parts) for capabilities summary."""
+        """Return (tool_parts, agent_parts) for capabilities summary.
+        Agents are excluded from tool_parts; agent_parts is unused (delegation note used instead)."""
         tool_parts: list[str] = []
         agent_parts: list[str] = []
         for m in self._manifests:
@@ -607,11 +632,13 @@ class Loader:
                 continue
             if not m.description:
                 continue
-            desc = m.description.strip()
-            if m.id in self._agent_providers:
-                agent_parts.append(f"- {m.id}: {desc}")
-            else:
-                tool_parts.append(f"- {m.id}: {desc}")
+            is_agent = (
+                self._agent_registry is not None
+                and self._agent_registry.get(m.id) is not None
+            )
+            if is_agent:
+                continue
+            tool_parts.append(f"- {m.id}: {m.description.strip()}")
         return (tool_parts, agent_parts)
 
     def _collect_mcp_aliases(self) -> list[str]:
@@ -621,7 +648,7 @@ class Loader:
             if self._state.get(ext_id) != ExtensionState.ACTIVE:
                 continue
             if not hasattr(ext, "get_mcp_server_aliases") or not callable(
-                getattr(ext, "get_mcp_server_aliases")
+                ext.get_mcp_server_aliases
             ):
                 continue
             try:
@@ -638,13 +665,17 @@ class Loader:
 
     def get_capabilities_summary(self) -> str:
         """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
-        tool_parts, agent_parts = self._collect_tool_agent_parts()
+        tool_parts, _ = self._collect_tool_agent_parts()
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))
-        if agent_parts:
-            sections.append("Available agents:\n" + "\n".join(agent_parts))
+        if self._agent_registry and self._agent_registry.list_agents():
+            sections.append(
+                "Agent delegation:\n"
+                "Use list_agents to discover available specialized agents.\n"
+                "Use delegate_task to assign work to an agent."
+            )
         if mcp_aliases:
             mcp_lines = "\n".join(f"- {a}" for a in mcp_aliases)
             sections.append("MCP servers:\n" + mcp_lines)

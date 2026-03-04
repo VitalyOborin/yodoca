@@ -36,7 +36,7 @@ def create_orchestrator_agent(
     model_router: ModelRouter,
     settings: dict[str, Any],
     extension_tools: list[Any] | None = None,
-    agent_tools: list[Any] | None = None,
+    delegation_tools: list[Any] | None = None,
     capabilities_summary: str = "",
     channel_tools: list[Any] | None = None,
 ) -> Agent:
@@ -52,8 +52,8 @@ def create_orchestrator_agent(
     tools: list[Any] = []
     if extension_tools:
         tools.extend(extension_tools)
-    if agent_tools:
-        tools.extend(agent_tools)
+    if delegation_tools:
+        tools.extend(delegation_tools)
     if channel_tools:
         tools.extend(channel_tools)
     return Agent(
