@@ -4,20 +4,18 @@ import asyncio
 import importlib.util
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.events import EventBus
+from core.events.models import Event
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
-from core.events.models import Event
-from core.events.topics import SystemTopics
 from core.extensions.builtin_context import ActiveChannelContextProvider
 from core.extensions.context import ExtensionContext
 from core.extensions.contract import (
-    AgentInvocationContext,
     AgentProvider,
     ChannelProvider,
     ContextProvider,
@@ -28,6 +26,7 @@ from core.extensions.contract import (
     ToolProvider,
     TurnContext,
 )
+from core.extensions.event_wiring import EventWiringManager
 from core.extensions.health_check import HealthCheckManager
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest, load_manifest
@@ -97,6 +96,27 @@ class Loader:
             except Exception as e:
                 logger.exception("Invalid manifest %s: %s", manifest_path, e)
 
+    def _visit_manifest(
+        self,
+        m: ExtensionManifest,
+        order: list[ExtensionManifest],
+        seen: set[str],
+        visiting: set[str],
+    ) -> None:
+        """Visit manifest for topological sort. Raises on cycle."""
+        if m.id in seen:
+            return
+        if m.id in visiting:
+            raise ValueError(f"Cycle in depends_on involving {m.id}")
+        visiting.add(m.id)
+        for dep in m.depends_on:
+            dep_m = self._get_manifest(dep)
+            if dep_m:
+                self._visit_manifest(dep_m, order, seen, visiting)
+        visiting.remove(m.id)
+        seen.add(m.id)
+        order.append(m)
+
     def _resolve_dependency_order(self) -> list[ExtensionManifest]:
         """Topological sort by depends_on. Raises on cycle or missing dep."""
         ids = {m.id for m in self._manifests}
@@ -107,23 +127,8 @@ class Loader:
         order: list[ExtensionManifest] = []
         seen: set[str] = set()
         visiting: set[str] = set()
-
-        def visit(m: ExtensionManifest) -> None:
-            if m.id in seen:
-                return
-            if m.id in visiting:
-                raise ValueError(f"Cycle in depends_on involving {m.id}")
-            visiting.add(m.id)
-            for dep in m.depends_on:
-                dep_m = next((x for x in self._manifests if x.id == dep), None)
-                if dep_m:
-                    visit(dep_m)
-            visiting.remove(m.id)
-            seen.add(m.id)
-            order.append(m)
-
         for m in self._manifests:
-            visit(m)
+            self._visit_manifest(m, order, seen, visiting)
         return order
 
     async def load_all(self) -> None:
@@ -165,9 +170,23 @@ class Loader:
         cls = getattr(mod, class_name)
         return cls()
 
+    def _get_manifest(self, ext_id: str) -> ExtensionManifest | None:
+        """Return manifest for extension id, or None if not found."""
+        return next((m for m in self._manifests if m.id == ext_id), None)
+
+    def _iter_active_manifests(self) -> Iterator[tuple[str, ExtensionManifest]]:
+        """Yield (ext_id, manifest) for non-ERROR manifests, in manifest order."""
+        for manifest in self._manifests:
+            ext_id = manifest.id
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            yield ext_id, manifest
+
     def _make_get_extension(self, caller_ext_id: str) -> Callable[[str], Any]:
         """Return a get_extension callable that enforces depends_on for the caller."""
-        caller_manifest = next(m for m in self._manifests if m.id == caller_ext_id)
+        caller_manifest = self._get_manifest(caller_ext_id)
+        if caller_manifest is None:
+            raise ValueError(f"Extension '{caller_ext_id}' not found in manifests")
         allowed = set(caller_manifest.depends_on)
 
         def get_extension(ext_id: str) -> Any:
@@ -275,7 +294,9 @@ class Loader:
             self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
         )
         agent_model = manifest.agent.model if manifest.agent else ""
-        agent_id = getattr(manifest, "agent_id", None) or (ext_id if manifest.agent else None)
+        agent_id = getattr(manifest, "agent_id", None) or (
+            ext_id if manifest.agent else None
+        )
         return ExtensionContext(
             extension_id=ext_id,
             config=config,
@@ -301,7 +322,9 @@ class Loader:
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
                 continue
-            manifest = next(m for m in self._manifests if m.id == ext_id)
+            manifest = self._get_manifest(ext_id)
+            if not manifest:
+                continue
             ctx = self._build_extension_context(ext_id, manifest, router)
             try:
                 await ext.initialize(ctx)
@@ -310,173 +333,41 @@ class Loader:
                 self._state[ext_id] = ExtensionState.ERROR
 
     def _collect_proactive_subscriptions(self) -> dict[str, str]:
-        """Return {topic: ext_id} for invoke_agent subscriptions. First in manifest order wins."""
-        result: dict[str, str] = {}
-        for manifest in self._manifests:
-            if not manifest.events or not manifest.events.subscribes:
-                continue
-            ext_id = manifest.id
-            if self._state.get(ext_id) == ExtensionState.ERROR:
-                continue
-            if not self._agent_registry or self._agent_registry.get(ext_id) is None:
-                continue
-            for sub in manifest.events.subscribes:
-                if sub.handler != "invoke_agent":
-                    continue
-                if sub.topic not in result:
-                    result[sub.topic] = ext_id
-        return result
-
-    async def _on_user_notify(self, event: Event) -> None:
-        if self._router:
-            await self._router.notify_user(
-                event.payload.get("text", ""),
-                event.payload.get("channel_id"),
-            )
+        """Pass-through for test compatibility. Delegates to EventWiringManager."""
+        manager = EventWiringManager(
+            router=self._router,
+            manifests=self._manifests,
+            state=self._state,
+            extensions=self._extensions,
+            agent_registry=self._agent_registry,
+        )
+        return manager._collect_proactive_subscriptions()
 
     async def _on_agent_task(self, event: Event) -> None:
-        if self._router:
-            prompt = event.payload.get("prompt", "")
-            channel_id = event.payload.get("channel_id")
-            turn_context = TurnContext(
-                agent_id="orchestrator",
-                channel_id=channel_id,
-            )
-            response = await self._router.invoke_agent_background(
-                prompt, turn_context=turn_context
-            )
-            if response:
-                await self._router.notify_user(response, channel_id)
-
-    async def _on_agent_background(self, event: Event) -> None:
-        import time as _time
-
+        """Pass-through for test compatibility. Delegates to EventWiringManager."""
         if not self._router:
             return
-        prompt = event.payload.get("prompt", "")
-        correlation_id = event.payload.get("correlation_id") or event.correlation_id
-        started_at = _time.perf_counter()
-        logger.info(
-            "agent loop: start",
-            extra={
-                "correlation_id": correlation_id,
-                "event_id": event.id,
-                "prompt_len": len(prompt),
-            },
+        manager = EventWiringManager(
+            router=self._router,
+            manifests=self._manifests,
+            state=self._state,
+            extensions=self._extensions,
+            agent_registry=self._agent_registry,
         )
-        try:
-            await self._router.invoke_agent_background(prompt)
-            duration_ms = int((_time.perf_counter() - started_at) * 1000)
-            logger.info(
-                "agent loop: done",
-                extra={
-                    "correlation_id": correlation_id,
-                    "event_id": event.id,
-                    "duration_ms": duration_ms,
-                },
-            )
-        except Exception as e:
-            logger.exception("agent loop: failed: %s", e)
-            raise
-
-    def _wire_system_topics(self, event_bus: EventBus) -> None:
-        """Register guaranteed system topic handlers. Called before extension wiring."""
-        if not self._router:
-            return
-        event_bus.subscribe(SystemTopics.USER_NOTIFY, self._on_user_notify, "kernel.system")
-        event_bus.subscribe(SystemTopics.AGENT_TASK, self._on_agent_task, "kernel.system")
-        event_bus.subscribe(
-            SystemTopics.AGENT_BACKGROUND, self._on_agent_background, "kernel.system"
-        )
-
-    def _wire_notify_user_handlers(self, event_bus: EventBus) -> None:
-        router = self._router
-        if not router:
-            return
-        for manifest in self._manifests:
-            if not manifest.events or not manifest.events.subscribes:
-                continue
-            ext_id = manifest.id
-            if self._state.get(ext_id) == ExtensionState.ERROR:
-                continue
-            for sub in manifest.events.subscribes:
-                if sub.handler != "notify_user":
-                    continue
-                async def handler(event: Event) -> None:
-                    if self._router:
-                        await self._router.notify_user(event.payload.get("text", ""))
-                event_bus.subscribe(sub.topic, handler, ext_id)
-
-    async def _on_kernel_user_message(self, event: Event) -> None:
-        if not self._router:
-            return
-        router = self._router
-        text = event.payload.get("text", "").strip()
-        user_id = event.payload.get("user_id", "default")
-        channel_id = event.payload.get("channel_id")
-        if not text or not channel_id:
-            logger.warning(
-                "user.message missing text or channel_id: %s", event.payload
-            )
-            return
-        channel = router.get_channel(channel_id)
-        if not channel:
-            logger.warning("user.message: unknown channel_id %s", channel_id)
-            return
-        await router.handle_user_message(text, user_id, channel, channel_id)
-
-    def _make_proactive_handler(
-        self, topic: str, ext_id: str, agent: AgentProvider
-    ) -> Callable[[Event], Any]:
-        router = self._router
-        async def handler(event: Event) -> None:
-            task = (
-                event.payload.get("prompt")
-                or f"Background event '{topic}': {event.payload}"
-            )
-            context = AgentInvocationContext(correlation_id=event.correlation_id)
-            try:
-                response = await agent.invoke(task, context)
-                if response.status == "success" and response.content and router:
-                    await router.notify_user(
-                        response.content, event.payload.get("channel_id")
-                    )
-                elif response.status != "success":
-                    logger.debug(
-                        "Proactive handler for %s: agent returned %s",
-                        topic,
-                        response.status,
-                    )
-            except Exception as e:
-                logger.exception("Proactive handler for %s failed: %s", topic, e)
-        return handler
-
-    def _wire_proactive_handlers(self, event_bus: EventBus) -> None:
-        router = self._router
-        if not router:
-            return
-        proactive_map = self._collect_proactive_subscriptions()
-        for topic, ext_id in proactive_map.items():
-            pair = self._agent_registry.get(ext_id) if self._agent_registry else None
-            agent = pair[1] if pair else None
-            if not agent:
-                logger.debug(
-                    "Proactive topic %s: ext %s is not AgentProvider, skip",
-                    topic,
-                    ext_id,
-                )
-                continue
-            handler = self._make_proactive_handler(topic, ext_id, agent)
-            event_bus.subscribe(topic, handler, "kernel.proactive")
+        await manager._on_agent_task(event)
 
     def wire_event_subscriptions(self, event_bus: EventBus) -> None:
         """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
         if not self._router:
             return
-        self._wire_system_topics(event_bus)
-        self._wire_notify_user_handlers(event_bus)
-        event_bus.subscribe("user.message", self._on_kernel_user_message, "kernel")
-        self._wire_proactive_handlers(event_bus)
+        manager = EventWiringManager(
+            router=self._router,
+            manifests=self._manifests,
+            state=self._state,
+            extensions=self._extensions,
+            agent_registry=self._agent_registry,
+        )
+        manager.wire(event_bus)
 
     def _collect_context_providers(
         self, router: MessageRouter
@@ -518,6 +409,30 @@ class Loader:
 
         router.set_invoke_middleware(_middleware)
 
+    def _register_static_agent(
+        self,
+        ext_id: str,
+        ext: AgentProvider,
+        manifest: ExtensionManifest,
+    ) -> None:
+        """Register AgentProvider with agent_registry. No-op if registry unavailable."""
+        if not self._agent_registry:
+            return
+        from core.agents.registry import AgentRecord
+
+        descriptor = ext.get_agent_descriptor()
+        record = AgentRecord(
+            id=ext_id,
+            name=descriptor.name,
+            description=descriptor.description,
+            model=manifest.agent.model if manifest.agent else None,
+            integration_mode=descriptor.integration_mode,
+            tools=manifest.agent.uses_tools if manifest.agent else [],
+            limits=manifest.agent.limits if manifest.agent else None,
+            source="static",
+        )
+        self._agent_registry.register(record, ext)
+
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
@@ -527,32 +442,18 @@ class Loader:
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) == ExtensionState.ERROR:
                 continue
-            manifest = next((m for m in self._manifests if m.id == ext_id), None)
+            manifest = self._get_manifest(ext_id)
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
-            if isinstance(ext, AgentProvider) and manifest and self._agent_registry:
-                from core.agents.registry import AgentRecord
-
-                descriptor = ext.get_agent_descriptor()
-                record = AgentRecord(
-                    id=ext_id,
-                    name=descriptor.name,
-                    description=descriptor.description,
-                    model=manifest.agent.model if manifest.agent else None,
-                    integration_mode=descriptor.integration_mode,
-                    tools=manifest.agent.uses_tools if manifest.agent else [],
-                    limits=manifest.agent.limits if manifest.agent else None,
-                    source="static",
-                )
-                self._agent_registry.register(record, ext)
+            if isinstance(ext, AgentProvider) and manifest:
+                self._register_static_agent(ext_id, ext, manifest)
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider) and manifest:
                 self._scheduler_manager.register(ext_id, ext, manifest)
 
         channel_ids = {
-            eid for eid, e in self._extensions.items()
-            if isinstance(e, ChannelProvider)
+            eid for eid, e in self._extensions.items() if isinstance(e, ChannelProvider)
         }
         channel_descriptions = {
             m.id: m.name for m in self._manifests if m.id in channel_ids
@@ -584,9 +485,7 @@ class Loader:
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) != ExtensionState.ACTIVE:
                 continue
-            if not hasattr(ext, "get_mcp_servers") or not callable(
-                ext.get_mcp_servers
-            ):
+            if not hasattr(ext, "get_mcp_servers") or not callable(ext.get_mcp_servers):
                 continue
             try:
                 result = ext.get_mcp_servers()
@@ -619,11 +518,9 @@ class Loader:
                 logger.exception("get_tools failed: %s", e)
         return tools
 
-    def _collect_tool_agent_parts(self) -> tuple[list[str], list[str]]:
-        """Return (tool_parts, agent_parts) for capabilities summary.
-        Agents are excluded from tool_parts; agent_parts is unused (delegation note used instead)."""
+    def _collect_tool_agent_parts(self) -> list[str]:
+        """Return tool descriptions for capabilities summary. Agents excluded."""
         tool_parts: list[str] = []
-        agent_parts: list[str] = []
         for m in self._manifests:
             if (
                 m.id not in self._extensions
@@ -639,7 +536,7 @@ class Loader:
             if is_agent:
                 continue
             tool_parts.append(f"- {m.id}: {m.description.strip()}")
-        return (tool_parts, agent_parts)
+        return tool_parts
 
     def _collect_mcp_aliases(self) -> list[str]:
         """Collect MCP server aliases from ACTIVE extensions."""
@@ -658,14 +555,12 @@ class Loader:
                         aliases if isinstance(aliases, list) else list(aliases)
                     )
             except Exception as e:
-                logger.exception(
-                    "get_mcp_server_aliases failed for %s: %s", ext_id, e
-                )
+                logger.exception("get_mcp_server_aliases failed for %s: %s", ext_id, e)
         return mcp_aliases
 
     def get_capabilities_summary(self) -> str:
         """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
-        tool_parts, _ = self._collect_tool_agent_parts()
+        tool_parts = self._collect_tool_agent_parts()
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
         if tool_parts:
