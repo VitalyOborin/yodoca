@@ -19,15 +19,16 @@ def start_lifecycle_loop(
     async def loop() -> None:
         while True:
             try:
-                await asyncio.sleep(interval_seconds)
                 removed = registry.cleanup_expired()
                 if removed > 0:
                     logger.info(
                         "Lifecycle: removed %d expired dynamic agent(s)", removed
                     )
+                await asyncio.sleep(interval_seconds)
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("Lifecycle cleanup failed")
+                await asyncio.sleep(interval_seconds)
 
     return asyncio.create_task(loop())

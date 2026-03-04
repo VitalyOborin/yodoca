@@ -124,6 +124,7 @@ def make_delegation_tools(
         async def create_agent(
             name: str,
             instruction: str,
+            description: str = "",
             tools: list[str] | None = None,
             model: str | None = None,
             max_turns: int = 25,
@@ -132,6 +133,7 @@ def make_delegation_tools(
 
             Use when no existing agent fits. After creation, use delegate_task
             with the returned agent_id. The agent expires after 30 min.
+            description: short human-readable purpose shown in list_agents.
             tools: extension IDs from list_available_tools.
             model: optional; defaults to default model from settings.
             """
@@ -140,6 +142,7 @@ def make_delegation_tools(
                 spec = AgentSpec(
                     name=name,
                     instruction=instruction,
+                    description=description,
                     tools=tool_list,
                     model=model,
                     max_turns=max_turns,

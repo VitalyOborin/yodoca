@@ -94,6 +94,11 @@ class ModelRouter:
             return
         self._agent_configs[agent_id] = _dict_to_model_config(config, str(provider_id))
 
+    def remove_agent_config(self, agent_id: str) -> None:
+        """Remove a dynamic agent's config and cached model instance."""
+        self._agent_configs.pop(agent_id, None)
+        self._cache.pop(agent_id, None)
+
     def _resolve_key(self, cfg: ProviderConfig) -> str | None:
         if cfg.api_key_literal:
             return cfg.api_key_literal

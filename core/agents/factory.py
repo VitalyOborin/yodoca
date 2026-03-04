@@ -26,6 +26,7 @@ class AgentSpec:
 
     name: str
     instruction: str
+    description: str = ""
     tools: list[str] = field(default_factory=list)
     model: str | None = None
     max_turns: int = 25
@@ -70,10 +71,13 @@ class DynamicAgentProvider:
     async def invoke(
         self, task: str, context: AgentInvocationContext | None = None
     ) -> AgentResponse:
+        full_task = task
+        if context and context.conversation_summary:
+            full_task = f"Context:\n{context.conversation_summary}\n\nTask:\n{task}"
         try:
             result = await Runner.run(
                 self._agent,
-                task,
+                full_task,
                 max_turns=self._max_turns,
             )
             return AgentResponse(
@@ -126,8 +130,8 @@ class AgentFactory:
             model=model_instance,
             tools=tools,
         )
-        desc = spec.instruction[:200]
-        if len(spec.instruction) > 200:
+        desc = spec.description or spec.instruction[:200]
+        if not spec.description and len(spec.instruction) > 200:
             desc += "..."
         provider = DynamicAgentProvider(
             name=spec.name,

@@ -24,10 +24,17 @@ class TestAgentSpec:
         spec = AgentSpec(name="Test", instruction="Do X")
         assert spec.name == "Test"
         assert spec.instruction == "Do X"
+        assert spec.description == ""
         assert spec.tools == []
         assert spec.model is None
         assert spec.max_turns == 25
         assert spec.ttl_seconds == 1800
+
+    def test_explicit_description(self) -> None:
+        spec = AgentSpec(
+            name="Coder", instruction="Write code", description="Code specialist"
+        )
+        assert spec.description == "Code specialist"
 
 
 class TestDynamicAgentProvider:
@@ -71,6 +78,56 @@ class TestDynamicAgentProvider:
         assert result.status == "error"
         assert result.error == "oops"
 
+    @pytest.mark.asyncio
+    async def test_invoke_prepends_context(self) -> None:
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.final_output = "done"
+
+        from core.extensions.contract import AgentInvocationContext
+
+        ctx = AgentInvocationContext(conversation_summary="User wants X")
+        with patch(
+            "core.agents.factory.Runner.run",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ) as mock_run:
+            provider = DynamicAgentProvider(
+                name="Test",
+                description="Test agent",
+                agent=mock_agent,
+                max_turns=5,
+            )
+            await provider.invoke("do the thing", ctx)
+        call_args = mock_run.call_args
+        prompt = call_args[0][1]
+        assert "Context:" in prompt
+        assert "User wants X" in prompt
+        assert "Task:" in prompt
+        assert "do the thing" in prompt
+
+    @pytest.mark.asyncio
+    async def test_invoke_without_context(self) -> None:
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.final_output = "done"
+
+        with patch(
+            "core.agents.factory.Runner.run",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ) as mock_run:
+            provider = DynamicAgentProvider(
+                name="Test",
+                description="Test agent",
+                agent=mock_agent,
+                max_turns=5,
+            )
+            await provider.invoke("do the thing")
+        call_args = mock_run.call_args
+        prompt = call_args[0][1]
+        assert prompt == "do the thing"
+
     def test_get_agent_descriptor(self) -> None:
         provider = DynamicAgentProvider(
             name="Foo",
@@ -108,6 +165,36 @@ class TestAgentFactory:
         assert record.source == "dynamic"
         assert record.expires_at is not None
 
+    def test_create_uses_explicit_description(self) -> None:
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+
+        factory = AgentFactory(router, tool_resolver, registry)
+        spec = AgentSpec(
+            name="Coder",
+            instruction="You are a code specialist with deep expertise...",
+            description="Code generation agent",
+        )
+        agent_id = factory.create(spec)
+        pair = registry.get(agent_id)
+        assert pair is not None
+        record, _ = pair
+        assert record.description == "Code generation agent"
+
+    def test_create_fallback_description_from_instruction(self) -> None:
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+
+        factory = AgentFactory(router, tool_resolver, registry)
+        spec = AgentSpec(name="Worker", instruction="Short task")
+        agent_id = factory.create(spec)
+        pair = registry.get(agent_id)
+        assert pair is not None
+        record, _ = pair
+        assert record.description == "Short task"
+
     def test_create_with_model_override(self) -> None:
         registry = AgentRegistry()
         router = _make_mock_model_router()
@@ -144,6 +231,22 @@ class TestAgentRegistryCleanup:
         removed = registry.cleanup_expired()
         assert removed == 1
         assert registry.get("dyn_expired") is None
+
+    def test_unregister_calls_on_unregister_callback(self) -> None:
+        callback = MagicMock()
+        registry = AgentRegistry(on_unregister=callback)
+        mock_provider = MagicMock()
+        past = datetime.now(UTC) - timedelta(minutes=5)
+        record = AgentRecord(
+            id="dyn_test",
+            name="Test",
+            description="Test",
+            source="dynamic",
+            expires_at=past,
+        )
+        registry.register(record, mock_provider)
+        registry.cleanup_expired()
+        callback.assert_called_once_with("dyn_test")
 
     def test_cleanup_expired_keeps_static_agents(self) -> None:
         registry = AgentRegistry()

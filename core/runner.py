@@ -109,7 +109,7 @@ async def main_async() -> None:
     settings = load_settings()
     setup_logging(_PROJECT_ROOT, settings)
     model_router = ModelRouter(settings=settings, secrets_getter=secrets.get_secret)
-    registry = AgentRegistry()
+    registry = AgentRegistry(on_unregister=model_router.remove_agent_config)
     loader, router, _ext_dir, data_dir, shutdown_event = _build_loader_router(settings)
     loader.set_model_router(model_router)
     loader.set_agent_registry(registry)

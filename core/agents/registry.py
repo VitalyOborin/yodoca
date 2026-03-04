@@ -3,6 +3,7 @@
 Populated by Loader, queried by Orchestrator tools.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
@@ -36,10 +37,14 @@ class AgentRegistry:
     Populated by Loader, queried by Orchestrator tools.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_unregister: Callable[[str], None] | None = None,
+    ) -> None:
         self._records: dict[str, AgentRecord] = {}
         self._providers: dict[str, AgentProvider] = {}
         self._active: dict[str, int] = {}
+        self._on_unregister = on_unregister
 
     def register(self, record: AgentRecord, provider: AgentProvider) -> None:
         """Register an agent. Called by Loader for each AgentProvider extension."""
@@ -48,10 +53,12 @@ class AgentRegistry:
         self._active[record.id] = 0
 
     def unregister(self, agent_id: str) -> None:
-        """Remove an agent from the registry."""
+        """Remove an agent from the registry and notify cleanup callback."""
         self._records.pop(agent_id, None)
         self._providers.pop(agent_id, None)
         self._active.pop(agent_id, None)
+        if self._on_unregister:
+            self._on_unregister(agent_id)
 
     def clear(self) -> None:
         """Remove all agents from the registry. Used by Loader before repopulating."""
