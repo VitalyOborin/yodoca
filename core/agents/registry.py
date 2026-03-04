@@ -100,7 +100,8 @@ class AgentRegistry:
         try:
             return await provider.invoke(task, context)
         finally:
-            self._active[agent_id] = max(0, self._active.get(agent_id, 1) - 1)
+            if agent_id in self._active:
+                self._active[agent_id] = max(0, self._active[agent_id] - 1)
 
     def is_busy(self, agent_id: str) -> bool:
         """Return True if the agent is currently executing an invocation."""
@@ -109,13 +110,17 @@ class AgentRegistry:
     def cleanup_expired(self) -> int:
         """Unregister dynamic agents whose expires_at has passed.
 
+        Skips agents with active invocations to avoid removing them mid-execution.
         Returns the number of agents removed.
         """
         now = datetime.now(UTC)
         to_remove = [
             r.id
             for r in self._records.values()
-            if r.source == "dynamic" and r.expires_at is not None and r.expires_at < now
+            if r.source == "dynamic"
+            and r.expires_at is not None
+            and r.expires_at < now
+            and self._active.get(r.id, 0) == 0
         ]
         for agent_id in to_remove:
             self.unregister(agent_id)
