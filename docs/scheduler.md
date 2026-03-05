@@ -44,6 +44,8 @@ The Orchestrator (and other agents) use these tools to set reminders, recurring 
 
 ## Tools
 
+All scheduler tools return **structured Pydantic results** (e.g. `ScheduleOnceResult`, `ListSchedulesResult`) with `success`, `error`, and action-specific fields. Never bare strings.
+
 ### schedule_once
 
 Schedule a one-shot event. Provide **exactly one** of `delay_seconds` or `at_iso`.
@@ -51,17 +53,13 @@ Schedule a one-shot event. Provide **exactly one** of `delay_seconds` or `at_iso
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `topic` | str | Event topic (e.g. `system.user.notify`, `system.agent.task`) |
-| `payload_json` | str | JSON payload |
-| `delay_seconds` | float | Seconds from now until fire |
-| `at_iso` | str | ISO 8601 datetime (e.g. `2025-02-21T10:00:00`) |
+| `message` | str | Text message (for system topics) or prompt instruction |
+| `channel_id` | str \| None | Optional delivery channel ID |
+| `payload_extra` | dict \| None | Optional extra payload fields for custom (non-system) topics |
+| `delay_seconds` | int \| None | Seconds from now until fire |
+| `at_iso` | str \| None | ISO 8601 datetime (e.g. `2025-02-21T10:00:00`) |
 
-**Payload contracts for system topics:**
-
-| Topic | Key | Description |
-|-------|-----|-------------|
-| `system.user.notify` | `text` | Static message known at scheduling time |
-| `system.agent.task` | `prompt` | Dynamic content; Orchestrator reasons at fire time |
-| `system.agent.background` | `prompt` | Silent task; no user response |
+**Payload contracts for system topics:** For `system.user.notify`, `message` becomes `text`; for `system.agent.task` / `system.agent.background`, `message` becomes `prompt`. Use `payload_extra` only for custom topics.
 
 ### schedule_recurring
 
@@ -70,22 +68,24 @@ Create a recurring schedule. Provide **exactly one** of `cron` or `every_seconds
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `topic` | str | Event topic |
-| `payload_json` | str | JSON payload |
-| `cron` | str | Cron expression (e.g. `0 9 * * *` for daily at 09:00) |
-| `every_seconds` | float | Interval in seconds |
-| `until_iso` | str | Optional ISO 8601 end datetime |
+| `message` | str | Text message or prompt |
+| `channel_id` | str \| None | Optional delivery channel ID |
+| `payload_extra` | dict \| None | Optional extra payload for custom topics |
+| `cron` | str \| None | Cron expression (e.g. `0 9 * * *` for daily at 09:00) |
+| `every_seconds` | float \| None | Interval in seconds |
+| `until_iso` | str \| None | Optional ISO 8601 end datetime |
 
 ### list_schedules
 
-List all schedules. Optional `status` filter: `scheduled`, `fired`, `cancelled` (one-shot); `active`, `paused`, `cancelled` (recurring).
+List all schedules. Returns `ListSchedulesResult` with `schedules` list and `count`. Optional `status` filter: `scheduled`, `fired`, `cancelled` (one-shot); `active`, `paused`, `cancelled` (recurring).
 
 ### cancel_schedule
 
-Cancel a schedule by ID and type (`one_shot` or `recurring`).
+Cancel a schedule by ID and type (`one_shot` or `recurring`). Returns `CancelScheduleResult`.
 
 ### update_recurring_schedule
 
-Update a recurring schedule: change `cron`, `every_seconds`, `until_iso`, or `status` (active/paused).
+Update a recurring schedule: change `cron`, `every_seconds`, `until_iso`, or `status` (active/paused). Returns `UpdateRecurringResult`.
 
 ---
 

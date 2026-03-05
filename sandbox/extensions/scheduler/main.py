@@ -8,9 +8,72 @@ from pathlib import Path
 from typing import Any, Literal
 
 import aiosqlite
-from pydantic import Field
 from agents import function_tool
 from croniter import croniter
+from pydantic import BaseModel, Field
+
+# --- Tool result models (structured output per agent_tools skill) ---
+
+
+class ScheduleOnceResult(BaseModel):
+    """Result of schedule_once tool."""
+
+    success: bool
+    schedule_id: int = 0
+    topic: str = ""
+    fires_in_seconds: int = 0
+    status: str = "scheduled"
+    error: str | None = None
+
+
+class ScheduleRecurringResult(BaseModel):
+    """Result of schedule_recurring tool."""
+
+    success: bool
+    schedule_id: int = 0
+    next_fire_iso: str = ""
+    status: str = "created"
+    error: str | None = None
+
+
+class ScheduleItem(BaseModel):
+    """Single schedule entry in list_schedules."""
+
+    id: int
+    type: Literal["one_shot", "recurring"]
+    topic: str
+    payload: dict[str, Any] | str
+    next_fire_iso: str
+    status: str
+
+
+class ListSchedulesResult(BaseModel):
+    """Result of list_schedules tool."""
+
+    success: bool
+    schedules: list[ScheduleItem] = Field(default_factory=list)
+    count: int = 0
+    error: str | None = None
+
+
+class CancelScheduleResult(BaseModel):
+    """Result of cancel_schedule tool."""
+
+    success: bool
+    schedule_id: int
+    message: str
+    error: str | None = None
+
+
+class UpdateRecurringResult(BaseModel):
+    """Result of update_recurring_schedule tool."""
+
+    success: bool
+    schedule_id: int = 0
+    next_fire_iso: str = ""
+    message: str = ""
+    error: str | None = None
+
 
 _ONE_SHOT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS one_shot_schedules (
@@ -43,7 +106,9 @@ CREATE INDEX IF NOT EXISTS idx_rs_next_fire ON recurring_schedules(next_fire_at,
 """
 
 
-def _compute_next_fire(cron_expr: str | None, every_sec: float | None, now: float) -> float:
+def _compute_next_fire(
+    cron_expr: str | None, every_sec: float | None, now: float
+) -> float:
     """Calculate next fire time from cron expression or interval."""
     if cron_expr:
         return croniter(cron_expr, now).get_next(float)
@@ -332,18 +397,21 @@ def _build_event_payload(
     topic: str,
     message: str,
     channel_id: str | None,
-    payload_extra_json: str | None,
-) -> dict[str, Any] | str:
-    """Build event payload from tool args. Returns error string on invalid JSON."""
+    payload_extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build event payload from tool args. Uses payload_extra for custom topics."""
     if topic == "system.user.notify":
         payload: dict[str, Any] = {"text": message}
     elif topic in ("system.agent.task", "system.agent.background"):
         payload = {"prompt": message}
-    elif payload_extra_json:
-        try:
-            payload = json.loads(payload_extra_json)
-        except json.JSONDecodeError as e:
-            return f"Error: invalid payload_extra_json: {e}"
+    elif payload_extra:
+        payload = dict(payload_extra)
+        if (
+            "message" not in payload
+            and "text" not in payload
+            and "prompt" not in payload
+        ):
+            payload["message"] = message
     else:
         payload = {"message": message}
     if channel_id:
@@ -423,41 +491,65 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra_json: str | None = None,
+            payload_extra: dict[str, Any] | None = Field(
+                default=None,
+                description="Optional extra payload fields for custom (non-system) topics only.",
+            ),
             delay_seconds: int | None = None,
             at_iso: str | None = None,
-        ) -> str:
+        ) -> ScheduleOnceResult:
             """Schedule a one-shot event to fire once.
 
             Provide exactly one of: delay_seconds (seconds from now) or at_iso (ISO 8601 datetime).
 
             Args:
                 channel_id: Optional delivery channel ID (e.g. 'telegram_channel'). If null, uses the default channel.
-                payload_extra_json: Optional JSON string payload for custom (non-system) topics only.
+                payload_extra: Optional dict of extra payload fields for custom topics only.
                 delay_seconds: Seconds from now until fire (positive number). Mutually exclusive with at_iso.
                 at_iso: ISO 8601 datetime (e.g. '2025-02-21T10:00:00'). Mutually exclusive with delay_seconds.
             """
             if (delay_seconds is None) == (at_iso is None):
-                return "Error: provide exactly one of delay_seconds or at_iso."
+                return ScheduleOnceResult(
+                    success=False,
+                    status="error",
+                    error="provide exactly one of delay_seconds or at_iso.",
+                )
             if delay_seconds is not None and delay_seconds <= 0:
-                return "Error: delay_seconds must be positive."
+                return ScheduleOnceResult(
+                    success=False,
+                    status="error",
+                    error="delay_seconds must be positive.",
+                )
 
-            result = _build_event_payload(topic, message, channel_id, payload_extra_json)
-            if isinstance(result, str):
-                return result
-            payload = result
+            payload = _build_event_payload(topic, message, channel_id, payload_extra)
 
             if at_iso:
                 fire_at = _parse_iso(at_iso)
                 if fire_at is None:
-                    return "Error: invalid at_iso format. Use ISO 8601 (e.g. '2025-02-21T10:00:00')."
+                    return ScheduleOnceResult(
+                        success=False,
+                        status="error",
+                        error="invalid at_iso format. Use ISO 8601 (e.g. '2025-02-21T10:00:00').",
+                    )
                 if fire_at <= time.time():
-                    return "Error: at_iso must be in the future."
+                    return ScheduleOnceResult(
+                        success=False,
+                        status="error",
+                        error="at_iso must be in the future.",
+                    )
             else:
                 fire_at = time.time() + delay_seconds  # type: ignore[operator]
 
-            row_id = await store.insert_one_shot(topic, json.dumps(payload, ensure_ascii=False), fire_at)
-            return f"Scheduled one-shot #{row_id}: topic={topic}, fires in {int(fire_at - time.time())}s."
+            row_id = await store.insert_one_shot(
+                topic, json.dumps(payload, ensure_ascii=False), fire_at
+            )
+            return ScheduleOnceResult(
+                success=True,
+                schedule_id=row_id,
+                topic=topic,
+                fires_in_seconds=int(fire_at - time.time()),
+                status="scheduled",
+            )
 
         @function_tool(name_override="schedule_recurring", strict_mode=False)
         async def schedule_recurring(
@@ -477,18 +569,21 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra_json: str | None = None,
+            payload_extra: dict[str, Any] | None = Field(
+                default=None,
+                description="Optional extra payload fields for custom (non-system) topics only.",
+            ),
             cron: str | None = None,
             every_seconds: float | None = None,
             until_iso: str | None = None,
-        ) -> str:
+        ) -> ScheduleRecurringResult:
             """Create a recurring schedule.
 
             Provide exactly one of: cron (e.g. '0 9 * * *') or every_seconds. Optionally set until_iso for end datetime.
 
             Args:
                 channel_id: Optional delivery channel ID (e.g. 'telegram_channel'). If null, uses the default channel.
-                payload_extra_json: Optional JSON string payload for custom (non-system) topics only.
+                payload_extra: Optional dict of extra payload fields for custom topics only.
                 cron: Cron expression (e.g. '0 9 * * *' for daily at 9:00). Mutually exclusive with every_seconds.
                 every_seconds: Interval in seconds (positive number). Mutually exclusive with cron.
                 until_iso: Optional ISO 8601 end datetime. Schedule stops after this time.
@@ -496,18 +591,23 @@ class SchedulerExtension:
             has_cron = cron is not None and cron.strip()
             has_interval = every_seconds is not None and every_seconds > 0
             if has_cron == has_interval:
-                return "Error: provide exactly one of cron or every_seconds (positive)."
+                return ScheduleRecurringResult(
+                    success=False,
+                    status="error",
+                    error="provide exactly one of cron or every_seconds (positive).",
+                )
 
-            result = _build_event_payload(topic, message, channel_id, payload_extra_json)
-            if isinstance(result, str):
-                return result
-            payload = result
+            payload = _build_event_payload(topic, message, channel_id, payload_extra)
 
             if cron:
                 try:
                     next_fire = croniter(cron.strip(), time.time()).get_next(float)
                 except (ValueError, KeyError) as e:
-                    return f"Error: invalid cron expression: {e}"
+                    return ScheduleRecurringResult(
+                        success=False,
+                        status="error",
+                        error=f"invalid cron expression: {e}",
+                    )
             else:
                 next_fire = time.time() + every_seconds  # type: ignore[operator]
 
@@ -515,9 +615,15 @@ class SchedulerExtension:
             if until_iso:
                 until_at = _parse_iso(until_iso)
                 if until_at is None:
-                    return "Error: invalid until_iso format."
+                    return ScheduleRecurringResult(
+                        success=False, status="error", error="invalid until_iso format."
+                    )
                 if until_at <= time.time():
-                    return "Error: until_iso must be in the future."
+                    return ScheduleRecurringResult(
+                        success=False,
+                        status="error",
+                        error="until_iso must be in the future.",
+                    )
 
             row_id = await store.insert_recurring(
                 topic,
@@ -528,14 +634,19 @@ class SchedulerExtension:
                 next_fire,
             )
             iso = datetime.fromtimestamp(next_fire).isoformat()
-            return f"Recurring schedule #{row_id} created. Next fire: {iso}."
+            return ScheduleRecurringResult(
+                success=True,
+                schedule_id=row_id,
+                next_fire_iso=iso,
+                status="created",
+            )
 
         @function_tool(name_override="list_schedules")
         async def list_schedules(
             status: Literal["scheduled", "fired", "cancelled", "active", "paused"]
             | None = None,
-        ) -> str:
-            """List all schedules. Returns JSON array.
+        ) -> ListSchedulesResult:
+            """List all schedules.
 
             Args:
                 status: Optional filter. For one-shot: scheduled, fired, cancelled.
@@ -543,27 +654,29 @@ class SchedulerExtension:
             """
             rows = await store.list_all(status)
             if not rows:
-                return "[]"
-            result = [
-                {
-                    "id": r["id"],
-                    "type": r["type"],
-                    "topic": r["topic"],
-                    "payload": _parse_payload_json(r["payload"]),
-                    "next_fire_iso": datetime.fromtimestamp(
+                return ListSchedulesResult(success=True, schedules=[], count=0)
+            schedules = [
+                ScheduleItem(
+                    id=r["id"],
+                    type=r["type"],
+                    topic=r["topic"],
+                    payload=_parse_payload_json(r["payload"]),
+                    next_fire_iso=datetime.fromtimestamp(
                         r["fire_at_or_next"]
                     ).isoformat(),
-                    "status": r["status"],
-                }
+                    status=r["status"],
+                )
                 for r in rows
             ]
-            return json.dumps(result, ensure_ascii=False)
+            return ListSchedulesResult(
+                success=True, schedules=schedules, count=len(schedules)
+            )
 
         @function_tool(name_override="cancel_schedule")
         async def cancel_schedule(
             schedule_id: int,
             schedule_type: Literal["one_shot", "recurring"] = "one_shot",
-        ) -> str:
+        ) -> CancelScheduleResult:
             """Cancel a schedule.
 
             Args:
@@ -573,12 +686,19 @@ class SchedulerExtension:
             if schedule_type == "one_shot":
                 ok = await store.cancel_one_shot(schedule_id)
                 if not ok:
-                    return (
-                        f"Schedule #{schedule_id} not found or already fired/cancelled."
+                    return CancelScheduleResult(
+                        success=False,
+                        schedule_id=schedule_id,
+                        message="",
+                        error="Schedule not found or already fired/cancelled.",
                     )
             else:
                 await store.cancel_recurring(schedule_id)
-            return f"Schedule #{schedule_id} cancelled."
+            return CancelScheduleResult(
+                success=True,
+                schedule_id=schedule_id,
+                message=f"Schedule #{schedule_id} cancelled.",
+            )
 
         @function_tool(name_override="update_recurring_schedule", strict_mode=False)
         async def update_recurring_schedule(
@@ -587,7 +707,7 @@ class SchedulerExtension:
             every_seconds: float | None = None,
             until_iso: str | None = None,
             status: Literal["active", "paused"] | None = None,
-        ) -> str:
+        ) -> UpdateRecurringResult:
             """Update a recurring schedule. Does not apply to one-shot schedules.
 
             Args:
@@ -601,7 +721,9 @@ class SchedulerExtension:
             if until_iso:
                 until_at = _parse_iso(until_iso)
                 if until_at is None:
-                    return "Error: invalid until_iso format."
+                    return UpdateRecurringResult(
+                        success=False, message="", error="invalid until_iso format."
+                    )
             next_fire = await store.update_recurring(
                 schedule_id,
                 cron_expr=cron.strip() if cron else None,
@@ -610,9 +732,19 @@ class SchedulerExtension:
                 status=status,
             )
             if next_fire is None:
-                return f"Schedule #{schedule_id} not found or cancelled."
+                return UpdateRecurringResult(
+                    success=False,
+                    schedule_id=schedule_id,
+                    message="",
+                    error="Schedule not found or cancelled.",
+                )
             iso = datetime.fromtimestamp(next_fire).isoformat()
-            return f"Schedule #{schedule_id} updated. Next fire: {iso}."
+            return UpdateRecurringResult(
+                success=True,
+                schedule_id=schedule_id,
+                next_fire_iso=iso,
+                message=f"Schedule #{schedule_id} updated. Next fire: {iso}.",
+            )
 
         return [
             schedule_once,

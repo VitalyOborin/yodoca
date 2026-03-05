@@ -121,21 +121,18 @@ The Orchestrator has two tools for agent-driven channel selection (see [ADR 007]
 | `list_channels` | List available channels with IDs and descriptions |
 | `send_to_channel(channel_id, text)` | Send a message to the user via a specific channel |
 
-**`list_channels`** returns a JSON array:
+**`list_channels`** returns `ListChannelsResult` (structured):
 
-```json
-[
-  {"channel_id": "cli_channel", "description": "CLI Channel"},
-  {"channel_id": "telegram_channel", "description": "Telegram Channel"}
-]
-```
+- `success: bool`
+- `channels: list[ChannelInfo]` — each with `channel_id` and `description`
+- `error: str | None`
 
-Empty when no channels are registered: `[]`.
+Empty when no channels are registered: `success=True`, `channels=[]`.
 
-**`send_to_channel`** returns typed JSON:
+**`send_to_channel`** returns `SendToChannelResult` (structured):
 
-- Success: `{"success": true}`
-- Error: `{"success": false, "error": "Channel 'x' not found. Use list_channels to see available channels."}`
+- Success: `success=True`, `error=None`
+- Error: `success=False`, `error="Channel 'x' not found. Use list_channels to see available channels."`
 
 This enables the agent to reliably detect delivery status and choose channels (e.g. "send to Telegram") based on user preference or escalation context.
 

@@ -332,42 +332,27 @@ class Loader:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
 
-    def _collect_proactive_subscriptions(self) -> dict[str, str]:
-        """Pass-through for test compatibility. Delegates to EventWiringManager."""
-        manager = EventWiringManager(
+    def _make_event_wiring_manager(self) -> EventWiringManager:
+        """Construct an EventWiringManager from current Loader state."""
+        return EventWiringManager(
             router=self._router,
             manifests=self._manifests,
             state=self._state,
             extensions=self._extensions,
             agent_registry=self._agent_registry,
         )
-        return manager._collect_proactive_subscriptions()
 
     async def _on_agent_task(self, event: Event) -> None:
         """Pass-through for test compatibility. Delegates to EventWiringManager."""
         if not self._router:
             return
-        manager = EventWiringManager(
-            router=self._router,
-            manifests=self._manifests,
-            state=self._state,
-            extensions=self._extensions,
-            agent_registry=self._agent_registry,
-        )
-        await manager._on_agent_task(event)
+        await self._make_event_wiring_manager()._on_agent_task(event)
 
     def wire_event_subscriptions(self, event_bus: EventBus) -> None:
         """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
         if not self._router:
             return
-        manager = EventWiringManager(
-            router=self._router,
-            manifests=self._manifests,
-            state=self._state,
-            extensions=self._extensions,
-            agent_registry=self._agent_registry,
-        )
-        manager.wire(event_bus)
+        self._make_event_wiring_manager().wire(event_bus)
 
     def _collect_context_providers(
         self, router: MessageRouter

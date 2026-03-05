@@ -65,7 +65,7 @@ def _create_agent(
 ) -> Any:
     from core.agents.factory import AgentFactory
 
-    def tool_resolver(tool_ids: list, agent_id: str | None = None):
+    def tool_resolver(tool_ids: list[str], agent_id: str | None = None) -> list[Any]:
         return loader.resolve_tools(tool_ids, agent_id)
 
     factory = AgentFactory(model_router, tool_resolver, registry)

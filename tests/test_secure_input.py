@@ -50,8 +50,9 @@ class TestMakeSecureInputTool:
         assert payload["secret_id"] == "telegram_token"
         assert payload["prompt"] == "Enter bot token"
         assert payload["target_channel"] == "cli_channel"
-        assert "Secure input request sent" in result
-        assert "Do NOT ask" in result
+        assert result.success is True
+        assert "Secure input request sent" in result.message
+        assert "Do NOT ask" in result.message
 
     @pytest.mark.asyncio
     async def test_invalid_secret_id_returns_error_no_publish(self) -> None:
@@ -66,8 +67,9 @@ class TestMakeSecureInputTool:
         )
         result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
         event_bus.publish.assert_not_called()
-        assert "Error:" in result
-        assert "invalid secret_id" in result
+        assert result.success is False
+        assert result.error is not None
+        assert "invalid secret_id" in result.error
 
     @pytest.mark.asyncio
     async def test_secret_id_starting_with_number_rejected(self) -> None:
@@ -77,7 +79,8 @@ class TestMakeSecureInputTool:
         args = json.dumps({"secret_id": "123token", "prompt_message": "Enter"})
         result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
         event_bus.publish.assert_not_called()
-        assert "Error:" in result
+        assert result.success is False
+        assert result.error is not None
 
     @pytest.mark.asyncio
     async def test_default_channel_is_cli(self) -> None:

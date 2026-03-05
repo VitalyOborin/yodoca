@@ -517,17 +517,27 @@ class MyExtension:
 
 ### 4. Adding ToolProvider
 
+**Rule:** All agent tools MUST return structured output (Pydantic model or fixed-shape dict), never bare strings. See [agent_tools skill](.cursor/skills/agent_tools/SKILL.md).
+
 ```python
 from agents import function_tool
+from pydantic import BaseModel
+
+class MyToolResult(BaseModel):
+    success: bool
+    message: str = ""
+    error: str | None = None
 
 class MyExtension:
     # ... lifecycle methods ...
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="my_tool")
-        async def my_tool(arg: str) -> str:
+        async def my_tool(arg: str) -> MyToolResult:
             """Tool description for the LLM."""
-            return f"Result: {arg}"
+            if not arg:
+                return MyToolResult(success=False, error="arg required")
+            return MyToolResult(success=True, message=f"Result: {arg}")
         return [my_tool]
 ```
 

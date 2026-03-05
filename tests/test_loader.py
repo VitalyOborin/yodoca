@@ -19,6 +19,7 @@ from core.extensions.contract import (
     ServiceProvider,
     ToolProvider,
 )
+from core.extensions.event_wiring import EventWiringManager
 from core.extensions.loader import Loader, ExtensionState
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.router import MessageRouter
@@ -213,14 +214,6 @@ class TestProactiveLoop:
             name="Email Agent", description="Triage emails", integration_mode="tool"
         )
 
-        loader = Loader(
-            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
-        )
-        loader._manifests = [
-            self._manifest_with_invoke_agent("email_agent", "email.received"),
-        ]
-        loader._extensions = {"email_agent": mock_agent}
-        loader._state = {"email_agent": ExtensionState.INACTIVE}
         registry = AgentRegistry()
         registry.register(
             AgentRecord(
@@ -231,24 +224,29 @@ class TestProactiveLoop:
             ),
             mock_agent,
         )
-        loader._agent_registry = registry
 
-        result = loader._collect_proactive_subscriptions()
+        manager = EventWiringManager(
+            router=None,
+            manifests=[self._manifest_with_invoke_agent("email_agent", "email.received")],
+            state={"email_agent": ExtensionState.INACTIVE},
+            extensions={"email_agent": mock_agent},
+            agent_registry=registry,
+        )
+        result = manager._collect_proactive_subscriptions()
         assert result == {"email.received": "email_agent"}
 
     def test_collect_proactive_subscriptions_skips_non_agent_extensions(self) -> None:
         """Extensions without AgentProvider are skipped for invoke_agent."""
-        loader = Loader(
-            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        manager = EventWiringManager(
+            router=None,
+            manifests=[
+                self._manifest_with_invoke_agent("not_an_agent", "email.received"),
+            ],
+            state={"not_an_agent": ExtensionState.INACTIVE},
+            extensions={"not_an_agent": MagicMock()},
+            agent_registry=AgentRegistry(),  # empty: not_an_agent not registered
         )
-        loader._manifests = [
-            self._manifest_with_invoke_agent("not_an_agent", "email.received"),
-        ]
-        loader._extensions = {"not_an_agent": MagicMock()}
-        loader._state = {"not_an_agent": ExtensionState.INACTIVE}
-        loader._agent_registry = AgentRegistry()  # empty: not_an_agent not registered
-
-        result = loader._collect_proactive_subscriptions()
+        result = manager._collect_proactive_subscriptions()
         assert result == {}
 
     @pytest.mark.asyncio
