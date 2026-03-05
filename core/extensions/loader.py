@@ -332,17 +332,6 @@ class Loader:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
                 self._state[ext_id] = ExtensionState.ERROR
 
-    def _collect_proactive_subscriptions(self) -> dict[str, str]:
-        """Pass-through for test compatibility. Delegates to EventWiringManager."""
-        manager = EventWiringManager(
-            router=self._router,
-            manifests=self._manifests,
-            state=self._state,
-            extensions=self._extensions,
-            agent_registry=self._agent_registry,
-        )
-        return manager._collect_proactive_subscriptions()
-
     async def _on_agent_task(self, event: Event) -> None:
         """Pass-through for test compatibility. Delegates to EventWiringManager."""
         if not self._router:

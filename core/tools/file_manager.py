@@ -5,7 +5,7 @@ Any path outside sandbox is rejected. No exceptions."""
 
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Literal, assert_never
 
 from agents import ApplyPatchTool, apply_diff, function_tool
 from agents.editor import ApplyPatchOperation, ApplyPatchResult
@@ -203,10 +203,10 @@ def _file_move(target: Path, destination: str | None) -> FileResult:
 def _file_stat(target: Path) -> FileResult:
     if not target.exists():
         return FileResult(
-            success=True,
+            success=False,
             action="stat",
             path=_rel(target),
-            message=f"Path does not exist: {_rel(target)}",
+            error=f"path does not exist: {_rel(target)}",
         )
     if target.is_file():
         msg = f"type=file, size={target.stat().st_size} bytes, path={_rel(target)}"
@@ -261,9 +261,7 @@ def file(
             return _file_stat(target)
         if action == "list":
             return _file_list(target)
-        return FileResult(
-            success=False, action=action, error=f"unknown action: {action}"
-        )
+        assert_never(action)
     except RuntimeError as e:
         err = str(e) if "Access denied" in str(e) else f"Error: {e}"
         return FileResult(success=False, action=action, path=path, error=err)

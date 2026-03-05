@@ -1,8 +1,7 @@
 """Tool to request secure input from user via channel interceptor. Secret never reaches LLM."""
 
 import re
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents import function_tool
 from pydantic import BaseModel
@@ -30,9 +29,7 @@ def _validate_secret_id(secret_id: str) -> str | None:
     return f"invalid secret_id '{secret_id}'. Use alphanumeric and underscores only."
 
 
-def make_secure_input_tool(
-    event_bus: "EventBus",
-) -> Callable[..., Awaitable[SecureInputResult]]:
+def make_secure_input_tool(event_bus: "EventBus") -> Any:
     """Create request_secure_input tool bound to the given EventBus."""
 
     @function_tool(name_override="request_secure_input")

@@ -136,13 +136,21 @@ class EventWiringManager:
                 if sub.handler != "notify_user":
                     continue
 
-                async def handler(event: Event) -> None:
+                topic = sub.topic
+                subscriber_id = ext_id
+
+                async def handler(
+                    event: Event,
+                    _topic: str = topic,
+                    _subscriber_id: str = subscriber_id,
+                ) -> None:
                     if self._router:
                         await self._router.notify_user(
-                            event.payload.get("text", "")
+                            event.payload.get("text", ""),
+                            event.payload.get("channel_id"),
                         )
 
-                event_bus.subscribe(sub.topic, handler, ext_id)
+                event_bus.subscribe(topic, handler, subscriber_id)
 
     async def _on_kernel_user_message(self, event: Event) -> None:
         if not self._router:
