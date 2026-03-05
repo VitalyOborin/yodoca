@@ -7,13 +7,16 @@ from agents import function_tool
 from models import (
     ActiveTasksResult,
     CancelTaskResult,
+    ChainStatusResult,
+    ChainStep,
+    SubmitChainResult,
     SubmitTaskResult,
     TaskStatusResult,
 )
 
 
 def build_tools(ext: Any) -> list[Any]:
-    """Build the six task engine tools that delegate to the extension."""
+    """Build task engine tools that delegate to the extension."""
 
     @function_tool
     async def submit_task(
@@ -21,6 +24,7 @@ def build_tools(ext: Any) -> list[Any]:
         agent_id: str = "orchestrator",
         priority: int = 5,
         parent_task_id: str | None = None,
+        after_task_id: str | None = None,
         max_steps: int | None = None,
         output_channel: str | None = None,
     ) -> SubmitTaskResult:
@@ -32,13 +36,38 @@ def build_tools(ext: Any) -> list[Any]:
         - The task needs a specialized agent
 
         agent_id: 'orchestrator' (default) or any agent from list_agents.
+        after_task_id: optional; task will run only after this predecessor completes
+        (for ad-hoc chaining). Use submit_chain for multi-step pipelines.
         Returns task_id for tracking.
         output_channel: optional target channel id for final delivery
         (e.g. 'telegram_channel', 'cli_channel').
         """
         return await ext.submit_task(
-            goal, agent_id, priority, parent_task_id, max_steps, output_channel
+            goal,
+            agent_id,
+            priority,
+            parent_task_id,
+            after_task_id,
+            max_steps,
+            output_channel,
         )
+
+    @function_tool
+    async def submit_chain(
+        steps: list[ChainStep],
+        priority: int = 5,
+        output_channel: str | None = None,
+    ) -> SubmitChainResult:
+        """Submit a sequence of tasks that execute one after another.
+
+        Each step's result is passed as context to the next step.
+        Use for multi-phase workflows like: research -> draft -> review."""
+        return await ext.submit_chain(steps, priority, output_channel)
+
+    @function_tool
+    async def get_chain_status(chain_id: str) -> ChainStatusResult:
+        """Get status of all tasks in a chain, in execution order."""
+        return await ext._get_chain_status(chain_id)
 
     @function_tool
     async def get_task_status(task_id: str) -> TaskStatusResult:
@@ -71,6 +100,8 @@ def build_tools(ext: Any) -> list[Any]:
 
     return [
         submit_task,
+        submit_chain,
+        get_chain_status,
         get_task_status,
         list_active_tasks,
         cancel_task,

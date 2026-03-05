@@ -39,7 +39,7 @@ Extensions are **pluggable modules** that extend the system with tools, channels
          │
          ▼
 ┌──────────────────┐
-│   Orchestrator   │  ← Agent with extension tools + agent-tools (specialized agents)
+│   Orchestrator   │  ← Agent with extension tools + delegation tools (list_agents, delegate_task)
 │  (core/agents)   │
 └──────────────────┘
 ```
@@ -55,7 +55,7 @@ The startup sequence in `core/runner.py`:
 3. **initialize_all** — Create `ExtensionContext` per extension; call `initialize(ctx)`
 4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
 5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
-6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + `get_agent_tools()` + capabilities summary
+6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
 7. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
 8. **SQLiteSession** → `router.set_session()` (conversation history)
 9. **wire_context_providers** — Collect `ContextProvider` extensions, chain into router middleware
@@ -131,7 +131,7 @@ async def invoke(self, task: str, context: AgentInvocationContext | None = None)
     """Execute task; return structured result."""
 ```
 
-- **integration_mode: "tool"** — Wrapped as a tool for the Orchestrator via `get_agent_tools()`
+- **integration_mode: "tool"** — Registered in `AgentRegistry`; Orchestrator invokes via `delegate_task` tool
 - **integration_mode: "handoff"** — Reserved for future direct routing
 
 ### `SchedulerProvider`
@@ -423,11 +423,11 @@ See [event_bus.md](event_bus.md) for full details.
 
 The **Orchestrator** is the main agent that coordinates user requests.
 
-- **Tools:** Core tools (`core/tools/`) + `loader.get_all_tools()` (ToolProvider) + `loader.get_agent_tools()` (AgentProvider with `integration_mode: "tool"`)
-- **Instructions:** Include `loader.get_capabilities_summary()` — natural-language list of tools and agents
-- **Routing:** Orchestrator chooses which tool or agent to call based on the user message and capabilities
+- **Tools:** Core tools (`core/tools/`) + `loader.get_all_tools()` (ToolProvider) + delegation tools (`list_agents`, `delegate_task`, `create_agent`, `list_models`, `list_available_tools`)
+- **Instructions:** Include `loader.get_capabilities_summary()` — natural-language list of tools; agents are available on-demand via `list_agents`
+- **Routing:** Orchestrator discovers agents via `list_agents` (with cost/capability metadata) and delegates via `delegate_task`. Cost-aware: prefers lower-cost agents for simple tasks, higher-capability agents for complex ones.
 
-Agent extensions in `tool` mode are wrapped as callable tools; the Orchestrator invokes them when it decides a specialized agent is needed.
+Agent extensions are registered in `AgentRegistry` at startup. The Orchestrator discovers them via `list_agents` and invokes them via `delegate_task` — agent descriptions are not in the system prompt, loaded on-demand. See [ADR 017](adr/017-agents-registry.md) and [ADR 019](adr/019-cost-capability-routing.md).
 
 ---
 

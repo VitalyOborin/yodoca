@@ -73,13 +73,19 @@ def _extract_final_result(content: str) -> str | None:
 
 
 def _build_step_prompt(
-    state: TaskState, max_steps: int, output_channel: str | None = None
+    state: TaskState,
+    max_steps: int,
+    output_channel: str | None = None,
+    predecessor_result: str | None = None,
 ) -> str:
     """Build prompt for next step including task context."""
     parts = [
         f"Task goal: {state.goal}",
         f"Step {state.step + 1} of {max_steps}.",
     ]
+    if predecessor_result:
+        content = predecessor_result[:500] if len(predecessor_result) > 500 else predecessor_result
+        parts.append(f"Previous step result (from predecessor task):\n{content}")
     if state.context.get("subtask_results"):
         parts.append("Subtask results:")
         for sr in state.context["subtask_results"]:
@@ -240,6 +246,9 @@ async def _load_task(db: Any, task_id: str) -> TaskRecord | None:
         lease_exp=d["lease_exp"],
         created_at=d["created_at"] or 0,
         updated_at=d["updated_at"] or 0,
+        after_task_id=d.get("after_task_id"),
+        chain_id=d.get("chain_id"),
+        chain_order=d.get("chain_order"),
     )
 
 
@@ -534,6 +543,7 @@ async def run_agent_loop(
     """Run ReAct loop for AgentProvider. Returns {'content': str} or raises."""
     max_steps = task.payload.get("max_steps", 20)
     output_channel = task.payload.get("output_channel")
+    predecessor_result = task.payload.get("predecessor_result")
     step_context = AgentInvocationContext(
         conversation_summary=state.partial_result,
         correlation_id=task.run_id,
@@ -541,7 +551,10 @@ async def run_agent_loop(
 
     async def invoke_fn() -> StepOutcome:
         response = await agent.invoke(
-            _build_step_prompt(state, max_steps, output_channel), step_context
+            _build_step_prompt(
+                state, max_steps, output_channel, predecessor_result
+            ),
+            step_context,
         )
         return StepOutcome(
             content=response.content,
@@ -574,10 +587,13 @@ async def run_orchestrator_loop(
     """Run ReAct loop for orchestrator (ctx.invoke_agent_background). Returns {'content': str} or raises."""
     max_steps = task.payload.get("max_steps", 20)
     output_channel = task.payload.get("output_channel")
+    predecessor_result = task.payload.get("predecessor_result")
 
     async def invoke_fn() -> StepOutcome:
         content = await ctx.invoke_agent_background(
-            _build_step_prompt(state, max_steps, output_channel)
+            _build_step_prompt(
+                state, max_steps, output_channel, predecessor_result
+            )
         )
         return StepOutcome(content=content, status="success")
 

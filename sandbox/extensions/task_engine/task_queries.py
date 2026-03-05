@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Any
 
+from chains import cancel_chain_downstream
 from models import ActiveTasksResult, CancelTaskResult, TaskStatusResult
 from state import TaskState
 
@@ -62,7 +63,7 @@ async def list_active_tasks(db: Any) -> ActiveTasksResult:
     cursor = await conn.execute(
         """
         SELECT * FROM agent_task
-        WHERE status IN ('pending', 'running', 'retry_scheduled', 'waiting_subtasks', 'human_review')
+        WHERE status IN ('pending', 'blocked', 'running', 'retry_scheduled', 'waiting_subtasks', 'human_review')
         ORDER BY priority DESC, created_at ASC
         """
     )
@@ -100,10 +101,12 @@ async def list_active_tasks(db: Any) -> ActiveTasksResult:
 
 
 async def cancel_task(db: Any, task_id: str, reason: str = "") -> CancelTaskResult:
-    """Cancel a task. Works on pending, running, waiting, and human_review tasks."""
+    """Cancel a task. Works on pending, blocked, running, waiting, and human_review tasks.
+    Also cascades cancellation to downstream blocked tasks (ADR 018)."""
     conn = await db.ensure_conn()
     cancellable = (
         "pending",
+        "blocked",
         "retry_scheduled",
         "running",
         "waiting_subtasks",
@@ -116,6 +119,7 @@ async def cancel_task(db: Any, task_id: str, reason: str = "") -> CancelTaskResu
     )
     await conn.commit()
     if cursor.rowcount:
+        await cancel_chain_downstream(db, task_id, reason or "Cancelled by user")
         return CancelTaskResult(
             task_id=task_id, status="cancelled", message="Task cancelled"
         )
