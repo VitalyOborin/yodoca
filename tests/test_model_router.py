@@ -1,4 +1,4 @@
-"""Tests for ModelRouter: config loading, get_model, register_agent_config, supports_hosted_tools, get_capability."""
+"""Tests for ModelRouter behavior and provider routing."""
 
 from unittest.mock import MagicMock
 
@@ -98,6 +98,37 @@ class TestModelRouterConfig:
         assert router.get_default_provider() == "openai"
         model = router.get_model("default")
         assert model is not None
+
+    def test_routes_litellm_openai_compatible_provider(self) -> None:
+        settings = {
+            "providers": {
+                "zai": {
+                    "type": "litellm_openai_compatible",
+                    "api_key_secret": "openai_api_key",
+                    "api_base": "https://api.z.ai/api/paas/v4",
+                    "litellm_model_prefix": "openai",
+                },
+            },
+            "agents": {
+                "default": {"provider": "zai", "model": "glm-4.7-flash"},
+            },
+        }
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
+        stub_provider = MagicMock()
+        expected_model = object()
+        stub_provider.build.return_value = expected_model
+        router._providers["litellm_openai_compatible"] = stub_provider
+
+        model = router.get_model("default")
+
+        assert model is expected_model
+        stub_provider.build.assert_called_once()
+        args = stub_provider.build.call_args.args
+        provider_cfg = args[0]
+        assert provider_cfg.type == "litellm_openai_compatible"
+        assert provider_cfg.api_base == "https://api.z.ai/api/paas/v4"
+        assert provider_cfg.litellm_model_prefix == "openai"
+        assert args[1] == "glm-4.7-flash"
 
 
 class TestModelRouterRegisterAgentConfig:

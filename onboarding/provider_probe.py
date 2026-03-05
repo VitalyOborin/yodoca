@@ -74,7 +74,8 @@ async def probe_provider(
             return False, "No API key"
         return await probe_anthropic(api_key)
 
-    if ptype == "openai_compatible":
+    if ptype in {"openai_compatible", "litellm_openai_compatible"}:
+        base_url = config.get("api_base") or base_url
         key = api_key or "not-required"
         return await probe_openai_compatible(base_url, key)
 
@@ -93,7 +94,7 @@ async def probe_all(
     }
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     out: dict[str, tuple[bool, str]] = {}
-    for pid, res in zip(tasks, results):
+    for pid, res in zip(tasks, results, strict=False):
         if isinstance(res, Exception):
             out[pid] = (False, str(res))
         else:

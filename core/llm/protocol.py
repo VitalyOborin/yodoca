@@ -25,19 +25,22 @@ class ProviderConfig:
     """Provider configuration from config/settings.yaml."""
 
     id: str
-    type: str  # openai_compatible | anthropic
+    type: str  # openai_compatible | anthropic | litellm_openai_compatible
     base_url: str | None = None
+    api_base: str | None = None
     api_key_secret: str | None = None
     api_key_literal: str | None = None
+    litellm_model_prefix: str | None = None
     default_headers: dict[str, str] = field(default_factory=dict)
     # False for local/third-party providers (LM Studio, OpenRouter, Anthropic, etc.)
-    # that do not support OpenAI hosted tool types (web_search_preview, computer_use_preview).
+    # that do not support OpenAI hosted tool types
+    # (web_search_preview, computer_use_preview).
     supports_hosted_tools: bool = True
 
 
 @runtime_checkable
 class ModelRouterProtocol(Protocol):
-    """Contract for model resolution. Used by Loader, ExtensionContext, CoreToolsProvider."""
+    """Contract for model resolution used by core and extensions."""
 
     def get_model(self, agent_id: str) -> Any: ...
     def get_default_provider(self) -> str | None: ...

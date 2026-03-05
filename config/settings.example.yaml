@@ -38,6 +38,14 @@ providers:
   openai:
     api_key_secret: OPENAI_API_KEY
     type: openai_compatible
+  # Optional: LiteLLM path for chat/completions-only OpenAI-compatible APIs.
+  # Example: z.ai coding endpoint.
+  # zai:
+  #   type: litellm_openai_compatible
+  #   api_key_secret: ZAI_API_KEY
+  #   api_base: https://api.z.ai/api/paas/v4
+  #   litellm_model_prefix: openai
+  #   supports_hosted_tools: false
 session:
   timeout_sec: 1800
 supervisor:

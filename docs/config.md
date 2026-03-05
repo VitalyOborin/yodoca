@@ -52,6 +52,12 @@ providers:
   anthropic:
     type: anthropic
     api_key_secret: ANTHROPIC_API_KEY
+  zai:
+    type: litellm_openai_compatible
+    api_key_secret: ZAI_API_KEY
+    api_base: https://api.z.ai/api/paas/v4
+    litellm_model_prefix: openai
+    supports_hosted_tools: false
 ```
 
 ### `event_bus`

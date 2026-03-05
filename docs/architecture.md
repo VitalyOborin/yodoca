@@ -185,6 +185,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/llm/router.py`
 - **Role:** Resolves `agent_id` → cached Model instance via `config/settings.yaml`. Supports multiple providers:
   - `openai` / `openai_compatible` — OpenAI, LM Studio, OpenRouter, etc.
+  - `litellm_openai_compatible` — LiteLLM path for chat/completions-only OpenAI-compatible endpoints.
   - `anthropic` — Claude models via Anthropic API.
 - **Features:** per-agent model caching, `supports_hosted_tools()` check, provider health checks, dynamic agent config registration from extension manifests.
 - **See:** [llm.md](llm.md)
