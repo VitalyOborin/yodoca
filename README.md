@@ -192,7 +192,7 @@ On success, the wizard writes `config/settings.yaml` and stores secrets in the O
 LLM providers and models are configured in `config/settings.yaml`:
 
 - `agents` — per-agent: `provider`, `model`, optional `instructions`, `temperature`, `max_tokens`
-- `providers` — API definitions: `type` (openai_compatible / anthropic), `base_url`, `api_key_secret` or `api_key_literal`
+- `providers` — API definitions: `type` (`openai_compatible` / `litellm_openai_compatible` / `anthropic`), `base_url` or `api_base`, `api_key_secret` or `api_key_literal`
 
 Secrets live in the OS keyring (when available) or `.env`; never store API keys in YAML. See [docs/configuration.md](docs/configuration.md), [docs/secrets.md](docs/secrets.md), and `config/settings.yaml` for examples.
 
@@ -388,4 +388,3 @@ Inspired by practical lessons from building local-first agent runtimes:
 - move capabilities to extensions
 - make background work observable and durable
 - optimize for iteration and real-world workflows
-

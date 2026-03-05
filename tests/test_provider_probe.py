@@ -59,6 +59,25 @@ async def test_probe_provider_openai_compatible(httpx_mock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_probe_provider_litellm_openai_compatible(httpx_mock) -> None:
+    """probe_provider routes litellm_openai_compatible to OpenAI-compatible probe."""
+    httpx_mock.add_response(
+        url="https://api.z.ai/api/paas/v4/models",
+        json={"data": []},
+    )
+    ok, msg = await probe_provider(
+        "zai",
+        {
+            "type": "litellm_openai_compatible",
+            "api_base": "https://api.z.ai/api/paas/v4",
+            "api_key_secret": "ZAI_API_KEY",
+        },
+        {"ZAI_API_KEY": "zai-test"},
+    )
+    assert ok is True
+
+
+@pytest.mark.asyncio
 async def test_probe_all_returns_per_provider_results(httpx_mock) -> None:
     """probe_all returns dict of provider_id -> (ok, message)."""
     httpx_mock.add_response(url="https://api.openai.com/v1/models", json={"data": []})

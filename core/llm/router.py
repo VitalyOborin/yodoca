@@ -5,9 +5,13 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
+from core.llm.providers import (
+    AnthropicProvider,
+    LiteLLMOpenAICompatibleProvider,
+    OpenAICompatibleProvider,
+)
 
 T = TypeVar("T")
-from core.llm.providers import AnthropicProvider, OpenAICompatibleProvider
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +21,10 @@ def _dict_to_provider_config(provider_id: str, data: dict[str, Any]) -> Provider
         id=provider_id,
         type=str(data.get("type", "openai_compatible")),
         base_url=data.get("base_url"),
+        api_base=data.get("api_base"),
         api_key_secret=data.get("api_key_secret"),
         api_key_literal=data.get("api_key_literal"),
+        litellm_model_prefix=data.get("litellm_model_prefix"),
         default_headers=dict(data.get("default_headers") or {}),
         supports_hosted_tools=bool(data.get("supports_hosted_tools", True)),
     )
@@ -69,6 +75,9 @@ class ModelRouter:
         self._providers["openai"] = openai_compat
         self._providers["openai_compatible"] = openai_compat
         self._providers["anthropic"] = AnthropicProvider()
+        self._providers["litellm_openai_compatible"] = (
+            LiteLLMOpenAICompatibleProvider()
+        )
 
     def get_default_provider(self) -> str | None:
         """Return provider id from default agent config, or None."""
@@ -115,7 +124,8 @@ class ModelRouter:
         )
         if not agent_cfg:
             raise KeyError(
-                f"No model config for agent_id={agent_id!r} and no 'default' in config/settings.yaml"
+                f"No model config for agent_id={agent_id!r} and no "
+                "'default' in config/settings.yaml"
             )
         provider_cfg = self._provider_configs.get(agent_cfg.provider)
         if not provider_cfg:
@@ -125,7 +135,8 @@ class ModelRouter:
         provider = self._providers.get(provider_cfg.type)
         if not provider:
             raise KeyError(
-                f"Unknown provider type {provider_cfg.type!r} for provider id {provider_cfg.id!r}"
+                f"Unknown provider type {provider_cfg.type!r} "
+                f"for provider id {provider_cfg.id!r}"
             )
         api_key = self._resolve_key(provider_cfg)
         model_instance = provider.build(provider_cfg, agent_cfg.model, api_key)
@@ -141,7 +152,8 @@ class ModelRouter:
 
         Args:
             cap: Capability protocol type (e.g. EmbeddingCapability).
-            provider_id: Explicit provider ID. None = first provider that supports the capability.
+            provider_id: Explicit provider ID.
+                None = first provider supporting the capability.
 
         Returns:
             Capability instance or None if no provider supports it.
@@ -165,7 +177,7 @@ class ModelRouter:
         return None
 
     def supports_hosted_tools(self, agent_id: str) -> bool:
-        """Return True if the provider for this agent supports OpenAI hosted tool types."""
+        """Return True if the provider supports OpenAI hosted tool types."""
         agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get(
             "default"
         )

@@ -9,7 +9,7 @@ The **ModelRouter** resolves agent identifiers to SDK-compatible Model instances
 | Component | Location | Role |
 |-----------|----------|------|
 | **ModelRouter** | `core/llm/router.py` | Resolves `agent_id` → Model instance |
-| **Providers** | `core/llm/providers/` | OpenAI-compatible, Anthropic |
+| **Providers** | `core/llm/providers/` | OpenAI-compatible (Responses), LiteLLM OpenAI-compatible (chat/completions), Anthropic |
 | **Settings** | `config/settings.yaml` | `agents`, `providers` sections |
 
 ---
@@ -36,14 +36,23 @@ providers:
   anthropic:
     type: anthropic
     api_key_secret: ANTHROPIC_API_KEY
+
+  zai:
+    type: litellm_openai_compatible
+    api_key_secret: ZAI_API_KEY
+    api_base: https://api.z.ai/api/paas/v4
+    litellm_model_prefix: openai
+    supports_hosted_tools: false
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | str | `openai_compatible` or `anthropic` |
+| `type` | str | `openai_compatible`, `litellm_openai_compatible`, or `anthropic` |
 | `base_url` | str | API base URL (omit for OpenAI default) |
+| `api_base` | str | LiteLLM base URL (used by `litellm_openai_compatible`) |
 | `api_key_secret` | str | Env var name for API key |
 | `api_key_literal` | str | Literal key (for local/dev) |
+| `litellm_model_prefix` | str | Optional LiteLLM model prefix (default `openai`) |
 | `default_headers` | dict | Extra HTTP headers |
 | `supports_hosted_tools` | bool | Whether provider supports OpenAI hosted tools (default true) |
 
@@ -88,6 +97,14 @@ Works with OpenAI API and compatible endpoints (OpenAI, OpenRouter, LM Studio, O
 Claude models via Anthropic API.
 
 - **api_key_secret:** `ANTHROPIC_API_KEY`
+
+### litellm_openai_compatible
+
+Uses LiteLLM (`LitellmModel`) for providers that only expose chat/completions and do not support the OpenAI Responses API.
+
+- **api_base:** Provider base URL for chat/completions
+- **litellm_model_prefix:** Prefix for bare model IDs (default `openai`)
+- **model naming:** If model already includes `/`, it is used as-is; otherwise `litellm_model_prefix/model` is used
 
 ---
 
