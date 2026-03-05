@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from core.agents.factory import AgentFactory, AgentSpec
 from core.agents.registry import AgentRecord, AgentRegistry
 from core.extensions.contract import AgentInvocationContext
+from core.llm.catalog import CapabilityTier, CostTier, ModelCatalog
 
 
 class AgentInfo(BaseModel):
@@ -18,6 +19,9 @@ class AgentInfo(BaseModel):
     name: str
     description: str
     model: str | None = None
+    cost_tier: CostTier | None = None
+    capability_tier: CapabilityTier | None = None
+    strengths: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     busy: bool = False
 
@@ -52,12 +56,36 @@ class ListAvailableToolsResult(BaseModel):
     tool_ids: list[str] = Field(default_factory=list)
 
 
-def _record_to_agent_info(record: AgentRecord, busy: bool) -> AgentInfo:
+class ModelInfoResult(BaseModel):
+    """Single model entry for list_models result."""
+
+    id: str
+    cost_tier: CostTier
+    capability_tier: CapabilityTier
+    strengths: list[str] = Field(default_factory=list)
+    context_window: int | None = None
+
+
+class ListModelsResult(BaseModel):
+    """Result of list_models tool."""
+
+    models: list[ModelInfoResult] = Field(default_factory=list)
+
+
+def _record_to_agent_info(
+    record: AgentRecord,
+    busy: bool,
+    catalog: ModelCatalog | None = None,
+) -> AgentInfo:
+    info = catalog.get_info(record.model) if catalog and record.model else None
     return AgentInfo(
         id=record.id,
         name=record.name,
         description=record.description,
         model=record.model,
+        cost_tier=info.cost_tier if info else None,
+        capability_tier=info.capability_tier if info else None,
+        strengths=list(info.strengths) if info else [],
         tools=list(record.tools),
         busy=busy,
     )
@@ -67,8 +95,9 @@ def make_delegation_tools(
     registry: AgentRegistry,
     factory: AgentFactory | None = None,
     get_available_tool_ids: Callable[[], list[str]] | None = None,
+    catalog: ModelCatalog | None = None,
 ) -> list[Any]:
-    """Create list_agents, delegate_task, and optionally create_agent tools."""
+    """Create list_agents, delegate_task, optionally create_agent and list_models."""
 
     @function_tool
     async def list_agents(available_only: bool = False) -> ListAgentsResult:
@@ -77,7 +106,7 @@ def make_delegation_tools(
         available_only: if True, only returns agents that are not currently busy."""
         records = registry.list_agents(available_only=available_only)
         infos = [
-            _record_to_agent_info(r, registry.is_busy(r.id))
+            _record_to_agent_info(r, registry.is_busy(r.id), catalog)
             for r in records
         ]
         return ListAgentsResult(agents=infos)
@@ -117,6 +146,30 @@ def make_delegation_tools(
         )
 
     tools_list: list[Any] = [list_agents, delegate_task]
+
+    if catalog is not None:
+
+        @function_tool
+        async def list_models() -> ListModelsResult:
+            """List available models with cost and capability metadata.
+
+            Use when choosing a model for create_agent.
+            cost_tier: free | low | medium | high
+            capability_tier: basic | standard | advanced | frontier
+            """
+            models = [
+                ModelInfoResult(
+                    id=m.id,
+                    cost_tier=m.cost_tier,
+                    capability_tier=m.capability_tier,
+                    strengths=list(m.strengths),
+                    context_window=m.context_window,
+                )
+                for m in catalog.list_models()
+            ]
+            return ListModelsResult(models=models)
+
+        tools_list.append(list_models)
 
     if factory is not None:
 

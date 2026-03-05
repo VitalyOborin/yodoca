@@ -306,3 +306,55 @@ class TestDelegationToolsCreateAgent:
         assert len(tools) == 3
         names = [t.name for t in tools]
         assert "list_available_tools" in names
+
+    def test_make_delegation_tools_with_catalog_includes_list_models(
+        self,
+    ) -> None:
+        from core.agents.delegation_tools import make_delegation_tools
+        from core.llm.catalog import ModelCatalog
+
+        registry = AgentRegistry()
+        catalog = ModelCatalog()
+        tools = make_delegation_tools(registry, catalog=catalog)
+        assert len(tools) == 3
+        names = [t.name for t in tools]
+        assert "list_agents" in names
+        assert "delegate_task" in names
+        assert "list_models" in names
+
+    @pytest.mark.asyncio
+    async def test_list_agents_with_catalog_returns_enriched_info(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+        from core.llm.catalog import ModelCatalog
+
+        registry = AgentRegistry()
+        catalog = ModelCatalog()
+        record = AgentRecord(
+            id="test_agent",
+            name="Test",
+            description="Test agent",
+            model="gpt-5-mini",
+            tools=["kv"],
+            source="static",
+        )
+        registry.register(record, MagicMock())
+        tools = make_delegation_tools(registry, catalog=catalog)
+        list_agents_tool = next(t for t in tools if t.name == "list_agents")
+        args = json.dumps({"available_only": False})
+        ctx = ToolContext(
+            context=object(),
+            tool_name="list_agents",
+            tool_call_id="test-call-id",
+            tool_arguments=args,
+        )
+        result = await list_agents_tool.on_invoke_tool(ctx, args)
+        assert len(result.agents) == 1
+        agent = result.agents[0]
+        assert agent.id == "test_agent"
+        assert agent.cost_tier == "low"
+        assert agent.capability_tier == "standard"
+        assert "speed" in agent.strengths

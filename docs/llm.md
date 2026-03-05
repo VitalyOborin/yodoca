@@ -9,8 +9,9 @@ The **ModelRouter** resolves agent identifiers to SDK-compatible Model instances
 | Component | Location | Role |
 |-----------|----------|------|
 | **ModelRouter** | `core/llm/router.py` | Resolves `agent_id` → Model instance |
+| **ModelCatalog** | `core/llm/catalog.py` | Model metadata (cost, capability, strengths) |
 | **Providers** | `core/llm/providers/` | OpenAI-compatible, Anthropic |
-| **Settings** | `config/settings.yaml` | `agents`, `providers` sections |
+| **Settings** | `config/settings.yaml` | `agents`, `providers`, `models` sections |
 
 ---
 
@@ -135,7 +136,76 @@ Check each configured provider; return `provider_id → ok`.
 
 ---
 
+## ModelCatalog (Cost/Capability Routing)
+
+The **ModelCatalog** (`core/llm/catalog.py`) provides structured metadata about models for cost-aware delegation decisions. Separate from ModelRouter (SRP: Router resolves SDK instances, Catalog provides discovery metadata).
+
+### Type definitions
+
+Strict `Literal` types prevent synonym confusion for the Orchestrator:
+
+- `CostTier = Literal["free", "low", "medium", "high"]`
+- `CapabilityTier = Literal["basic", "standard", "advanced", "frontier"]`
+
+### ModelInfo
+
+```python
+@dataclass(frozen=True)
+class ModelInfo:
+    id: str
+    cost_tier: CostTier
+    capability_tier: CapabilityTier
+    strengths: tuple[str, ...]
+    context_window: int | None = None
+```
+
+### Built-in defaults
+
+Common models ship with built-in metadata:
+
+| Model | Cost Tier | Capability Tier | Strengths |
+|-------|-----------|-----------------|-----------|
+| `gpt-5-mini` | low | standard | speed, general, cost-effective |
+| `gpt-5` | medium | advanced | reasoning, general, multilingual |
+| `gpt-5.2` | medium | advanced | reasoning, general, tool-use |
+| `gpt-5.2-codex` | high | frontier | code, reasoning, tool-use |
+| `gpt-4o-mini` | low | standard | speed, general, vision |
+| `gpt-4o` | medium | advanced | reasoning, vision, multilingual |
+
+### Settings override (`models` section)
+
+Users can override built-in defaults or register custom models:
+
+```yaml
+models:
+  # cost_tier: free | low | medium | high
+  # capability_tier: basic | standard | advanced | frontier
+  my-local-model:
+    cost_tier: free
+    capability_tier: basic
+    strengths: [speed, privacy]
+    context_window: 32000
+```
+
+Invalid tier values are rejected at startup with a clear error.
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `get_info(model_name)` | Returns `ModelInfo` or `None` for unknown models |
+| `list_models()` | Returns all known models, sorted by id |
+
+### Integration with delegation tools
+
+The `list_agents` tool enriches each agent's metadata with `cost_tier`, `capability_tier`, and `strengths` from the catalog. The `list_models` tool returns the full catalog for `create_agent` model selection.
+
+See [ADR 019](adr/019-cost-capability-routing.md).
+
+---
+
 ## References
 
 - [configuration.md](configuration.md) — Full settings reference
 - [extensions.md](extensions.md) — Agent extensions and `agent_config`
+- [ADR 019](adr/019-cost-capability-routing.md) — Cost/Capability Routing

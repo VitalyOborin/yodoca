@@ -48,6 +48,9 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [013](adr/013-web-search.md) | Web Search Extension |
 | [014](adr/014-agent-loop2.md) | Task Engine and Agent Loop |
 | [015](adr/015-skills.md) | Agent Skills System |
+| [017](adr/017-agents-registry.md) | Agent Registry and Dynamic Delegation |
+| [018](adr/018-task-chains.md) | Task Chains |
+| [019](adr/019-cost-capability-routing.md) | Cost/Capability Routing |
 
 ---
 
