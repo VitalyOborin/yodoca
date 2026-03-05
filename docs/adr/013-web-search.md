@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved.
+Accepted. Implemented.
 
 ## Context
 

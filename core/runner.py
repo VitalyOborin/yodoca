@@ -14,6 +14,7 @@ from core.agents.registry import AgentRegistry
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
 from core.llm import ModelRouter, ModelRouterProtocol
+from core.llm.catalog import ModelCatalog
 from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
 from core.terminal import reset_terminal_for_input
@@ -68,13 +69,14 @@ def _create_agent(
         return loader.resolve_tools(tool_ids, agent_id)
 
     factory = AgentFactory(model_router, tool_resolver, registry)
+    catalog = ModelCatalog(overrides=settings.get("models"))
     channel_tools = make_channel_tools(router) + [make_secure_input_tool(event_bus)]
     return create_orchestrator_agent(
         model_router=model_router,
         settings=settings,
         extension_tools=loader.get_all_tools(),
         delegation_tools=make_delegation_tools(
-            registry, factory, loader.get_available_tool_ids
+            registry, factory, loader.get_available_tool_ids, catalog
         ),
         capabilities_summary=loader.get_capabilities_summary(),
         channel_tools=channel_tools,

@@ -45,7 +45,8 @@ The agent process bootstrap in `core/runner.py`:
  9. loader.initialize_all(router)
 10. loader.detect_and_wire_all(router)     — ToolProvider, ChannelProvider, etc.
 11. loader.wire_event_subscriptions(event_bus)
-12. create_orchestrator_agent()            — core tools + extension tools + agent tools
+12. AgentRegistry + ModelCatalog
+13. create_orchestrator_agent()            — core + extension + delegation tools
     └─ router.set_agent()
 13. event_bus.start()
 14. loader.start_all()
@@ -69,7 +70,8 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
                                          ▼
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │                          Core (python -m core)                                 │
-│  Runner → Loader + EventBus + MessageRouter + ModelRouter + Orchestrator       │
+│  Runner → Loader + EventBus + MessageRouter + ModelRouter + AgentRegistry      │
+│        + ModelCatalog + Orchestrator                                          │
 └────────────────────────────────────────────────────────────────────────────────┘
      │              │                │                │                │
      ▼              ▼                ▼                ▼                ▼
@@ -77,8 +79,15 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
 │  Loader   │ │  EventBus  │ │ MessageRouter │ │ ModelRouter │ │ Orchestrator │
 │ -discover │ │ -journal   │ │ -channels     │ │ -providers  │ │ -core tools  │
 │ -load     │ │ -dispatch  │ │ -invoke_agent │ │ -get_model  │ │ -ext tools   │
-│ -wire     │ │ -recovery  │ │ -middleware   │ │ -caching    │ │ -agent tools │
+│ -wire     │ │ -recovery  │ │ -middleware   │ │ -caching    │ │ -deleg tools │
 └───────────┘ └────────────┘ └───────────────┘ └─────────────┘ └──────────────┘
+                                                      │
+                                        ┌─────────────┴──────────────┐
+                                        │ AgentRegistry │ModelCatalog│
+                                        │ -register     │-get_info   │
+                                        │ -invoke       │-list_models│
+                                        │ -list_agents  │-cost tiers │
+                                        └────────────────────────────┘
      │              │                │                │                │
      └──────────────┴────────────────┴────────────────┴────────────────┘
                                          │
@@ -153,10 +162,23 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Role:** Main AI agent. Created via `create_orchestrator_agent()` factory with:
   - **core tools** — from `CoreToolsProvider` (file, restart, channel tools)
   - **extension tools** — from ToolProvider extensions (`loader.get_all_tools()`)
-  - **agent tools** — from AgentProvider extensions in `tool` mode (`loader.get_agent_tools()`)
+  - **delegation tools** — `list_agents`, `delegate_task`, `create_agent`, `list_models`, `list_available_tools` (from `make_delegation_tools()`)
   - **capabilities_summary** — natural-language summary injected into the prompt template
   - **instructions** — resolved from `agents.orchestrator.instructions` in settings (supports Jinja2 templates)
   - **model** — resolved via `model_router.get_model("orchestrator")`
+
+### AgentRegistry
+
+- **Location:** `core/agents/registry.py`
+- **Role:** Central registry of available agents. Populated by Loader from `AgentProvider` extensions at startup. Queried by delegation tools (`list_agents`, `delegate_task`). Tracks active invocations per agent.
+- **Features:** register/unregister, invoke with busy tracking, TTL-based cleanup for dynamic agents, `on_unregister` callback for resource cleanup.
+- **See:** [ADR 017](adr/017-agents-registry.md)
+
+### ModelCatalog
+
+- **Location:** `core/llm/catalog.py`
+- **Role:** Maps model names to structured metadata (`cost_tier`, `capability_tier`, `strengths`, `context_window`). Enables cost-aware delegation by the Orchestrator. Built-in defaults for common models; user overrides via `settings.yaml` `models` section.
+- **See:** [llm.md](llm.md#modelcatalog-costcapability-routing), [ADR 019](adr/019-cost-capability-routing.md)
 
 ### ModelRouter
 
@@ -219,7 +241,9 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 - [event_bus.md](event_bus.md) — Event Bus
 - [event_bus-memory-flow.md](event_bus-memory-flow.md) — Detailed message flow
 - [memory.md](memory.md) — Memory system
-- [llm.md](llm.md) — Model routing
+- [llm.md](llm.md) — Model routing and ModelCatalog
 - [channels.md](channels.md) — Channel extensions
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [configuration.md](configuration.md) — Settings reference
+- [ADR 017](adr/017-agents-registry.md) — Agent Registry and Dynamic Delegation
+- [ADR 019](adr/019-cost-capability-routing.md) — Cost/Capability Routing

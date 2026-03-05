@@ -1,17 +1,29 @@
 agents:
   default:
     instructions: prompts/default.jinja2
-    model: gpt-5.2
+    model: gpt-5-mini
     provider: openai
   orchestrator:
-    instructions: prompts/default.jinja2
-    model: gpt-5.2
+    instructions: prompts/orchestrator.jinja2
+    model: gpt-5-mini
     provider: openai
 event_bus:
   batch_size: 3
   db_path: sandbox/data/event_journal.db
   max_retries: 3
   poll_interval: 5.0
+# Model catalog: cost and capability metadata for delegation routing.
+# Overrides built-in defaults. cost_tier: free|low|medium|high; capability_tier: basic|standard|advanced|frontier
+# models:
+#   gpt-5-mini:
+#     cost_tier: low
+#     capability_tier: standard
+#     strengths: [speed, general]
+#     context_window: 128000
+#   my-local-model:
+#     cost_tier: free
+#     capability_tier: basic
+#     strengths: [speed, privacy]
 extensions:
   embedding:
     default_model: text-embedding-3-large

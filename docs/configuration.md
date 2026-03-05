@@ -63,6 +63,30 @@ LLM API endpoints and credentials. See [llm.md](llm.md).
 
 ---
 
+### models
+
+Model metadata for cost/capability routing. Overrides built-in defaults or registers custom models. See [llm.md](llm.md#modelcatalog-costcapability-routing).
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `models.<id>.cost_tier` | str | `free`, `low`, `medium`, or `high` |
+| `models.<id>.capability_tier` | str | `basic`, `standard`, `advanced`, or `frontier` |
+| `models.<id>.strengths` | list[str] | e.g. `[speed, code, reasoning]` |
+| `models.<id>.context_window` | int | Context window size in tokens |
+
+Invalid tier values are rejected at startup. Built-in defaults exist for common OpenAI models; the `models` section is only needed for overrides or custom models.
+
+```yaml
+models:
+  my-local-model:
+    cost_tier: free
+    capability_tier: basic
+    strengths: [speed, privacy]
+    context_window: 32000
+```
+
+---
+
 ### event_bus
 
 Event Bus storage and dispatch. See [event_bus.md](event_bus.md).
