@@ -47,6 +47,42 @@ class CancelTaskResult(BaseModel):
     message: str
 
 
+# --- Chain models (ADR 018) ---
+
+
+class ChainStep(BaseModel):
+    """Input model for one step in submit_chain."""
+
+    goal: str
+    agent_id: str = "orchestrator"
+
+
+class ChainTaskInfo(BaseModel):
+    """Per-task info in chain result."""
+
+    task_id: str
+    goal: str
+    agent_id: str
+    chain_order: int
+    status: str
+
+
+class SubmitChainResult(BaseModel):
+    """Result of submit_chain tool."""
+
+    chain_id: str
+    tasks: list[ChainTaskInfo] = Field(default_factory=list)
+    message: str
+
+
+class ChainStatusResult(BaseModel):
+    """Result of get_chain_status tool."""
+
+    chain_id: str
+    status: str  # overall: done, failed, running, blocked, cancelled
+    tasks: list[ChainTaskInfo] = Field(default_factory=list)
+
+
 # --- Internal dataclasses (DB row mapping) ---
 
 
@@ -70,6 +106,9 @@ class TaskRecord:
     lease_exp: float | None
     created_at: float
     updated_at: float
+    after_task_id: str | None = None
+    chain_id: str | None = None
+    chain_order: int | None = None
 
 
 @dataclass

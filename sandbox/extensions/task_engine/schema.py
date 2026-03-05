@@ -1,6 +1,7 @@
 """Task Engine SQLite schema. Creates agent_task and task_step tables."""
 
 import logging
+import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -8,6 +9,13 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 
 _BUSY_TIMEOUT_MS = 5000
+
+# Migration: ADR 018 task chains — after_task_id, chain_id, chain_order
+_MIGRATIONS = [
+    "ALTER TABLE agent_task ADD COLUMN after_task_id TEXT REFERENCES agent_task(task_id)",
+    "ALTER TABLE agent_task ADD COLUMN chain_id TEXT",
+    "ALTER TABLE agent_task ADD COLUMN chain_order INTEGER",
+]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_task (
@@ -53,6 +61,25 @@ CREATE INDEX IF NOT EXISTS idx_ts_task ON task_step(task_id, step_no);
 """
 
 
+async def _run_migrations(conn: aiosqlite.Connection) -> None:
+    """Run schema migrations (ADR 018: task chains). Idempotent."""
+    for sql in _MIGRATIONS:
+        try:
+            await conn.execute(sql)
+            await conn.commit()
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+    # Create indexes for chain columns (idempotent)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_at_after ON agent_task(after_task_id)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_at_chain ON agent_task(chain_id)"
+    )
+    await conn.commit()
+
+
 class TaskEngineDb:
     """SQLite connection for Task Engine. One connection per instance."""
 
@@ -70,6 +97,7 @@ class TaskEngineDb:
             await self._conn.execute(f"PRAGMA busy_timeout={self._busy_timeout}")
             await self._conn.executescript(_SCHEMA)
             await self._conn.commit()
+            await _run_migrations(self._conn)
             logger.debug("task_engine: schema ensured at %s", self._db_path)
         return self._conn
 
