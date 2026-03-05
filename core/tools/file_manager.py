@@ -9,8 +9,21 @@ from typing import Literal
 
 from agents import ApplyPatchTool, apply_diff, function_tool
 from agents.editor import ApplyPatchOperation, ApplyPatchResult
+from pydantic import BaseModel, Field
 
 from core.tools.sandbox import SANDBOX_DIR, resolve_sandbox_path
+
+
+class FileResult(BaseModel):
+    """Result of file tool. Unified structure for all actions."""
+
+    success: bool
+    action: str = ""
+    path: str = ""
+    content: str | None = None
+    message: str = ""
+    entries: list[str] = Field(default_factory=list)
+    error: str | None = None
 
 
 class SandboxEditor:
@@ -61,75 +74,166 @@ def _rel(p: Path) -> str:
     return p.relative_to(SANDBOX_DIR).as_posix()
 
 
-def _file_read(target: Path) -> str:
+def _file_read(target: Path) -> FileResult:
     if not target.is_file():
-        return f"Error: not a file or does not exist: {_rel(target)}"
-    return target.read_text(encoding="utf-8")
+        return FileResult(
+            success=False,
+            action="read",
+            path=_rel(target),
+            error=f"not a file or does not exist: {_rel(target)}",
+        )
+    return FileResult(
+        success=True,
+        action="read",
+        path=_rel(target),
+        content=target.read_text(encoding="utf-8"),
+    )
 
 
-def _file_write(target: Path, content: str | None) -> str:
+def _file_write(target: Path, content: str | None) -> FileResult:
     if content is None:
-        return "Error: content is required for write action"
+        return FileResult(
+            success=False,
+            action="write",
+            error="content is required for write action",
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return f"Wrote {_rel(target)}"
+    rel_path = _rel(target)
+    return FileResult(
+        success=True, action="write", path=rel_path, message=f"Wrote {rel_path}"
+    )
 
 
-def _file_delete(target: Path) -> str:
+def _file_delete(target: Path) -> FileResult:
     if not target.exists():
-        return f"Error: not found: {_rel(target)}"
+        rel_path = _rel(target)
+        return FileResult(
+            success=False,
+            action="delete",
+            path=rel_path,
+            error=f"not found: {rel_path}",
+        )
     if target.is_file():
         target.unlink()
-        return f"Deleted file {_rel(target)}"
+        rel_path = _rel(target)
+        return FileResult(
+            success=True,
+            action="delete",
+            path=rel_path,
+            message=f"Deleted file {rel_path}",
+        )
     if target.is_dir():
         if any(target.iterdir()):
-            return f"Error: directory not empty: {_rel(target)}"
+            return FileResult(
+                success=False,
+                action="delete",
+                path=_rel(target),
+                error=f"directory not empty: {_rel(target)}",
+            )
         target.rmdir()
-        return f"Deleted directory {_rel(target)}"
-    return f"Error: cannot delete: {_rel(target)}"
+        rel_path = _rel(target)
+        return FileResult(
+            success=True,
+            action="delete",
+            path=rel_path,
+            message=f"Deleted directory {rel_path}",
+        )
+    return FileResult(
+        success=False,
+        action="delete",
+        path=_rel(target),
+        error=f"cannot delete: {_rel(target)}",
+    )
 
 
-def _file_copy(target: Path, destination: str | None) -> str:
+def _file_copy(target: Path, destination: str | None) -> FileResult:
     if destination is None:
-        return "Error: destination is required for copy action"
+        return FileResult(
+            success=False,
+            action="copy",
+            error="destination is required for copy action",
+        )
     dst = resolve_sandbox_path(destination)
     if not target.exists():
-        return f"Error: source not found: {_rel(target)}"
+        return FileResult(
+            success=False,
+            action="copy",
+            path=_rel(target),
+            error=f"source not found: {_rel(target)}",
+        )
     if target.is_file():
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target, dst)
     else:
         shutil.copytree(target, dst)
-    return f"Copied {_rel(target)} -> {_rel(dst)}"
+    return FileResult(
+        success=True,
+        action="copy",
+        path=_rel(target),
+        message=f"Copied {_rel(target)} -> {_rel(dst)}",
+    )
 
 
-def _file_move(target: Path, destination: str | None) -> str:
+def _file_move(target: Path, destination: str | None) -> FileResult:
     if destination is None:
-        return "Error: destination is required for move action"
+        return FileResult(
+            success=False,
+            action="move",
+            error="destination is required for move action",
+        )
     dst = resolve_sandbox_path(destination)
     if not target.exists():
-        return f"Error: source not found: {_rel(target)}"
+        return FileResult(
+            success=False,
+            action="move",
+            path=_rel(target),
+            error=f"source not found: {_rel(target)}",
+        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     target.rename(dst)
-    return f"Moved {_rel(target)} -> {_rel(dst)}"
+    return FileResult(
+        success=True,
+        action="move",
+        path=_rel(target),
+        message=f"Moved {_rel(target)} -> {_rel(dst)}",
+    )
 
 
-def _file_stat(target: Path) -> str:
+def _file_stat(target: Path) -> FileResult:
     if not target.exists():
-        return f"Path does not exist: {_rel(target)}"
+        return FileResult(
+            success=True,
+            action="stat",
+            path=_rel(target),
+            message=f"Path does not exist: {_rel(target)}",
+        )
     if target.is_file():
-        return f"type=file, size={target.stat().st_size} bytes, path={_rel(target)}"
+        msg = f"type=file, size={target.stat().st_size} bytes, path={_rel(target)}"
+        return FileResult(success=True, action="stat", path=_rel(target), message=msg)
     if target.is_dir():
-        return f"type=directory, entries={sum(1 for _ in target.iterdir())}, path={_rel(target)}"
-    return f"type=unknown, path={_rel(target)}"
+        n = sum(1 for _ in target.iterdir())
+        msg = f"type=directory, entries={n}, path={_rel(target)}"
+        return FileResult(success=True, action="stat", path=_rel(target), message=msg)
+    return FileResult(
+        success=True,
+        action="stat",
+        path=_rel(target),
+        message=f"type=unknown, path={_rel(target)}",
+    )
 
 
-def _file_list(target: Path) -> str:
+def _file_list(target: Path) -> FileResult:
     if not target.is_dir():
-        return f"Error: not a directory: {_rel(target)}"
+        return FileResult(
+            success=False,
+            action="list",
+            path=_rel(target),
+            error=f"not a directory: {_rel(target)}",
+        )
     items = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    lines = [f"{'[DIR]' if p.is_dir() else '     '} {p.name}" for p in items]
-    return "\n".join(lines) if lines else "(empty)"
+    entries = [f"{'[DIR]' if p.is_dir() else '     '} {p.name}" for p in items]
+    return FileResult(success=True, action="list", path=_rel(target), entries=entries)
 
 
 @function_tool(name_override="file", strict_mode=False)
@@ -138,8 +242,8 @@ def file(
     path: str,
     content: str | None = None,
     destination: str | None = None,
-) -> str:
-    """Unified file operations. Works ONLY within the sandbox directory; paths outside are rejected."""
+) -> FileResult:
+    """Unified file operations. Works ONLY within sandbox; paths outside are rejected."""
     try:
         target = resolve_sandbox_path(path)
         SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,8 +261,11 @@ def file(
             return _file_stat(target)
         if action == "list":
             return _file_list(target)
-        return f"Error: unknown action: {action}"
+        return FileResult(
+            success=False, action=action, error=f"unknown action: {action}"
+        )
     except RuntimeError as e:
-        return str(e) if "Access denied" in str(e) else f"Error: {e}"
+        err = str(e) if "Access denied" in str(e) else f"Error: {e}"
+        return FileResult(success=False, action=action, path=path, error=err)
     except Exception as e:
-        return f"Error: {e}"
+        return FileResult(success=False, action=action, path=path, error=str(e))

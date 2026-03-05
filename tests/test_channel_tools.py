@@ -1,6 +1,7 @@
 """Tests for channel tools: list_channels, send_to_channel."""
 
 import json
+
 import pytest
 
 from core.extensions.contract import ChannelProvider
@@ -102,7 +103,7 @@ def _make_tool_ctx(tool_name: str, tool_arguments: str):
 
 
 class TestListChannelsToolOutput:
-    """list_channels returns typed JSON array."""
+    """list_channels returns structured ListChannelsResult."""
 
     @pytest.mark.asyncio
     async def test_empty_returns_empty_array(self) -> None:
@@ -112,8 +113,8 @@ class TestListChannelsToolOutput:
         result = await list_tool.on_invoke_tool(
             _make_tool_ctx(list_tool.name, "{}"), "{}"
         )
-        data = json.loads(result)
-        assert data == []
+        assert result.success is True
+        assert result.channels == []
 
     @pytest.mark.asyncio
     async def test_returns_channel_id_and_description(self) -> None:
@@ -132,16 +133,16 @@ class TestListChannelsToolOutput:
         result = await list_tool.on_invoke_tool(
             _make_tool_ctx(list_tool.name, "{}"), "{}"
         )
-        data = json.loads(result)
-        assert len(data) == 2
-        assert data[0]["channel_id"] == "cli_channel"
-        assert data[0]["description"] == "CLI Channel"
-        assert data[1]["channel_id"] == "telegram_channel"
-        assert data[1]["description"] == "Telegram Channel"
+        assert result.success is True
+        assert len(result.channels) == 2
+        assert result.channels[0].channel_id == "cli_channel"
+        assert result.channels[0].description == "CLI Channel"
+        assert result.channels[1].channel_id == "telegram_channel"
+        assert result.channels[1].description == "Telegram Channel"
 
 
 class TestSendToChannelToolOutput:
-    """send_to_channel returns typed JSON with success/error."""
+    """send_to_channel returns structured SendToChannelResult."""
 
     @pytest.mark.asyncio
     async def test_success_returns_success_true(self) -> None:
@@ -154,9 +155,8 @@ class TestSendToChannelToolOutput:
         result = await send_tool.on_invoke_tool(
             _make_tool_ctx(send_tool.name, args), args
         )
-        data = json.loads(result)
-        assert data["success"] is True
-        assert "error" not in data
+        assert result.success is True
+        assert result.error is None
 
     @pytest.mark.asyncio
     async def test_invalid_channel_returns_success_false_and_error(self) -> None:
@@ -169,7 +169,6 @@ class TestSendToChannelToolOutput:
         result = await send_tool.on_invoke_tool(
             _make_tool_ctx(send_tool.name, args), args
         )
-        data = json.loads(result)
-        assert data["success"] is False
-        assert "error" in data
-        assert "not found" in data["error"].lower()
+        assert result.success is False
+        assert result.error is not None
+        assert "not found" in result.error.lower()

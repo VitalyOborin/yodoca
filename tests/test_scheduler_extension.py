@@ -11,6 +11,17 @@ import pytest
 from sandbox.extensions.scheduler.main import SchedulerExtension, _SchedulerStore
 
 
+def _make_tool_ctx(tool_name: str, tool_arguments: str):
+    from agents.tool_context import ToolContext
+
+    return ToolContext(
+        context=object(),
+        tool_name=tool_name,
+        tool_call_id="test-call-id",
+        tool_arguments=tool_arguments,
+    )
+
+
 @pytest.fixture
 def tmp_db(tmp_path: Path) -> Path:
     return tmp_path / "scheduler.db"
@@ -120,6 +131,94 @@ class TestSchedulerExtension:
         assert "list_schedules" in names
         assert "cancel_schedule" in names
         assert "update_recurring_schedule" in names
+        await ext.destroy()
+
+    @pytest.mark.asyncio
+    async def test_schedule_once_tool_returns_structured_result(self, tmp_path: Path) -> None:
+        """schedule_once tool returns ScheduleOnceResult with success, schedule_id, topic."""
+        data_dir = tmp_path / "scheduler"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ext = SchedulerExtension()
+        ctx = MagicMock()
+        ctx.data_dir = data_dir
+        ctx.get_config = lambda k, d=None: 30 if k == "tick_interval" else d
+        ctx.emit = AsyncMock()
+        await ext.initialize(ctx)
+        tools = ext.get_tools()
+        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        args = json.dumps(
+            {
+                "topic": "system.user.notify",
+                "message": "Reminder",
+                "delay_seconds": 60,
+            },
+            ensure_ascii=False,
+        )
+        result = await schedule_once.on_invoke_tool(
+            _make_tool_ctx(schedule_once.name, args), args
+        )
+        assert result.success is True
+        assert result.schedule_id > 0
+        assert result.topic == "system.user.notify"
+        assert result.fires_in_seconds >= 59
+        assert result.status == "scheduled"
+        assert result.error is None
+        await ext.destroy()
+
+    @pytest.mark.asyncio
+    async def test_schedule_once_tool_validation_error_returns_structured_result(
+        self, tmp_path: Path
+    ) -> None:
+        """schedule_once returns ScheduleOnceResult with success=False on validation error."""
+        data_dir = tmp_path / "scheduler"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ext = SchedulerExtension()
+        ctx = MagicMock()
+        ctx.data_dir = data_dir
+        ctx.get_config = lambda k, d=None: 30 if k == "tick_interval" else d
+        ctx.emit = AsyncMock()
+        await ext.initialize(ctx)
+        tools = ext.get_tools()
+        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        args = json.dumps(
+            {
+                "topic": "system.user.notify",
+                "message": "Reminder",
+                "delay_seconds": -1,
+            },
+            ensure_ascii=False,
+        )
+        result = await schedule_once.on_invoke_tool(
+            _make_tool_ctx(schedule_once.name, args), args
+        )
+        assert result.success is False
+        assert result.error is not None
+        assert "positive" in result.error.lower()
+        await ext.destroy()
+
+    @pytest.mark.asyncio
+    async def test_list_schedules_returns_structured_result(self, tmp_path: Path) -> None:
+        """list_schedules returns ListSchedulesResult with success and schedules list."""
+        data_dir = tmp_path / "scheduler"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ext = SchedulerExtension()
+        ctx = MagicMock()
+        ctx.data_dir = data_dir
+        ctx.get_config = lambda k, d=None: 30 if k == "tick_interval" else d
+        ctx.emit = AsyncMock()
+        await ext.initialize(ctx)
+        await ext._store.insert_one_shot("test.topic", "{}", time.time() + 60)
+        tools = ext.get_tools()
+        list_tool = next(t for t in tools if getattr(t, "name", None) == "list_schedules")
+        args = json.dumps({"status": "scheduled"}, ensure_ascii=False)
+        result = await list_tool.on_invoke_tool(
+            _make_tool_ctx(list_tool.name, args), args
+        )
+        assert result.success is True
+        assert result.count >= 1
+        assert len(result.schedules) >= 1
+        assert result.schedules[0].topic == "test.topic"
+        assert result.schedules[0].type == "one_shot"
         await ext.destroy()
 
     @pytest.mark.asyncio

@@ -6,6 +6,30 @@ from pathlib import Path
 from typing import Any
 
 from agents import function_tool
+from pydantic import BaseModel, Field
+
+# --- Tool result models (structured output per agent_tools skill) ---
+
+
+class KvSetResult(BaseModel):
+    """Result of kv_set tool."""
+
+    success: bool
+    key: str = ""
+    status: str = "set"  # "set" | "deleted" | "error"
+    error: str | None = None
+
+
+class KvGetResult(BaseModel):
+    """Result of kv_get tool."""
+
+    success: bool
+    key: str = ""
+    value: str | None = None  # for exact match
+    matches: dict[str, str] = Field(default_factory=dict)  # for pattern match
+    status: str = "found"  # "found" | "not_found" | "pattern_match"
+    error: str | None = None
+
 
 _DATA_FILE = "values.json"
 _TEMP_FILE = "values.json.tmp"
@@ -137,23 +161,25 @@ class KvExtension:
         async def kv_set(
             key: str,
             value: Any = "",
-        ) -> str:
+        ) -> KvSetResult:
             """Store a value under key in the persistent key-value store.
 
-            Pass an empty string or omit value to delete the key. Returns a confirmation message.
+            Pass an empty string or omit value to delete the key.
 
             Args:
                 key: Non-empty key name. Use alphanumeric, underscore, hyphen for best compatibility.
                 value: Value to store. Can be string, number, or boolean. Empty string to delete.
             """
             if not key or not key.strip():
-                return "Error: key must be a non-empty string."
+                return KvSetResult(
+                    success=False,
+                    status="error",
+                    error="key must be a non-empty string.",
+                )
 
-            # Если модель передала число (например, 444), конвертируем его в строку
             if value is not None:
                 value = str(value)
 
-            # Пустая строка расценивается как команда на удаление (None)
             val: str | None = value.strip() if value else None
             if val == "":
                 val = None
@@ -161,11 +187,11 @@ class KvExtension:
             await store.set(key.strip(), val)
 
             if val is None:
-                return f"Key '{key.strip()}' deleted."
-            return f"Key '{key.strip()}' set."
+                return KvSetResult(success=True, key=key.strip(), status="deleted")
+            return KvSetResult(success=True, key=key.strip(), status="set")
 
         @function_tool(name_override="kv_get")
-        async def kv_get(key: str) -> str:
+        async def kv_get(key: str) -> KvGetResult:
             """Retrieve value(s) from the persistent key-value store.
 
             Accepts an exact key or a glob pattern with wildcards:
@@ -173,24 +199,36 @@ class KvExtension:
             - ? matches any single character
             Examples: 'key:*', '*what*', 'agent_health.*', 'start*:part*'
 
-            Returns the stored value for exact match, or key: value lines for pattern match.
-            Returns a message if no keys match.
-
             Args:
                 key: Non-empty key name or glob pattern (e.g. 'my_key', 'prefix:*').
             """
             if not key or not key.strip():
-                return "Error: key must be a non-empty string."
+                return KvGetResult(
+                    success=False,
+                    status="error",
+                    error="key must be a non-empty string.",
+                )
             k = key.strip()
             if "*" in k or "?" in k:
                 matches = await store.get_matching(k)
                 if not matches:
-                    return f"No keys matching pattern '{k}'."
-                lines = [f"{mk}: {mv}" for mk, mv in matches.items()]
-                return "\n".join(lines)
+                    return KvGetResult(
+                        success=False,
+                        key=k,
+                        status="not_found",
+                        error=f"No keys matching pattern '{k}'.",
+                    )
+                return KvGetResult(
+                    success=True, key=k, matches=matches, status="pattern_match"
+                )
             result = await store.get(k)
             if result is None:
-                return f"Key '{k}' not found."
-            return result
+                return KvGetResult(
+                    success=False,
+                    key=k,
+                    status="not_found",
+                    error=f"Key '{k}' not found.",
+                )
+            return KvGetResult(success=True, key=k, value=result, status="found")
 
         return [kv_set, kv_get]
