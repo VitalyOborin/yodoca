@@ -5,8 +5,8 @@ agents:
     provider: openai
   orchestrator:
     instructions: prompts/orchestrator.jinja2
-    model: gpt-5-mini
-    provider: openai
+    model: qwen/qwen3.5-9b
+    provider: lm_studio
 event_bus:
   batch_size: 3
   db_path: sandbox/data/event_journal.db
@@ -28,6 +28,8 @@ extensions:
   embedding:
     default_model: text-embedding-3-large
     provider: openai
+    #default_model: text-embedding-jina-embeddings-v5-text-small-retrieval
+    #provider: lm_studio
 logging:
   backup_count: 3
   file: sandbox/logs/app.log
@@ -38,13 +40,18 @@ providers:
   openai:
     api_key_secret: OPENAI_API_KEY
     type: openai_compatible
-  # Optional: LiteLLM path for chat/completions-only OpenAI-compatible APIs.
-  # Example: z.ai coding endpoint.
+  lm_studio:
+    api_key_secret: "dummy_key"
+    type: openai_compatible
+    base_url: http://127.0.0.1:1234/v1
+    api_key_literal: lm-studio
+    supports_hosted_tools: false
+  # Optional: chat/completions-only OpenAI-compatible API (e.g. z.ai).
   # zai:
-  #   type: litellm_openai_compatible
+  #   type: openai_compatible
+  #   base_url: https://api.z.ai/api/paas/v4
   #   api_key_secret: ZAI_API_KEY
-  #   api_base: https://api.z.ai/api/paas/v4
-  #   litellm_model_prefix: openai
+  #   api_mode: chat_completions
   #   supports_hosted_tools: false
 session:
   timeout_sec: 1800

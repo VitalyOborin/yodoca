@@ -5,11 +5,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
-from core.llm.providers import (
-    AnthropicProvider,
-    LiteLLMOpenAICompatibleProvider,
-    OpenAICompatibleProvider,
-)
+from core.llm.providers import AnthropicProvider, OpenAICompatibleProvider
 
 T = TypeVar("T")
 
@@ -20,6 +16,7 @@ def _dict_to_provider_config(provider_id: str, data: dict[str, Any]) -> Provider
     return ProviderConfig(
         id=provider_id,
         type=str(data.get("type", "openai_compatible")),
+        api_mode=str(data.get("api_mode", "responses")),
         base_url=data.get("base_url"),
         api_base=data.get("api_base"),
         api_key_secret=data.get("api_key_secret"),
@@ -75,9 +72,6 @@ class ModelRouter:
         self._providers["openai"] = openai_compat
         self._providers["openai_compatible"] = openai_compat
         self._providers["anthropic"] = AnthropicProvider()
-        self._providers["litellm_openai_compatible"] = (
-            LiteLLMOpenAICompatibleProvider()
-        )
 
     def get_default_provider(self) -> str | None:
         """Return provider id from default agent config, or None."""

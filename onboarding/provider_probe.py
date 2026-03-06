@@ -74,8 +74,7 @@ async def probe_provider(
             return False, "No API key"
         return await probe_anthropic(api_key)
 
-    if ptype in {"openai_compatible", "litellm_openai_compatible"}:
-        base_url = config.get("api_base") or base_url
+    if ptype == "openai_compatible":
         key = api_key or "not-required"
         return await probe_openai_compatible(base_url, key)
 

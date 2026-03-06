@@ -1,8 +1,7 @@
 """Tests for ModelRouter behavior and provider routing."""
 
-from unittest.mock import MagicMock
-
 import pytest
+from agents import OpenAIChatCompletionsModel, OpenAIResponsesModel
 
 from core.llm import ModelRouter
 from core.llm.capabilities import EmbeddingCapability
@@ -99,14 +98,15 @@ class TestModelRouterConfig:
         model = router.get_model("default")
         assert model is not None
 
-    def test_routes_litellm_openai_compatible_provider(self) -> None:
+    def test_routes_openai_compatible_with_api_mode_chat_completions(self) -> None:
+        """api_mode=chat_completions returns OpenAIChatCompletionsModel."""
         settings = {
             "providers": {
                 "zai": {
-                    "type": "litellm_openai_compatible",
+                    "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
-                    "api_base": "https://api.z.ai/api/paas/v4",
-                    "litellm_model_prefix": "openai",
+                    "base_url": "https://api.z.ai/api/paas/v4",
+                    "api_mode": "chat_completions",
                 },
             },
             "agents": {
@@ -114,21 +114,23 @@ class TestModelRouterConfig:
             },
         }
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
-        stub_provider = MagicMock()
-        expected_model = object()
-        stub_provider.build.return_value = expected_model
-        router._providers["litellm_openai_compatible"] = stub_provider
-
         model = router.get_model("default")
+        assert isinstance(model, OpenAIChatCompletionsModel)
 
-        assert model is expected_model
-        stub_provider.build.assert_called_once()
-        args = stub_provider.build.call_args.args
-        provider_cfg = args[0]
-        assert provider_cfg.type == "litellm_openai_compatible"
-        assert provider_cfg.api_base == "https://api.z.ai/api/paas/v4"
-        assert provider_cfg.litellm_model_prefix == "openai"
-        assert args[1] == "glm-4.7-flash"
+    def test_routes_openai_compatible_with_api_mode_responses(self) -> None:
+        """api_mode=responses (default) returns OpenAIResponsesModel."""
+        settings = {
+            "providers": {
+                "openai": {
+                    "type": "openai_compatible",
+                    "api_key_secret": "openai_api_key",
+                },
+            },
+            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
+        }
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
+        model = router.get_model("default")
+        assert isinstance(model, OpenAIResponsesModel)
 
 
 class TestModelRouterRegisterAgentConfig:

@@ -10,7 +10,7 @@ The **ModelRouter** resolves agent identifiers to SDK-compatible Model instances
 |-----------|----------|------|
 | **ModelRouter** | `core/llm/router.py` | Resolves `agent_id` → Model instance |
 | **ModelCatalog** | `core/llm/catalog.py` | Model metadata (cost, capability, strengths) |
-| **Providers** | `core/llm/providers/` | OpenAI-compatible (Responses), LiteLLM OpenAI-compatible (chat/completions), Anthropic |
+| **Providers** | `core/llm/providers/` | OpenAI-compatible (Responses or Chat Completions via `api_mode`), Anthropic |
 | **Settings** | `config/settings.yaml` | `agents`, `providers`, `models` sections |
 
 ---
@@ -32,6 +32,7 @@ providers:
     type: openai_compatible
     base_url: http://127.0.0.1:1234/v1
     api_key_literal: lm-studio
+    api_mode: chat_completions
     supports_hosted_tools: false
 
   anthropic:
@@ -39,21 +40,20 @@ providers:
     api_key_secret: ANTHROPIC_API_KEY
 
   zai:
-    type: litellm_openai_compatible
+    type: openai_compatible
+    base_url: https://api.z.ai/api/paas/v4
     api_key_secret: ZAI_API_KEY
-    api_base: https://api.z.ai/api/paas/v4
-    litellm_model_prefix: openai
+    api_mode: chat_completions
     supports_hosted_tools: false
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | str | `openai_compatible`, `litellm_openai_compatible`, or `anthropic` |
+| `type` | str | `openai_compatible` or `anthropic` |
 | `base_url` | str | API base URL (omit for OpenAI default) |
-| `api_base` | str | LiteLLM base URL (used by `litellm_openai_compatible`) |
+| `api_mode` | str | `responses` (default) or `chat_completions` — for `openai_compatible` only |
 | `api_key_secret` | str | Env var name for API key |
 | `api_key_literal` | str | Literal key (for local/dev) |
-| `litellm_model_prefix` | str | Optional LiteLLM model prefix (default `openai`) |
 | `default_headers` | dict | Extra HTTP headers |
 | `supports_hosted_tools` | bool | Whether provider supports OpenAI hosted tools (default true) |
 
@@ -89,6 +89,7 @@ agents:
 Works with OpenAI API and compatible endpoints (OpenAI, OpenRouter, LM Studio, Ollama, etc.).
 
 - **base_url:** Override for non-OpenAI endpoints
+- **api_mode:** `responses` (default) — Responses API; `chat_completions` — Chat Completions API for providers that don't support Responses
 - **api_key_secret:** Env var (e.g. `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
 - **api_key_literal:** For local endpoints that accept any key
 - **supports_hosted_tools:** Set `false` for providers that don't support OpenAI tool schemas (e.g. some local models)
@@ -98,14 +99,6 @@ Works with OpenAI API and compatible endpoints (OpenAI, OpenRouter, LM Studio, O
 Claude models via Anthropic API.
 
 - **api_key_secret:** `ANTHROPIC_API_KEY`
-
-### litellm_openai_compatible
-
-Uses LiteLLM (`LitellmModel`) for providers that only expose chat/completions and do not support the OpenAI Responses API.
-
-- **api_base:** Provider base URL for chat/completions
-- **litellm_model_prefix:** Prefix for bare model IDs (default `openai`)
-- **model naming:** If model already includes `/`, it is used as-is; otherwise `litellm_model_prefix/model` is used
 
 ---
 
