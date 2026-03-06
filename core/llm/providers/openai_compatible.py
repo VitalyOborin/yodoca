@@ -1,10 +1,10 @@
-"""OpenAI and OpenAI-compatible providers (OpenAI, OpenRouter, etc.). Uses Responses API by default."""
+"""OpenAI-compatible providers (OpenAI, OpenRouter, LM Studio, etc.)."""
 
 import logging
 
+from agents import OpenAIChatCompletionsModel, OpenAIResponsesModel
 from openai import AsyncOpenAI
 
-from agents import OpenAIResponsesModel
 from core.llm.protocol import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class OpenAIEmbedder:
                 kwargs["dimensions"] = dimensions
             resp = await self._client.embeddings.create(**kwargs)
             result: list[list[float] | None] = [None] * len(texts)
-            for emb_data, (orig_idx, _) in zip(resp.data, non_empty):
+            for emb_data, (orig_idx, _) in zip(resp.data, non_empty, strict=True):
                 result[orig_idx] = list(emb_data.embedding)
             return result
         except Exception as e:
@@ -73,7 +73,7 @@ class OpenAIEmbedder:
 
 
 class OpenAICompatibleProvider:
-    """Uses OpenAI Responses API (supports hosted tools e.g. WebSearchTool)."""
+    """OpenAI-compatible. api_mode: responses (default) or chat_completions."""
 
     provider_type = "openai_compatible"
 
@@ -82,13 +82,15 @@ class OpenAICompatibleProvider:
         config: ProviderConfig,
         model_name: str,
         api_key: str | None,
-    ) -> OpenAIResponsesModel:
+    ) -> OpenAIResponsesModel | OpenAIChatCompletionsModel:
         client = AsyncOpenAI(
             base_url=config.base_url,
             api_key=api_key or "not-required",
             default_headers=config.default_headers or None,
             timeout=60.0,
         )
+        if config.api_mode == "chat_completions":
+            return OpenAIChatCompletionsModel(model=model_name, openai_client=client)
         return OpenAIResponsesModel(model=model_name, openai_client=client)
 
     async def health_check(self, config: ProviderConfig, api_key: str | None) -> bool:

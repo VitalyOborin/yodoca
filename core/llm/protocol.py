@@ -25,7 +25,8 @@ class ProviderConfig:
     """Provider configuration from config/settings.yaml."""
 
     id: str
-    type: str  # openai_compatible | anthropic | litellm_openai_compatible
+    type: str  # openai_compatible | anthropic
+    api_mode: str = "responses"  # responses | chat_completions (openai_compatible)
     base_url: str | None = None
     api_base: str | None = None
     api_key_secret: str | None = None

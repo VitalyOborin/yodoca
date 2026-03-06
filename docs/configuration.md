@@ -54,12 +54,11 @@ LLM API endpoints and credentials. See [llm.md](llm.md).
 
 | Key | Description |
 |-----|-------------|
-| `providers.<id>.type` | `openai_compatible` (default), `litellm_openai_compatible`, or `anthropic` |
+| `providers.<id>.type` | `openai_compatible` (default) or `anthropic` |
 | `providers.<id>.base_url` | API base URL |
-| `providers.<id>.api_base` | LiteLLM API base URL (for `litellm_openai_compatible`) |
+| `providers.<id>.api_mode` | `responses` or `chat_completions` (for `openai_compatible` only; default `responses`) |
 | `providers.<id>.api_key_secret` | Env var name for API key |
 | `providers.<id>.api_key_literal` | Literal key (dev/local) |
-| `providers.<id>.litellm_model_prefix` | Optional model prefix for LiteLLM (default `openai`) |
 | `providers.<id>.default_headers` | Extra HTTP headers |
 | `providers.<id>.supports_hosted_tools` | Whether hosted tools supported (default true) |
 

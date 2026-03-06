@@ -3,7 +3,7 @@
 Sequential add-one-at-a-time flow: select provider -> credentials -> model -> add another?
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
 
 import questionary
 from questionary import Choice

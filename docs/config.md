@@ -53,10 +53,10 @@ providers:
     type: anthropic
     api_key_secret: ANTHROPIC_API_KEY
   zai:
-    type: litellm_openai_compatible
+    type: openai_compatible
+    base_url: https://api.z.ai/api/paas/v4
     api_key_secret: ZAI_API_KEY
-    api_base: https://api.z.ai/api/paas/v4
-    litellm_model_prefix: openai
+    api_mode: chat_completions
     supports_hosted_tools: false
 ```
 
