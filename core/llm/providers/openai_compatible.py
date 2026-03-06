@@ -10,6 +10,48 @@ from core.llm.protocol import ProviderConfig
 logger = logging.getLogger(__name__)
 
 
+# --- Client factory (single path for AsyncOpenAI construction) ---
+
+
+def _make_openai_client(
+    config: ProviderConfig,
+    api_key: str | None,
+    *,
+    api_key_fallback: str = "not-required",
+) -> AsyncOpenAI:
+    """Build AsyncOpenAI from provider config. API-key fallback varies by call site."""
+    return AsyncOpenAI(
+        base_url=config.base_url,
+        api_key=api_key or api_key_fallback,
+        default_headers=config.default_headers or None,
+        timeout=60.0,
+    )
+
+
+# --- Embedding helpers ---
+
+
+def _normalize_texts(texts: list[str]) -> list[tuple[int, str]]:
+    """Return (index, cleaned_text) for non-empty texts. Preserves original indices."""
+    cleaned = [t.strip() if t else "" for t in texts]
+    return [(i, t) for i, t in enumerate(cleaned) if t]
+
+
+def _embed_request_kwargs(
+    model: str,
+    input_text: str | list[str],
+    dimensions: int | None = None,
+) -> dict:
+    """Build kwargs for embeddings.create. Handles single text or list."""
+    kwargs: dict = {"model": model, "input": input_text}
+    if dimensions is not None:
+        kwargs["dimensions"] = dimensions
+    return kwargs
+
+
+# --- OpenAIEmbedder ---
+
+
 class OpenAIEmbedder:
     """Adapter implementing EmbeddingCapability for OpenAI-compatible APIs."""
 
@@ -24,17 +66,11 @@ class OpenAIEmbedder:
     ) -> list[list[float] | None]:
         if not texts:
             return []
-        cleaned = [t.strip() if t else "" for t in texts]
-        non_empty = [(i, t) for i, t in enumerate(cleaned) if t]
+        non_empty = _normalize_texts(texts)
         if not non_empty:
             return [None] * len(texts)
         try:
-            kwargs: dict = {
-                "model": model,
-                "input": [t for _, t in non_empty],
-            }
-            if dimensions is not None:
-                kwargs["dimensions"] = dimensions
+            kwargs = _embed_request_kwargs(model, [t for _, t in non_empty], dimensions)
             resp = await self._client.embeddings.create(**kwargs)
             result: list[list[float] | None] = [None] * len(texts)
             for emb_data, (orig_idx, _) in zip(resp.data, non_empty, strict=True):
@@ -62,9 +98,7 @@ class OpenAIEmbedder:
         if not text:
             return None
         try:
-            kwargs: dict = {"model": model, "input": text}
-            if dimensions is not None:
-                kwargs["dimensions"] = dimensions
+            kwargs = _embed_request_kwargs(model, text, dimensions)
             resp = await self._client.embeddings.create(**kwargs)
             return list(resp.data[0].embedding) if resp.data else None
         except Exception as e:
@@ -83,24 +117,14 @@ class OpenAICompatibleProvider:
         model_name: str,
         api_key: str | None,
     ) -> OpenAIResponsesModel | OpenAIChatCompletionsModel:
-        client = AsyncOpenAI(
-            base_url=config.base_url,
-            api_key=api_key or "not-required",
-            default_headers=config.default_headers or None,
-            timeout=60.0,
-        )
+        client = _make_openai_client(config, api_key)
         if config.api_mode == "chat_completions":
             return OpenAIChatCompletionsModel(model=model_name, openai_client=client)
         return OpenAIResponsesModel(model=model_name, openai_client=client)
 
     async def health_check(self, config: ProviderConfig, api_key: str | None) -> bool:
         try:
-            client = AsyncOpenAI(
-                base_url=config.base_url,
-                api_key=api_key or "x",
-                default_headers=config.default_headers or None,
-                timeout=60.0,
-            )
+            client = _make_openai_client(config, api_key, api_key_fallback="x")
             await client.models.list()
             return True
         except Exception:
@@ -118,11 +142,6 @@ class OpenAICompatibleProvider:
             # For default OpenAI API (no custom base_url), a key is required
             if not config.base_url and not api_key:
                 return None
-            client = AsyncOpenAI(
-                base_url=config.base_url,
-                api_key=api_key or "not-required",
-                default_headers=config.default_headers or None,
-                timeout=60.0,
-            )
+            client = _make_openai_client(config, api_key)
             return OpenAIEmbedder(client)
         return None

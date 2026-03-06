@@ -28,10 +28,8 @@ class ProviderConfig:
     type: str  # openai_compatible | anthropic
     api_mode: str = "responses"  # responses | chat_completions (openai_compatible)
     base_url: str | None = None
-    api_base: str | None = None
     api_key_secret: str | None = None
     api_key_literal: str | None = None
-    litellm_model_prefix: str | None = None
     default_headers: dict[str, str] = field(default_factory=dict)
     # False for local/third-party providers (LM Studio, OpenRouter, Anthropic, etc.)
     # that do not support OpenAI hosted tool types

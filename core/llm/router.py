@@ -12,22 +12,25 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 
-def _dict_to_provider_config(provider_id: str, data: dict[str, Any]) -> ProviderConfig:
+# --- Settings parsing (internal, not part of public API) ---
+
+
+def _parse_provider_config(provider_id: str, data: dict[str, Any]) -> ProviderConfig:
+    """Parse raw provider dict from settings into ProviderConfig."""
     return ProviderConfig(
         id=provider_id,
         type=str(data.get("type", "openai_compatible")),
         api_mode=str(data.get("api_mode", "responses")),
         base_url=data.get("base_url"),
-        api_base=data.get("api_base"),
         api_key_secret=data.get("api_key_secret"),
         api_key_literal=data.get("api_key_literal"),
-        litellm_model_prefix=data.get("litellm_model_prefix"),
         default_headers=dict(data.get("default_headers") or {}),
         supports_hosted_tools=bool(data.get("supports_hosted_tools", True)),
     )
 
 
-def _dict_to_model_config(data: dict[str, Any], provider_id: str) -> ModelConfig:
+def _parse_model_config(data: dict[str, Any], provider_id: str) -> ModelConfig:
+    """Parse raw agent dict from settings into ModelConfig."""
     return ModelConfig(
         provider=provider_id or str(data.get("provider", "")),
         model=str(data.get("model", "")),
@@ -35,6 +38,39 @@ def _dict_to_model_config(data: dict[str, Any], provider_id: str) -> ModelConfig
         max_tokens=data.get("max_tokens"),
         extra=dict(data.get("extra") or {}),
     )
+
+
+def _load_provider_configs(settings: dict[str, Any]) -> dict[str, ProviderConfig]:
+    """Extract provider configs from settings. Returns provider_id -> ProviderConfig."""
+    result: dict[str, ProviderConfig] = {}
+    for pid, pdata in (settings.get("providers") or {}).items():
+        if isinstance(pdata, dict):
+            result[str(pid)] = _parse_provider_config(str(pid), pdata)
+    return result
+
+
+def _load_agent_configs(settings: dict[str, Any]) -> dict[str, ModelConfig]:
+    """Extract agent configs from settings. Returns agent_id -> ModelConfig."""
+    result: dict[str, ModelConfig] = {}
+    for aid, adata in (settings.get("agents") or {}).items():
+        if isinstance(adata, dict):
+            provider_id = adata.get("provider")
+            if provider_id:
+                result[str(aid)] = _parse_model_config(adata, str(provider_id))
+    return result
+
+
+def _build_provider_registry() -> dict[str, ModelProvider]:
+    """Build default provider type -> instance mapping."""
+    openai_compat = OpenAICompatibleProvider()
+    return {
+        "openai": openai_compat,
+        "openai_compatible": openai_compat,
+        "anthropic": AnthropicProvider(),
+    }
+
+
+# --- ModelRouter ---
 
 
 class ModelRouter:
@@ -46,32 +82,10 @@ class ModelRouter:
         secrets_getter: Callable[[str], str | None],
     ) -> None:
         self._secrets = secrets_getter
-        self._provider_configs: dict[str, ProviderConfig] = {}
-        self._agent_configs: dict[str, ModelConfig] = {}
-        self._providers: dict[str, ModelProvider] = {}
+        self._provider_configs = _load_provider_configs(settings)
+        self._agent_configs = _load_agent_configs(settings)
+        self._providers = _build_provider_registry()
         self._cache: dict[str, Any] = {}
-        self._load(settings)
-        self._register_defaults()
-
-    def _load(self, settings: dict[str, Any]) -> None:
-        for pid, pdata in (settings.get("providers") or {}).items():
-            if isinstance(pdata, dict):
-                self._provider_configs[str(pid)] = _dict_to_provider_config(
-                    str(pid), pdata
-                )
-        for aid, adata in (settings.get("agents") or {}).items():
-            if isinstance(adata, dict):
-                provider_id = adata.get("provider")
-                if provider_id:
-                    self._agent_configs[str(aid)] = _dict_to_model_config(
-                        adata, str(provider_id)
-                    )
-
-    def _register_defaults(self) -> None:
-        openai_compat = OpenAICompatibleProvider()
-        self._providers["openai"] = openai_compat
-        self._providers["openai_compatible"] = openai_compat
-        self._providers["anthropic"] = AnthropicProvider()
 
     def get_default_provider(self) -> str | None:
         """Return provider id from default agent config, or None."""
@@ -95,7 +109,7 @@ class ModelRouter:
         provider_id = config.get("provider")
         if not provider_id:
             return
-        self._agent_configs[agent_id] = _dict_to_model_config(config, str(provider_id))
+        self._agent_configs[agent_id] = _parse_model_config(config, str(provider_id))
 
     def remove_agent_config(self, agent_id: str) -> None:
         """Remove a dynamic agent's config and cached model instance."""
@@ -109,13 +123,15 @@ class ModelRouter:
             return self._secrets(cfg.api_key_secret)
         return None
 
+    def _resolve_agent_config(self, agent_id: str) -> ModelConfig | None:
+        """Resolve agent config for agent_id, falling back to default."""
+        return self._agent_configs.get(agent_id) or self._agent_configs.get("default")
+
     def get_model(self, agent_id: str) -> Any:
         """Return cached or newly built Model instance for the agent."""
         if agent_id in self._cache:
             return self._cache[agent_id]
-        agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get(
-            "default"
-        )
+        agent_cfg = self._resolve_agent_config(agent_id)
         if not agent_cfg:
             raise KeyError(
                 f"No model config for agent_id={agent_id!r} and no "
@@ -172,9 +188,7 @@ class ModelRouter:
 
     def supports_hosted_tools(self, agent_id: str) -> bool:
         """Return True if the provider supports OpenAI hosted tool types."""
-        agent_cfg = self._agent_configs.get(agent_id) or self._agent_configs.get(
-            "default"
-        )
+        agent_cfg = self._resolve_agent_config(agent_id)
         if not agent_cfg:
             return True
         provider_cfg = self._provider_configs.get(agent_cfg.provider)
