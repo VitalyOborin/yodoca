@@ -1,9 +1,7 @@
 """Loader: discover, load, initialize, wire, start extensions. Manages lifecycle and protocol detection."""
 
 import asyncio
-import importlib.util
 import logging
-import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,6 +13,7 @@ if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
 from core.extensions.builtin_context import ActiveChannelContextProvider
 from core.extensions.context import ExtensionContext
+from core.extensions.context_builder import ExtensionContextBuilder
 from core.extensions.contract import (
     AgentProvider,
     ChannelProvider,
@@ -26,12 +25,15 @@ from core.extensions.contract import (
     ToolProvider,
     TurnContext,
 )
+from core.extensions.dependency_resolver import DependencyResolver
 from core.extensions.event_wiring import EventWiringManager
+from core.extensions.extension_factory import ExtensionFactory
 from core.extensions.health_check import HealthCheckManager
-from core.extensions.instructions import resolve_instructions
-from core.extensions.manifest import ExtensionManifest, load_manifest
+from core.extensions.manifest import ExtensionManifest
+from core.extensions.manifest_repository import ManifestRepository
 from core.extensions.router import MessageRouter
 from core.extensions.scheduler_manager import SchedulerManager
+from core.extensions.tool_resolver import ToolResolver
 from core.llm import ModelRouterProtocol
 from core.settings import get_setting
 
@@ -50,6 +52,9 @@ class Loader:
         self._extensions_dir = extensions_dir
         self._data_dir = data_dir
         self._settings = settings
+        self._manifest_repo = ManifestRepository(extensions_dir)
+        self._dependency_resolver = DependencyResolver()
+        self._extension_factory = ExtensionFactory(extensions_dir)
         self._router: MessageRouter | None = None
         self._model_router: ModelRouterProtocol | None = None
         self._manifests: list[ExtensionManifest] = []
@@ -81,20 +86,10 @@ class Loader:
     async def discover(self) -> None:
         """Scan extensions_dir for manifest.yaml; load and filter enabled."""
         self._manifests = []
-        if not self._extensions_dir.exists():
-            return
-        for d in sorted(self._extensions_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            manifest_path = d / "manifest.yaml"
-            if not manifest_path.exists():
-                continue
-            try:
-                manifest = load_manifest(manifest_path)
-                if manifest.enabled:
-                    self._manifests.append(manifest)
-            except Exception as e:
-                logger.exception("Invalid manifest %s: %s", manifest_path, e)
+        try:
+            self._manifests = await self._manifest_repo.discover()
+        except Exception as e:
+            logger.exception("Manifest discovery failed: %s", e)
 
     def _visit_manifest(
         self,
@@ -119,17 +114,7 @@ class Loader:
 
     def _resolve_dependency_order(self) -> list[ExtensionManifest]:
         """Topological sort by depends_on. Raises on cycle or missing dep."""
-        ids = {m.id for m in self._manifests}
-        for m in self._manifests:
-            for dep in m.depends_on:
-                if dep not in ids:
-                    raise ValueError(f"Extension {m.id} depends on missing {dep}")
-        order: list[ExtensionManifest] = []
-        seen: set[str] = set()
-        visiting: set[str] = set()
-        for m in self._manifests:
-            self._visit_manifest(m, order, seen, visiting)
-        return order
+        return self._dependency_resolver.resolve(self._manifests)
 
     async def load_all(self) -> None:
         """Load extensions in dependency order; cascade failure to dependents."""
@@ -159,29 +144,7 @@ class Loader:
 
     def _load_one(self, manifest: ExtensionManifest) -> Extension:
         """Dynamic import or declarative adapter. Declarative agents need no main.py."""
-        if manifest.agent and not manifest.entrypoint:
-            from core.extensions.declarative_agent import DeclarativeAgentAdapter
-
-            return DeclarativeAgentAdapter(manifest)
-        ext_dir = self._extensions_dir / manifest.id
-        if manifest.entrypoint is None:
-            raise ValueError(
-                f"Extension {manifest.id} must have entrypoint for programmatic extensions"
-            )
-        module_name, class_name = manifest.entrypoint.split(":", 1)
-        py_path = ext_dir / f"{module_name}.py"
-        if not py_path.exists():
-            raise FileNotFoundError(f"{py_path} not found")
-        spec = importlib.util.spec_from_file_location(
-            f"ext_{manifest.id}_{module_name}", py_path
-        )
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load {py_path}")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod
-        spec.loader.exec_module(mod)
-        cls = getattr(mod, class_name)
-        return cls()
+        return self._extension_factory.create(manifest)
 
     def _get_manifest(self, ext_id: str) -> ExtensionManifest | None:
         """Return manifest for extension id, or None if not found."""
@@ -246,54 +209,11 @@ class Loader:
         Called by Loader for manifests and by AgentFactory for dynamic agents.
         agent_id is used for core_tools (e.g. restart_file_path, model resolution).
         """
-        tools: list[Any] = []
-        for ext_id in tool_ids:
-            if ext_id == "core_tools":
-                from core.tools.provider import CoreToolsProvider
-
-                aid = agent_id
-                restart_file_path = self._get_restart_file_path()
-                tools.extend(
-                    CoreToolsProvider(
-                        model_router=self._model_router,
-                        agent_id=aid,
-                        restart_file_path=restart_file_path,
-                    ).get_tools()
-                )
-                continue
-            ext = self._extensions.get(ext_id)
-            if ext and isinstance(ext, ToolProvider):
-                tools.extend(ext.get_tools())
-        return tools
-
-    def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:
-        """Resolve uses_tools to actual tools from ToolProvider extensions or core_tools."""
-        if not manifest.agent:
-            return []
-        agent_id = getattr(manifest, "agent_id", None) or manifest.id
-        return self.resolve_tools(manifest.agent.uses_tools, agent_id)
-
-    def _resolve_agent_instructions(
-        self, manifest: ExtensionManifest, ext_id: str
-    ) -> str:
-        """Resolve instructions from extension-local prompt.jinja2 and/or agent.instructions.
-
-        Agent extensions may have prompt.jinja2 in extension/<id>/. If present, it is used.
-        Manifest instructions (optional) are merged: file content first, then inline instructions.
-        Only extension dir is searched; project prompts/ is system-only and not used.
-        """
-        if not manifest.agent:
-            return ""
-        extension_dir = self._extensions_dir / ext_id
-        instructions_file = ""
-        if (extension_dir / "prompt.jinja2").exists():
-            instructions_file = "prompt.jinja2"
-        return resolve_instructions(
-            instructions=manifest.agent.instructions,
-            instructions_file=instructions_file,
-            extension_dir=extension_dir,
-            template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
-        )
+        return ToolResolver(
+            extensions=self._extensions,
+            model_router=self._model_router,
+            restart_file_path=self._get_restart_file_path(),
+        ).resolve_tools(tool_ids, agent_id)
 
     def _register_agent_config_from_manifests(self) -> None:
         """Register agent config from manifests with model_router (default + overrides)."""
@@ -319,34 +239,18 @@ class Loader:
         self, ext_id: str, manifest: ExtensionManifest, router: MessageRouter
     ) -> ExtensionContext:
         """Build ExtensionContext for one extension."""
-        data_dir_path = self._data_dir / ext_id
-        overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
-        config = {**manifest.config, **overrides}
-        resolved_tools = self._resolve_agent_tools(manifest) if manifest.agent else []
-        resolved_instructions = (
-            self._resolve_agent_instructions(manifest, ext_id) if manifest.agent else ""
-        )
-        agent_model = manifest.agent.model if manifest.agent else ""
-        agent_id = getattr(manifest, "agent_id", None) or (
-            ext_id if manifest.agent else None
-        )
-        return ExtensionContext(
-            extension_id=ext_id,
-            config=config,
-            logger=logging.getLogger(f"ext.{ext_id}"),
-            router=router,
-            get_extension=self._make_get_extension(ext_id),
-            data_dir_path=data_dir_path,
-            shutdown_event=self._shutdown_event,
-            resolved_tools=resolved_tools,
-            resolved_instructions=resolved_instructions,
-            agent_model=agent_model,
+        return ExtensionContextBuilder(
+            extensions_dir=self._extensions_dir,
+            data_dir=self._data_dir,
+            settings=self._settings,
             model_router=self._model_router,
-            agent_id=agent_id,
+            shutdown_event=self._shutdown_event,
             event_bus=self._event_bus,
             agent_registry=self._agent_registry,
             restart_file_path=self._get_restart_file_path(),
-        )
+            resolve_tools=self.resolve_tools,
+            get_extension_for=self._make_get_extension,
+        ).build(ext_id, manifest, router)
 
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Cascade dep failure."""
