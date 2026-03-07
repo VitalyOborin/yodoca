@@ -1,9 +1,8 @@
 """Tests for Loader: dependency order, discover, protocol detection, lifecycle."""
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,14 +15,11 @@ from core.extensions.contract import (
     AgentResponse,
     ChannelProvider,
     Extension,
-    ServiceProvider,
-    ToolProvider,
 )
 from core.extensions.event_wiring import EventWiringManager
-from core.extensions.loader import Loader, ExtensionState
+from core.extensions.loader import ExtensionState, Loader
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.router import MessageRouter
-
 
 _EMPTY_SETTINGS: dict = {"extensions": {}}
 
@@ -658,3 +654,29 @@ class TestDependencyCascadeAndFailFast:
             RuntimeError, match="Dependency 'b' of 'a' is in ERROR state"
         ):
             get_ext("b")
+
+
+class TestAgentCatalog:
+    def test_get_agent_catalog_returns_registry_metadata(self, tmp_path: Path) -> None:
+        loader = Loader(
+            extensions_dir=Path("."),
+            data_dir=tmp_path,
+            settings=_EMPTY_SETTINGS,
+        )
+        registry = AgentRegistry()
+        loader._agent_registry = registry
+        registry.register(
+            AgentRecord(
+                id="memory_agent",
+                name="Memory Agent",
+                description="Memory specialist",
+                tools=["memory"],
+                sample_queries=["remember this", "recall last meeting"],
+                source="static",
+            ),
+            MagicMock(),
+        )
+        catalog = loader.get_agent_catalog()
+        assert len(catalog) == 1
+        assert catalog[0]["agent_id"] == "memory_agent"
+        assert "remember this" in catalog[0]["sample_queries"]

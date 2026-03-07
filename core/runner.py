@@ -7,13 +7,18 @@ from typing import Any
 from dotenv import load_dotenv
 
 from core import secrets
+from core.agents.deferred_tool_resolver import (
+    ToolCatalogEntry,
+    make_deferred_tool_tools,
+)
 from core.agents.delegation_tools import make_delegation_tools
 from core.agents.lifecycle import start_lifecycle_loop
 from core.agents.orchestrator import create_orchestrator_agent
 from core.agents.registry import AgentRegistry
+from core.agents.semantic_agent_selector import AgentProfile, SemanticAgentSelector
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
-from core.llm import ModelRouter, ModelRouterProtocol
+from core.llm import EmbeddingCapability, ModelRouter, ModelRouterProtocol
 from core.llm.catalog import ModelCatalog
 from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
@@ -70,13 +75,49 @@ def _create_agent(
 
     factory = AgentFactory(model_router, tool_resolver, registry)
     catalog = ModelCatalog(overrides=settings.get("models"))
+
+    embedding_provider = get_setting(settings, "extensions.embedding.provider", None)
+    embedding_model = get_setting(settings, "extensions.embedding.default_model", "")
+    if embedding_provider:
+        embedder = model_router.get_capability(
+            EmbeddingCapability,
+            provider_id=embedding_provider,
+        )
+    else:
+        embedder = model_router.get_capability(EmbeddingCapability)
+
+    async def _embed_batch(texts: list[str]) -> list[list[float] | None]:
+        if not embedder or not embedding_model:
+            return [None for _ in texts]
+        return await embedder.embed_batch(texts, embedding_model)
+
+    selector = SemanticAgentSelector(
+        catalog_getter=lambda: [
+            AgentProfile.model_validate(item) for item in loader.get_agent_catalog()
+        ],
+        db_path=_PROJECT_ROOT / "sandbox" / "data" / "agent_selector.db",
+        embed_batch=_embed_batch if embedder and embedding_model else None,
+    )
+
+    deferred_tools = make_deferred_tool_tools(
+        factory=factory,
+        registry=registry,
+        catalog_getter=lambda: [
+            ToolCatalogEntry.model_validate(entry)
+            for entry in loader.get_tool_catalog()
+        ],
+    )
     channel_tools = make_channel_tools(router) + [make_secure_input_tool(event_bus)]
     return create_orchestrator_agent(
         model_router=model_router,
         settings=settings,
-        extension_tools=loader.get_all_tools(),
+        extension_tools=deferred_tools,
         delegation_tools=make_delegation_tools(
-            registry, factory, loader.get_available_tool_ids, catalog
+            registry,
+            factory,
+            loader.get_available_tool_ids,
+            catalog,
+            selector=selector,
         ),
         capabilities_summary=loader.get_capabilities_summary(),
         channel_tools=channel_tools,

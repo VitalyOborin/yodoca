@@ -26,6 +26,7 @@ class AgentRecord:
     model: str | None = None
     integration_mode: Literal["tool", "handoff"] = "tool"
     tools: list[str] = field(default_factory=list)
+    sample_queries: list[str] = field(default_factory=list)
     limits: AgentLimits | None = None
     source: Literal["static", "dynamic"] = "static"
     expires_at: datetime | None = None

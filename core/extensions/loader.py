@@ -366,6 +366,7 @@ class Loader:
             model=manifest.agent.model if manifest.agent else None,
             integration_mode=descriptor.integration_mode,
             tools=manifest.agent.uses_tools if manifest.agent else [],
+            sample_queries=manifest.agent.sample_queries if manifest.agent else [],
             limits=manifest.agent.limits if manifest.agent else None,
             source="static",
         )
@@ -483,6 +484,58 @@ class Loader:
                 ids.append(ext_id)
         return sorted(set(ids))
 
+    def get_tool_catalog(self) -> list[dict[str, Any]]:
+        """Return manifest-derived metadata for available tool IDs.
+
+        Contains one synthetic entry for `core_tools` and one entry per active
+        ToolProvider extension (excluding ERROR state).
+        """
+        catalog: list[dict[str, Any]] = [
+            {
+                "tool_id": "core_tools",
+                "name": "Core Tools",
+                "description": (
+                    "Built-in tools for file operations and restart requests."
+                ),
+                "keywords": ["file", "patch", "restart", "core"],
+            }
+        ]
+        manifest_by_id = {m.id: m for m in self._manifests}
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if not isinstance(ext, ToolProvider):
+                continue
+            manifest = manifest_by_id.get(ext_id)
+            if not manifest:
+                continue
+            keywords: list[str] = [ext_id, manifest.name]
+            if manifest.events:
+                keywords.extend(
+                    p.topic for p in manifest.events.publishes if p.topic
+                )
+                keywords.extend(
+                    s.topic for s in manifest.events.subscribes if s.topic
+                )
+            if manifest.config:
+                keywords.extend(str(k) for k in manifest.config.keys())
+            catalog.append(
+                {
+                    "tool_id": ext_id,
+                    "name": manifest.name,
+                    "description": " ".join(
+                        p
+                        for p in (
+                            manifest.description.strip(),
+                            manifest.setup_instructions.strip(),
+                        )
+                        if p
+                    ),
+                    "keywords": keywords,
+                }
+            )
+        return catalog
+
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
         tools: list[Any] = []
@@ -550,6 +603,23 @@ class Loader:
             mcp_lines = "\n".join(f"- {a}" for a in mcp_aliases)
             sections.append("MCP servers:\n" + mcp_lines)
         return "\n\n".join(sections) if sections else "No extensions loaded."
+
+    def get_agent_catalog(self) -> list[dict[str, Any]]:
+        """Return agent metadata for semantic/lexical selection."""
+        if not self._agent_registry:
+            return []
+        records = self._agent_registry.list_agents()
+        return [
+            {
+                "agent_id": r.id,
+                "name": r.name,
+                "description": r.description,
+                "tools": list(r.tools),
+                "sample_queries": list(r.sample_queries),
+                "integration_mode": r.integration_mode,
+            }
+            for r in records
+        ]
 
     async def shutdown(self) -> None:
         """Stop then destroy all extensions in reverse order."""

@@ -358,3 +358,56 @@ class TestDelegationToolsCreateAgent:
         assert agent.cost_tier == "medium"
         assert agent.capability_tier == "standard"
         assert agent.strengths == []
+
+    @pytest.mark.asyncio
+    async def test_make_delegation_tools_with_selector_adds_auto_tools(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+        from core.agents.semantic_agent_selector import AgentSelectionResult
+        from core.extensions.contract import AgentResponse
+
+        class _Selector:
+            async def select_agents(
+                self, task: str, top_k: int = 3
+            ) -> AgentSelectionResult:
+                return AgentSelectionResult(
+                    strategy="semantic",
+                    selected_agent_ids=["worker_agent"],
+                    candidates=[],
+                )
+
+        registry = AgentRegistry()
+        provider = MagicMock()
+        provider.invoke = AsyncMock(
+            return_value=AgentResponse(status="success", content="done")
+        )
+        registry.register(
+            AgentRecord(
+                id="worker_agent",
+                name="Worker",
+                description="Worker agent",
+                source="static",
+            ),
+            provider,
+        )
+
+        tools = make_delegation_tools(registry, selector=_Selector())
+        names = [t.name for t in tools]
+        assert "select_agents_for_task" in names
+        assert "delegate_task_auto" in names
+
+        auto_tool = next(t for t in tools if t.name == "delegate_task_auto")
+        args = json.dumps({"task": "do work", "context": "ctx", "top_k": 2})
+        ctx = ToolContext(
+            context=object(),
+            tool_name=auto_tool.name,
+            tool_call_id="test-call-id",
+            tool_arguments=args,
+        )
+        result = await auto_tool.on_invoke_tool(ctx, args)
+        assert result.success is True
+        assert result.selected_agent_id == "worker_agent"
+        assert result.strategy == "semantic"

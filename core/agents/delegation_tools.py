@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from core.agents.factory import AgentFactory, AgentSpec
 from core.agents.registry import AgentRecord, AgentRegistry
+from core.agents.semantic_agent_selector import AgentSelectionResult
 from core.extensions.contract import AgentInvocationContext
 from core.llm.catalog import CapabilityTier, CostTier, ModelCatalog
 
@@ -38,6 +39,18 @@ class DelegateTaskResult(BaseModel):
     success: bool
     agent_id: str
     content: str
+    error: str | None = None
+    tokens_used: int | None = None
+
+
+class DelegateTaskAutoResult(BaseModel):
+    """Result of delegate_task_auto tool."""
+
+    success: bool
+    selected_agent_id: str = ""
+    candidates: list[str] = Field(default_factory=list)
+    strategy: str = "none"
+    content: str = ""
     error: str | None = None
     tokens_used: int | None = None
 
@@ -96,6 +109,7 @@ def make_delegation_tools(
     factory: AgentFactory | None = None,
     get_available_tool_ids: Callable[[], list[str]] | None = None,
     catalog: ModelCatalog | None = None,
+    selector: Any | None = None,
 ) -> list[Any]:
     """Create list_agents, delegate_task, optionally create_agent and list_models."""
 
@@ -146,6 +160,64 @@ def make_delegation_tools(
         )
 
     tools_list: list[Any] = [list_agents, delegate_task]
+
+    if selector is not None:
+
+        @function_tool
+        async def select_agents_for_task(
+            task: str,
+            top_k: int = 3,
+        ) -> AgentSelectionResult:
+            """Select top-k most relevant agents for a task."""
+            return await selector.select_agents(task=task, top_k=top_k)
+
+        @function_tool
+        async def delegate_task_auto(
+            task: str,
+            context: str = "",
+            top_k: int = 3,
+        ) -> DelegateTaskAutoResult:
+            """Select a relevant agent and delegate automatically."""
+            selection = await selector.select_agents(task=task, top_k=top_k)
+            if not selection.selected_agent_ids:
+                return DelegateTaskAutoResult(
+                    success=False,
+                    selected_agent_id="",
+                    candidates=[],
+                    strategy=selection.strategy,
+                    content="",
+                    error="No suitable agent found for task",
+                )
+            agent_id = selection.selected_agent_ids[0]
+            invocation_context: AgentInvocationContext | None = None
+            if context:
+                invocation_context = AgentInvocationContext(
+                    conversation_summary=context,
+                    user_message=None,
+                    correlation_id=None,
+                )
+            response = await registry.invoke(agent_id, task, invocation_context)
+            if response.status == "success":
+                return DelegateTaskAutoResult(
+                    success=True,
+                    selected_agent_id=agent_id,
+                    candidates=selection.selected_agent_ids,
+                    strategy=selection.strategy,
+                    content=response.content,
+                    error=None,
+                    tokens_used=response.tokens_used,
+                )
+            return DelegateTaskAutoResult(
+                success=False,
+                selected_agent_id=agent_id,
+                candidates=selection.selected_agent_ids,
+                strategy=selection.strategy,
+                content=response.content,
+                error=response.error or f"Agent returned status: {response.status}",
+                tokens_used=response.tokens_used,
+            )
+
+        tools_list.extend([select_agents_for_task, delegate_task_auto])
 
     if catalog is not None:
 
