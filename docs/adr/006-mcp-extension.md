@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (updated 2026-02-28 — aligned with current architecture after ADRs 007–015)
+Accepted. Implemented
 
 ## Context
 
