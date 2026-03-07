@@ -45,25 +45,21 @@ class ModelInfo:
 
 **ModelCatalog API:**
 
-- `__init__(overrides: dict[str, Any] | None)` — builds catalog from built-in defaults; merges/overrides with settings. Validates tier values; raises `ValueError` on unknown values.
-- `get_info(model_name: str) -> ModelInfo | None`
-- `list_models() -> list[ModelInfo]`
+- `__init__(overrides: dict[str, Any] | None)` — builds catalog from settings only. Validates tier values; raises `ValueError` on unknown values.
+- `get_info(model_name: str) -> ModelInfo | None` — returns `ModelInfo` with default (medium/standard) for any model; `None` only for empty string.
+- `list_models() -> list[ModelInfo]` — returns explicitly configured models from settings, sorted by id.
 
-**Built-in defaults** — common OpenAI models (`gpt-5-mini`, `gpt-5`, `gpt-5.2-codex`, etc.) ship with the code.
+**Default fallback** — no hardcoded model list. Any unknown model receives `cost_tier: medium`, `capability_tier: standard`, empty `strengths`, `context_window: null`. This supports any model (local, hosted, future) without catalog updates.
 
-**Settings override** — optional `models` section in `config/settings.yaml`:
+**Settings** — optional `models` section in `config/settings.yaml` to register explicit metadata:
 
 ```yaml
 models:
-  gpt-5-mini:
-    cost_tier: low
-    capability_tier: standard
-    strengths: [speed, general]
-    context_window: 128000
   my-local-model:
     cost_tier: free
     capability_tier: basic
     strengths: [speed, privacy]
+    context_window: 32000
 ```
 
 Invalid tier values are rejected at startup with a clear error.
@@ -108,7 +104,7 @@ Add cost-optimization guidance to `prompts/orchestrator.jinja2`:
 
 ### Trade-offs
 
-- Built-in catalog may lag behind new model releases; users must add overrides for unknown models.
+- Without explicit `models` config, all models appear as medium/standard; users who want cost-aware routing register metadata in settings.
 - No automatic cost tracking or budgeting; the Orchestrator follows prompt guidance only.
 - `strengths` remains a free-form list (no strict enum) to allow flexibility (e.g. "code", "privacy", "multilingual").
 

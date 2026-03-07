@@ -169,22 +169,13 @@ class ModelInfo:
     context_window: int | None = None
 ```
 
-### Built-in defaults
+### Default fallback
 
-Common models ship with built-in metadata:
+There are no hardcoded model descriptions. Any model not listed in `settings.yaml` receives a neutral default: `cost_tier: medium`, `capability_tier: standard`, empty `strengths`, `context_window: null`. This lets you use any model (local, hosted, future releases) without catalog updates.
 
-| Model | Cost Tier | Capability Tier | Strengths |
-|-------|-----------|-----------------|-----------|
-| `gpt-5-mini` | low | standard | speed, general, cost-effective |
-| `gpt-5` | medium | advanced | reasoning, general, multilingual |
-| `gpt-5.2` | medium | advanced | reasoning, general, tool-use |
-| `gpt-5.2-codex` | high | frontier | code, reasoning, tool-use |
-| `gpt-4o-mini` | low | standard | speed, general, vision |
-| `gpt-4o` | medium | advanced | reasoning, vision, multilingual |
+### Settings (`models` section)
 
-### Settings override (`models` section)
-
-Users can override built-in defaults or register custom models:
+Register explicit metadata for models you use:
 
 ```yaml
 models:
@@ -203,12 +194,12 @@ Invalid tier values are rejected at startup with a clear error.
 
 | Method | Description |
 |--------|-------------|
-| `get_info(model_name)` | Returns `ModelInfo` or `None` for unknown models |
-| `list_models()` | Returns all known models, sorted by id |
+| `get_info(model_name)` | Returns `ModelInfo` with default (medium/standard) for any model; `None` only for empty string |
+| `list_models()` | Returns explicitly configured models from settings, sorted by id (empty if none) |
 
 ### Integration with delegation tools
 
-The `list_agents` tool enriches each agent's metadata with `cost_tier`, `capability_tier`, and `strengths` from the catalog. The `list_models` tool returns the full catalog for `create_agent` model selection.
+The `list_agents` tool enriches each agent's metadata with `cost_tier`, `capability_tier`, and `strengths` from the catalog (or default for unknown models). The `list_models` tool returns the configured catalog for `create_agent` model selection.
 
 See [ADR 019](adr/019-cost-capability-routing.md).
 

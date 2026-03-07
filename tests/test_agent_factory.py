@@ -355,6 +355,6 @@ class TestDelegationToolsCreateAgent:
         assert len(result.agents) == 1
         agent = result.agents[0]
         assert agent.id == "test_agent"
-        assert agent.cost_tier == "low"
+        assert agent.cost_tier == "medium"
         assert agent.capability_tier == "standard"
-        assert "speed" in agent.strengths
+        assert agent.strengths == []

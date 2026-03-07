@@ -66,7 +66,7 @@ LLM API endpoints and credentials. See [llm.md](llm.md).
 
 ### models
 
-Model metadata for cost/capability routing. Overrides built-in defaults or registers custom models. See [llm.md](llm.md#modelcatalog-costcapability-routing).
+Model metadata for cost/capability routing. Registers explicit metadata for models you use. Unknown models get default (medium/standard). See [llm.md](llm.md#modelcatalog-costcapability-routing).
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -75,7 +75,7 @@ Model metadata for cost/capability routing. Overrides built-in defaults or regis
 | `models.<id>.strengths` | list[str] | e.g. `[speed, code, reasoning]` |
 | `models.<id>.context_window` | int | Context window size in tokens |
 
-Invalid tier values are rejected at startup. Built-in defaults exist for common OpenAI models; the `models` section is only needed for overrides or custom models.
+Invalid tier values are rejected at startup.
 
 ```yaml
 models:

@@ -12,18 +12,6 @@ event_bus:
   db_path: sandbox/data/event_journal.db
   max_retries: 3
   poll_interval: 5.0
-# Model catalog: cost and capability metadata for delegation routing.
-# Overrides built-in defaults. cost_tier: free|low|medium|high; capability_tier: basic|standard|advanced|frontier
-# models:
-#   gpt-5-mini:
-#     cost_tier: low
-#     capability_tier: standard
-#     strengths: [speed, general]
-#     context_window: 128000
-#   my-local-model:
-#     cost_tier: free
-#     capability_tier: basic
-#     strengths: [speed, privacy]
 extensions:
   embedding:
     default_model: text-embedding-3-large
@@ -46,13 +34,34 @@ providers:
     base_url: http://127.0.0.1:1234/v1
     api_key_literal: lm-studio
     supports_hosted_tools: false
-  # Optional: chat/completions-only OpenAI-compatible API (e.g. z.ai).
-  # zai:
-  #   type: openai_compatible
-  #   base_url: https://api.z.ai/api/paas/v4
-  #   api_key_secret: ZAI_API_KEY
-  #   api_mode: chat_completions
-  #   supports_hosted_tools: false
+# Model catalog: cost and capability metadata for delegation routing.
+# Overrides built-in defaults. cost_tier: free|low|medium|high; capability_tier: basic|standard|advanced|frontier
+models:
+  qwen/qwen3.5-9b:
+    cost_tier: free
+    capability_tier: basic
+    strengths: [speed, privacy]
+    context_window: 32768
+  gpt-5-mini:
+    cost_tier: low
+    capability_tier: standard
+    strengths: [speed, general, cost-effective]
+    context_window: 400000
+  gpt-5.4:
+    cost_tier: high
+    capability_tier: frontier
+    strengths: [reasoning, general, tool-use]
+    context_window: 1000000
+  gpt-5.3:
+    cost_tier: medium
+    capability_tier: advanced
+    strengths: [reasoning, general, tool-use]
+    context_window: 128000
+  gpt-5.3-codex:
+    cost_tier: high
+    capability_tier: frontier
+    strengths: [code, reasoning, tool-use]
+    context_window: 128000
 session:
   timeout_sec: 1800
 supervisor:

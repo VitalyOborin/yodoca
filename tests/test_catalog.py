@@ -10,18 +10,15 @@ from core.llm.catalog import (
 
 
 class TestModelCatalog:
-    def test_get_info_returns_builtin(self) -> None:
+    def test_get_info_unknown_returns_default(self) -> None:
         catalog = ModelCatalog()
-        info = catalog.get_info("gpt-5-mini")
+        info = catalog.get_info("nonexistent-model")
         assert info is not None
-        assert info.id == "gpt-5-mini"
-        assert info.cost_tier == "low"
+        assert info.id == "nonexistent-model"
+        assert info.cost_tier == "medium"
         assert info.capability_tier == "standard"
-        assert "speed" in info.strengths
-
-    def test_get_info_unknown_returns_none(self) -> None:
-        catalog = ModelCatalog()
-        assert catalog.get_info("nonexistent-model") is None
+        assert info.strengths == ()
+        assert info.context_window is None
 
     def test_get_info_empty_string_returns_none(self) -> None:
         catalog = ModelCatalog()
@@ -30,11 +27,14 @@ class TestModelCatalog:
     def test_list_models_returns_sorted(self) -> None:
         catalog = ModelCatalog()
         models = catalog.list_models()
-        assert len(models) >= 5
         ids = [m.id for m in models]
         assert ids == sorted(ids)
 
-    def test_overrides_merge_with_builtin(self) -> None:
+    def test_list_models_empty_without_overrides(self) -> None:
+        catalog = ModelCatalog()
+        assert catalog.list_models() == []
+
+    def test_overrides_override_model(self) -> None:
         catalog = ModelCatalog(
             overrides={
                 "gpt-5-mini": {

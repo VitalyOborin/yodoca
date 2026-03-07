@@ -26,74 +26,13 @@ class ModelInfo:
     context_window: int | None = None
 
 
-def _model_info(
-    id: str,
-    cost_tier: CostTier,
-    capability_tier: CapabilityTier,
-    strengths: tuple[str, ...],
-    context_window: int | None = None,
-) -> ModelInfo:
-    """Helper to construct ModelInfo with typed strengths tuple."""
-    return ModelInfo(
-        id=id,
-        cost_tier=cost_tier,
-        capability_tier=capability_tier,
-        strengths=strengths,
-        context_window=context_window,
-    )
-
-
-_BUILTIN_CATALOG: dict[str, ModelInfo] = {
-    "gpt-5-mini": _model_info(
-        id="gpt-5-mini",
-        cost_tier="low",
-        capability_tier="standard",
-        strengths=("speed", "general", "cost-effective"),
-        context_window=128_000,
-    ),
-    "gpt-5": _model_info(
-        id="gpt-5",
-        cost_tier="medium",
-        capability_tier="advanced",
-        strengths=("reasoning", "general", "multilingual"),
-        context_window=128_000,
-    ),
-    "gpt-5.2": _model_info(
-        id="gpt-5.2",
-        cost_tier="medium",
-        capability_tier="advanced",
-        strengths=("reasoning", "general", "tool-use"),
-        context_window=128_000,
-    ),
-    "gpt-5.2-codex": _model_info(
-        id="gpt-5.2-codex",
-        cost_tier="high",
-        capability_tier="frontier",
-        strengths=("code", "reasoning", "tool-use"),
-        context_window=256_000,
-    ),
-    "gpt-4o-mini": _model_info(
-        id="gpt-4o-mini",
-        cost_tier="low",
-        capability_tier="standard",
-        strengths=("speed", "general", "vision"),
-        context_window=128_000,
-    ),
-    "gpt-4o": _model_info(
-        id="gpt-4o",
-        cost_tier="medium",
-        capability_tier="advanced",
-        strengths=("reasoning", "vision", "multilingual"),
-        context_window=128_000,
-    ),
-    "mistralai/codestral-22b-v0.1": _model_info(
-        id="mistralai/codestral-22b-v0.1",
-        cost_tier="medium",
-        capability_tier="advanced",
-        strengths=("code", "speed"),
-        context_window=128_000,
-    ),
-}
+DEFAULT_MODEL_INFO = ModelInfo(
+    id="",
+    cost_tier="medium",
+    capability_tier="standard",
+    strengths=(),
+    context_window=None,
+)
 
 
 def _parse_overrides(overrides: dict[str, Any]) -> dict[str, ModelInfo]:
@@ -142,28 +81,36 @@ def _parse_overrides(overrides: dict[str, Any]) -> dict[str, ModelInfo]:
 
 
 class ModelCatalog:
-    """Maps model names to metadata. Built-in defaults + settings.yaml overrides."""
+    """Maps model names to metadata. Settings overrides + default fallback for unknowns."""
 
     VALID_COST_TIERS: frozenset[str] = VALID_COST_TIERS
     VALID_CAPABILITY_TIERS: frozenset[str] = VALID_CAPABILITY_TIERS
 
     def __init__(self, overrides: dict[str, Any] | None = None) -> None:
-        """Build catalog from built-in defaults and optional settings overrides.
+        """Build catalog from settings overrides (models section).
 
         Args:
             overrides: Optional dict from config (models section). Keys are model IDs.
                 Validates tiers; raises ValueError on unknown values.
         """
-        self._catalog: dict[str, ModelInfo] = dict(_BUILTIN_CATALOG)
-        parsed = _parse_overrides(overrides)
-        self._catalog.update(parsed)
+        self._catalog: dict[str, ModelInfo] = _parse_overrides(overrides)
 
     def get_info(self, model_name: str) -> ModelInfo | None:
-        """Lookup model metadata by name. Returns None for unknown models."""
+        """Lookup model metadata by name. Returns default (medium/standard) for unknown models."""
         if not model_name:
             return None
-        return self._catalog.get(model_name.strip())
+        key = model_name.strip()
+        info = self._catalog.get(key)
+        if info is not None:
+            return info
+        return ModelInfo(
+            id=key,
+            cost_tier=DEFAULT_MODEL_INFO.cost_tier,
+            capability_tier=DEFAULT_MODEL_INFO.capability_tier,
+            strengths=DEFAULT_MODEL_INFO.strengths,
+            context_window=DEFAULT_MODEL_INFO.context_window,
+        )
 
     def list_models(self) -> list[ModelInfo]:
-        """Return all known models, sorted by id."""
+        """Return explicitly configured models from settings, sorted by id."""
         return sorted(self._catalog.values(), key=lambda m: m.id)
