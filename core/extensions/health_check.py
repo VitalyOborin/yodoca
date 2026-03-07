@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from core.extensions.contract import ExtensionState
+from core.extensions.lifecycle import ExtensionStateMachine, TaskSupervisor
 
 if TYPE_CHECKING:
     from core.extensions.contract import Extension
@@ -24,21 +25,16 @@ class HealthCheckManager:
     ) -> None:
         self._extensions = extensions
         self._state = state
-        self._task: asyncio.Task[object] | None = None
+        self._state_machine = ExtensionStateMachine(state)
+        self._tasks = TaskSupervisor()
 
     def start(self) -> None:
         """Start the health check loop as an asyncio task."""
-        self._task = asyncio.create_task(self._loop())
+        self._tasks.start("health-check", self._loop)
 
     async def stop(self) -> None:
         """Cancel and await the health check task."""
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        await self._tasks.stop("health-check")
 
     async def _loop(self) -> None:
         """Every 30s call health_check(); on False set ERROR and stop()."""
@@ -49,9 +45,9 @@ class HealthCheckManager:
                     continue
                 try:
                     if not ext.health_check():
-                        self._state[ext_id] = ExtensionState.ERROR
+                        self._state_machine.mark_error(ext_id)
                         await ext.stop()
                 except Exception as e:
                     logger.exception("health_check failed for %s: %s", ext_id, e)
-                    self._state[ext_id] = ExtensionState.ERROR
+                    self._state_machine.mark_error(ext_id)
                     await ext.stop()

@@ -1,4 +1,4 @@
-"""SchedulerManager: cron-driven periodic task execution for SchedulerProvider extensions."""
+"""SchedulerManager: cron-driven periodic task execution for extensions."""
 
 import asyncio
 import logging
@@ -7,6 +7,7 @@ import time
 from croniter import croniter
 
 from core.extensions.contract import ExtensionState, SchedulerProvider
+from core.extensions.lifecycle import TaskSupervisor
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.router import MessageRouter
 
@@ -28,7 +29,7 @@ class SchedulerManager:
         self._schedulers: dict[str, SchedulerProvider] = {}
         self._manifests: dict[str, ExtensionManifest] = {}
         self._task_next: dict[str, float] = {}
-        self._task: asyncio.Task[object] | None = None
+        self._tasks = TaskSupervisor()
 
     def register(
         self,
@@ -63,17 +64,11 @@ class SchedulerManager:
                         e,
                     )
                     self._task_next[key] = now + 86400
-        self._task = asyncio.create_task(self._loop())
+        self._tasks.start("scheduler-loop", self._loop)
 
     async def stop(self) -> None:
         """Cancel and await the cron loop task."""
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        await self._tasks.stop("scheduler-loop")
 
     async def _loop(self) -> None:
         """Every minute evaluate schedules; call execute_task on match."""

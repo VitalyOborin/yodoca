@@ -29,6 +29,7 @@ from core.extensions.dependency_resolver import DependencyResolver
 from core.extensions.event_wiring import EventWiringManager
 from core.extensions.extension_factory import ExtensionFactory
 from core.extensions.health_check import HealthCheckManager
+from core.extensions.lifecycle import ExtensionStateMachine, TaskSupervisor
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.manifest_repository import ManifestRepository
 from core.extensions.router import MessageRouter
@@ -63,10 +64,16 @@ class Loader:
         self._tool_providers: list[ToolProvider] = []
         self._agent_registry: AgentRegistry | None = None
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._service_task_names: dict[str, str] = {}
+        self._task_supervisor = TaskSupervisor()
         self._health_manager = HealthCheckManager(self._extensions, self._state)
         self._scheduler_manager: SchedulerManager | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._event_bus: EventBus | None = None
+
+    def _lifecycle(self) -> ExtensionStateMachine:
+        """State machine bound to current state dict (tests may replace self._state)."""
+        return ExtensionStateMachine(self._state)
 
     def set_shutdown_event(self, event: asyncio.Event) -> None:
         self._shutdown_event = event
@@ -119,8 +126,8 @@ class Loader:
     async def load_all(self) -> None:
         """Load extensions in dependency order; cascade failure to dependents."""
         order = self._resolve_dependency_order()
-        self._extensions = {}
-        self._state = {}
+        self._extensions.clear()
+        self._state.clear()
         failed_ids: set[str] = set()
         for manifest in order:
             failed_deps = [d for d in manifest.depends_on if d in failed_ids]
@@ -130,7 +137,7 @@ class Loader:
                     manifest.id,
                     failed_deps,
                 )
-                self._state[manifest.id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(manifest.id)
                 failed_ids.add(manifest.id)
                 continue
             try:
@@ -139,7 +146,7 @@ class Loader:
                 self._state[manifest.id] = ExtensionState.INACTIVE
             except Exception as e:
                 logger.exception("Failed to load extension %s: %s", manifest.id, e)
-                self._state[manifest.id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(manifest.id)
                 failed_ids.add(manifest.id)
 
     def _load_one(self, manifest: ExtensionManifest) -> Extension:
@@ -266,7 +273,7 @@ class Loader:
                     ext_id,
                     failed_deps,
                 )
-                self._state[ext_id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(ext_id)
                 continue
             manifest = self._get_manifest(ext_id)
             if not manifest:
@@ -276,7 +283,7 @@ class Loader:
                 await ext.initialize(ctx)
             except Exception as e:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
-                self._state[ext_id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(ext_id)
 
     def _make_event_wiring_manager(self) -> EventWiringManager:
         """Construct an EventWiringManager from current Loader state."""
@@ -403,18 +410,46 @@ class Loader:
                     ext_id,
                     failed_deps,
                 )
-                self._state[ext_id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(ext_id)
                 continue
             try:
                 await ext.start()
-                self._state[ext_id] = ExtensionState.ACTIVE
+                self._lifecycle().mark_active(ext_id)
                 if isinstance(ext, ServiceProvider):
-                    self._service_tasks[ext_id] = asyncio.create_task(
-                        ext.run_background()
+                    task_name = f"service::{ext_id}"
+                    self._service_task_names[ext_id] = task_name
+
+                    async def _on_error(
+                        _task_name: str,
+                        exc: BaseException,
+                        _ext_id: str = ext_id,
+                        _ext: Extension = ext,
+                    ) -> None:
+                        logger.exception(
+                            "Service task failed for %s: %s",
+                            _ext_id,
+                            exc,
+                        )
+                        self._lifecycle().mark_error(_ext_id)
+                        try:
+                            await _ext.stop()
+                        except Exception as stop_error:
+                            logger.exception(
+                                "Service stop failed for %s: %s",
+                                _ext_id,
+                                stop_error,
+                            )
+                        self._service_tasks.pop(_ext_id, None)
+                        self._service_task_names.pop(_ext_id, None)
+
+                    self._service_tasks[ext_id] = self._task_supervisor.start(
+                        task_name,
+                        ext.run_background,
+                        on_error=_on_error,
                     )
             except Exception as e:
                 logger.exception("start failed for %s: %s", ext_id, e)
-                self._state[ext_id] = ExtensionState.ERROR
+                self._lifecycle().mark_error(ext_id)
         if self._scheduler_manager:
             self._scheduler_manager.start()
         self._health_manager.start()
@@ -521,12 +556,10 @@ class Loader:
         await self._health_manager.stop()
         if self._scheduler_manager:
             await self._scheduler_manager.stop()
-        for task in self._service_tasks.values():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        for ext_id, task_name in list(self._service_task_names.items()):
+            await self._task_supervisor.stop(task_name)
+            self._service_tasks.pop(ext_id, None)
+            self._service_task_names.pop(ext_id, None)
         order = self._resolve_dependency_order()
         for manifest in reversed(order):
             ext_id = manifest.id
