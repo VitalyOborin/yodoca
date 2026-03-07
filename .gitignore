@@ -20,3 +20,5 @@ sandbox/.restart_requested
 sandbox/data/
 sandbox/logs/
 config/settings.yaml
+# huge documents about discovery process
+docs/discovery/
