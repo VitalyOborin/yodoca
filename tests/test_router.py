@@ -3,11 +3,13 @@
 import asyncio
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.events import EventBus
 from core.extensions.contract import (
     ChannelProvider,
     StreamingChannelProvider,
@@ -484,3 +486,113 @@ class TestInvokeAgentBackgroundLockSplit:
         assert user_done.is_set()
         assert background_done.is_set()
         assert elapsed < 0.12  # If parallel, ~0.05s; if serial, ~0.1s
+
+
+class TestUserMessageDeduplication:
+    """user.message idempotency: duplicate replays skip agent and channel delivery."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_event_id_skips_agent_and_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """When handle_user_message is called twice with same event_id, second call skips."""
+        db_path = tmp_path / "event_journal.db"
+        event_bus = EventBus(db_path=db_path, poll_interval=60, batch_size=3)
+        await event_bus.recover()
+
+        router = MessageRouter()
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        router.set_agent(MagicMock())
+        router.configure_session(
+            session_db_path=str(tmp_path / "session.db"),
+            session_timeout=1800,
+            event_bus=event_bus,
+        )
+
+        with patch("agents.Runner") as mock_runner:
+            result = MagicMock()
+            result.final_output = "reply"
+            result.interruptions = None
+            mock_runner.run = AsyncMock(return_value=result)
+
+            await router.handle_user_message(
+                "hi", "user1", ch, "cli", event_id=42
+            )
+            assert ch.sent == [("user1", "reply")]
+
+            ch.sent.clear()
+            await router.handle_user_message(
+                "hi", "user1", ch, "cli", event_id=42
+            )
+            assert ch.sent == []
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_event_id_skips_router_emits(
+        self, tmp_path: Path
+    ) -> None:
+        """Duplicate event_id does not emit user_message or agent_response."""
+        db_path = tmp_path / "event_journal.db"
+        event_bus = EventBus(db_path=db_path, poll_interval=60, batch_size=3)
+        await event_bus.recover()
+
+        router = MessageRouter()
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        router.set_agent(MagicMock())
+        router.configure_session(
+            session_db_path=str(tmp_path / "session.db"),
+            session_timeout=1800,
+            event_bus=event_bus,
+        )
+
+        events_received: list[tuple[str, object]] = []
+
+        def on_user_message(data: object) -> None:
+            events_received.append(("user_message", data))
+
+        def on_agent_response(data: object) -> None:
+            events_received.append(("agent_response", data))
+
+        router.subscribe("user_message", on_user_message)
+        router.subscribe("agent_response", on_agent_response)
+
+        with patch("agents.Runner") as mock_runner:
+            result = MagicMock()
+            result.final_output = "reply"
+            result.interruptions = None
+            mock_runner.run = AsyncMock(return_value=result)
+
+            await router.handle_user_message(
+                "hi", "user1", ch, "cli", event_id=99
+            )
+            assert len(events_received) == 2
+
+            events_received.clear()
+            await router.handle_user_message(
+                "hi", "user1", ch, "cli", event_id=99
+            )
+            assert len(events_received) == 0
+
+        await event_bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_event_id_processes_normally(self) -> None:
+        """When event_id is None, processing runs normally (no dedup)."""
+        router = MessageRouter()
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        router.set_agent(MagicMock())
+
+        with patch("agents.Runner") as mock_runner:
+            result = MagicMock()
+            result.final_output = "reply"
+            result.interruptions = None
+            mock_runner.run = AsyncMock(return_value=result)
+
+            await router.handle_user_message("hi", "user1", ch, "cli")
+            await router.handle_user_message("hi", "user1", ch, "cli")
+
+        assert ch.sent == [("user1", "reply"), ("user1", "reply")]

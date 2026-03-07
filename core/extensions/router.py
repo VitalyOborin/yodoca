@@ -447,8 +447,18 @@ class MessageRouter:
         user_id: str,
         channel: ChannelProvider,
         channel_id: str,
+        event_id: int | None = None,
     ) -> None:
-        """Invoke agent with user message, send response via channel. Serialized."""
+        """Invoke agent with user message, send response via channel. Serialized.
+        When event_id is provided (from EventBus user.message), processing is idempotent:
+        duplicate replays skip agent execution, memory hooks, and channel delivery."""
+        if event_id is not None and self._event_bus:
+            if await self._event_bus.is_user_message_completed(event_id):
+                logger.debug(
+                    "user.message event %s already processed, skipping duplicate",
+                    event_id,
+                )
+                return
         await self._maybe_rotate_session()
         turn_context = TurnContext(
             agent_id=self._agent_id,
@@ -461,6 +471,8 @@ class MessageRouter:
             channel, user_id, text, turn_context
         )
         await self._emit("agent_response", {"user_id": user_id, "text": response, "channel": channel, "session_id": self._session_id, "agent_id": self._agent_id})
+        if event_id is not None and self._event_bus:
+            await self._event_bus.record_user_message_completed(event_id)
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         """Send proactive notification to user. Channel handles all addressing internally."""

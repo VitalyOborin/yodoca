@@ -139,14 +139,14 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 ### EventBus
 
 - **Location:** `core/events/bus.py`
-- **Role:** Durable pub/sub. Events persisted to SQLite before delivery; at-least-once semantics.
+- **Role:** Durable pub/sub. Events persisted to SQLite before delivery; at-least-once semantics. Failed handlers are retried up to `max_retries`; then events are dead-lettered.
 - **See:** [event_bus.md](event_bus.md)
 
 ### MessageRouter
 
 - **Location:** `core/extensions/router.py`
 - **Role:** Routes user messages to the Orchestrator; delivers responses to channels. In-memory pub/sub for `user_message` and `agent_response`. ContextProvider middleware enriches prompts before agent invocation.
-- **Key details:** `asyncio.Lock` serializes concurrent agent invocations; `SQLiteSession` stores conversation history; `notify_user()` enables proactive messages.
+- **Key details:** `asyncio.Lock` serializes concurrent agent invocations; `SQLiteSession` stores conversation history; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
 - **Streaming:** If the channel implements `StreamingChannelProvider`, `handle_user_message()` uses `invoke_agent_streamed()` and calls the channel's stream lifecycle (`on_stream_start` → `on_stream_chunk` / `on_stream_status` → `on_stream_end`). Otherwise it uses `invoke_agent()` and `send_to_user()` as before. See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
 
 ### Core Tools
@@ -202,7 +202,8 @@ EventBus  (journal → dispatch)
   │  kernel_user_message_handler (wired in loader.wire_event_subscriptions)
   │  resolves channel_id → ChannelProvider
   ▼
-router.handle_user_message(text, user_id, channel)
+router.handle_user_message(text, user_id, channel, event_id=event.id)
+  ├─ if event_id and already in user_message_processing → skip (idempotency)
   ├─ _emit("user_message")                → Memory.save_episode (subscriber)
   ├─ if channel is StreamingChannelProvider:
   │    ├─ channel.on_stream_start(user_id)
@@ -216,6 +217,7 @@ router.handle_user_message(text, user_id, channel)
   │    │    └─ Runner.run(agent, prompt, session=SQLiteSession)
   │    └─ channel.send_to_user(user_id, response)
   ├─ _emit("agent_response")              → Memory.save_episode (subscriber)
+  ├─ if event_id: record in user_message_processing (idempotency)
   └─ (response already delivered by channel)
 ```
 

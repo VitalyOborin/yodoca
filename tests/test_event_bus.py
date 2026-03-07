@@ -226,3 +226,32 @@ class TestEventBusRetryAndDeadLetter:
         status, retry_count = rows[0]
         assert status == "dead_letter"
         assert retry_count >= 2
+
+
+class TestUserMessageDedupJournal:
+    """user_message_processing table: is_user_message_completed, record_user_message_completed."""
+
+    @pytest.mark.asyncio
+    async def test_is_completed_false_when_not_recorded(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        await journal._ensure_conn()
+        assert await journal.is_user_message_completed(1) is False
+        await journal.close()
+
+    @pytest.mark.asyncio
+    async def test_record_and_is_completed(self, db_path: Path) -> None:
+        journal = EventJournal(db_path)
+        await journal._ensure_conn()
+        assert await journal.is_user_message_completed(100) is False
+        await journal.record_user_message_completed(100)
+        assert await journal.is_user_message_completed(100) is True
+        assert await journal.is_user_message_completed(101) is False
+        await journal.close()
+
+    @pytest.mark.asyncio
+    async def test_event_bus_exposes_dedup_methods(self, event_bus: EventBus) -> None:
+        assert await event_bus.is_user_message_completed(1) is False
+        await event_bus.record_user_message_completed(1)
+        assert await event_bus.is_user_message_completed(1) is True

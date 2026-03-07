@@ -121,10 +121,10 @@ async def main_async() -> None:
     await _wire_extensions(loader, router, event_bus)
     agent = _create_agent(loader, router, event_bus, settings, model_router, registry)
     router.set_agent(agent)
+    _configure_session_and_context(router, loader, agent, settings, data_dir, event_bus)
     await event_bus.start()
     await loader.start_all()
     lifecycle_task = start_lifecycle_loop(registry, interval_seconds=60.0)
-    _configure_session_and_context(router, loader, agent, settings, data_dir, event_bus)
     try:
         await shutdown_event.wait()
     except asyncio.CancelledError:

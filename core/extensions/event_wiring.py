@@ -168,7 +168,9 @@ class EventWiringManager:
         if not channel:
             logger.warning("user.message: unknown channel_id %s", channel_id)
             return
-        await router.handle_user_message(text, user_id, channel, channel_id)
+        await router.handle_user_message(
+            text, user_id, channel, channel_id, event_id=event.id
+        )
 
     def _make_proactive_handler(
         self, topic: str, ext_id: str, agent: AgentProvider

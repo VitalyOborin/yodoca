@@ -547,9 +547,10 @@ Add to `depends_on` in manifest, then:
 
 ```python
 kv = self._ctx.get_extension("kv")
-if kv:
-    value = await kv.get("key")
+value = await kv.get("key")
 ```
+
+`depends_on` is a **hard contract**: if the dependency fails to load, initialize, or start, your extension is cascaded to ERROR and never runs. `get_extension()` raises `RuntimeError` (never returns `None`) when a declared dependency is unavailable.
 
 ### 6. Publishing Events
 
@@ -584,10 +585,11 @@ async def _on_alert(self, event) -> None:
 
 ## Dependency Order
 
-- `depends_on` defines load order (topological sort)
+- `depends_on` defines load order (topological sort) and is a **hard contract**
 - Missing dependency raises `ValueError`
 - Cycle in `depends_on` raises `ValueError`
-- `get_extension(ext_id)` returns `None` if `ext_id` is not in `depends_on`
+- If a dependency fails to load, initialize, or start, dependents are cascaded to ERROR (never initialized or started)
+- `get_extension(ext_id)` raises `ValueError` if `ext_id` is not in `depends_on`; raises `RuntimeError` if the dependency is not loaded or in ERROR state (never returns `None`)
 
 ---
 

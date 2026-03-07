@@ -10,10 +10,10 @@ description: |
   Intent-aware hybrid retrieval (FTS5 + vector + graph BFS + RRF).
   LLM-powered write path for consolidation and entity resolution.
 
-depends_on:
-  - embedding
+depends_on: []
 
 config:
+  embedding_model: text-embedding-3-large
   embedding_dimensions: 256
   decay_threshold: 0.05
   decay_rate_default: 0.1

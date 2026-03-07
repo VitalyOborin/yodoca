@@ -132,17 +132,30 @@ class Loader:
         return order
 
     async def load_all(self) -> None:
-        """Load extension modules in dependency order; instantiate."""
+        """Load extensions in dependency order; cascade failure to dependents."""
         order = self._resolve_dependency_order()
         self._extensions = {}
         self._state = {}
+        failed_ids: set[str] = set()
         for manifest in order:
+            failed_deps = [d for d in manifest.depends_on if d in failed_ids]
+            if failed_deps:
+                logger.error(
+                    "Extension %s skipped: depends on failed %s",
+                    manifest.id,
+                    failed_deps,
+                )
+                self._state[manifest.id] = ExtensionState.ERROR
+                failed_ids.add(manifest.id)
+                continue
             try:
                 ext = self._load_one(manifest)
                 self._extensions[manifest.id] = ext
                 self._state[manifest.id] = ExtensionState.INACTIVE
             except Exception as e:
                 logger.exception("Failed to load extension %s: %s", manifest.id, e)
+                self._state[manifest.id] = ExtensionState.ERROR
+                failed_ids.add(manifest.id)
 
     def _load_one(self, manifest: ExtensionManifest) -> Extension:
         """Dynamic import or declarative adapter. Declarative agents need no main.py."""
@@ -174,6 +187,17 @@ class Loader:
         """Return manifest for extension id, or None if not found."""
         return next((m for m in self._manifests if m.id == ext_id), None)
 
+    def _check_deps_healthy(self, ext_id: str) -> list[str]:
+        """Return depends_on entries in ERROR state (empty = all OK)."""
+        manifest = self._get_manifest(ext_id)
+        if not manifest:
+            return []
+        return [
+            dep
+            for dep in manifest.depends_on
+            if self._state.get(dep) == ExtensionState.ERROR
+        ]
+
     def _iter_active_manifests(self) -> Iterator[tuple[str, ExtensionManifest]]:
         """Yield (ext_id, manifest) for non-ERROR manifests, in manifest order."""
         for manifest in self._manifests:
@@ -195,7 +219,16 @@ class Loader:
                     f"Extension '{caller_ext_id}' cannot access '{ext_id}': "
                     f"not in depends_on ({allowed})"
                 )
-            return self._extensions.get(ext_id)
+            ext = self._extensions.get(ext_id)
+            if ext is None:
+                raise RuntimeError(
+                    f"Dependency '{ext_id}' of '{caller_ext_id}' is not loaded"
+                )
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                raise RuntimeError(
+                    f"Dependency '{ext_id}' of '{caller_ext_id}' is in ERROR state"
+                )
+            return ext
 
         return get_extension
 
@@ -316,11 +349,20 @@ class Loader:
         )
 
     async def initialize_all(self, router: MessageRouter) -> None:
-        """Create context per extension, call initialize(ctx). Skip on exception."""
+        """Create context per extension, call initialize(ctx). Cascade dep failure."""
         self._router = router
         self._register_agent_config_from_manifests()
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
+                continue
+            failed_deps = self._check_deps_healthy(ext_id)
+            if failed_deps:
+                logger.error(
+                    "Extension %s skipped: depends on failed %s",
+                    ext_id,
+                    failed_deps,
+                )
+                self._state[ext_id] = ExtensionState.ERROR
                 continue
             manifest = self._get_manifest(ext_id)
             if not manifest:
@@ -446,9 +488,18 @@ class Loader:
         router.set_channel_descriptions(channel_descriptions)
 
     async def start_all(self) -> None:
-        """Call start() on all; wrap ServiceProvider.run_background in tasks; start cron loop."""
+        """Call start() on all; wrap ServiceProvider; start cron. Cascade dep failure."""
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
+                continue
+            failed_deps = self._check_deps_healthy(ext_id)
+            if failed_deps:
+                logger.error(
+                    "Extension %s skipped: depends on failed %s",
+                    ext_id,
+                    failed_deps,
+                )
+                self._state[ext_id] = ExtensionState.ERROR
                 continue
             try:
                 await ext.start()

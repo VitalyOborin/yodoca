@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.extensions.contract import TurnContext
 from core.events.topics import SystemTopics
+from core.llm.capabilities import EmbeddingCapability
 
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
@@ -32,16 +33,24 @@ from tools import build_tools
 logger = logging.getLogger(__name__)
 
 
-def _build_embed_fns(
-    embedding_ext: object, dims: int
-) -> tuple[object | None, object | None]:
-    """Build embed_fn and embed_batch_fn from embedding extension. Returns (embed_fn, embed_batch_fn)."""
-    embed_fn = lambda text: embedding_ext.embed(text, dimensions=dims)
-    embed_batch_fn = (
-        (lambda texts: embedding_ext.embed_batch(texts, dimensions=dims))
-        if hasattr(embedding_ext, "embed_batch")
-        else None
-    )
+def _build_embed_fns_from_capability(
+    embedder: EmbeddingCapability,
+    model: str,
+    dims: int,
+) -> tuple[object, object]:
+    """Build embed_fn and embed_batch_fn from EmbeddingCapability."""
+
+    async def embed_fn(text: str) -> list[float] | None:
+        results = await embedder.embed_batch(
+            [text], model=model, dimensions=dims
+        )
+        return results[0] if results else None
+
+    async def embed_batch_fn(texts: list[str]) -> list[list[float] | None]:
+        return await embedder.embed_batch(
+            texts, model=model, dimensions=dims
+        )
+
     return embed_fn, embed_batch_fn
 
 
@@ -138,12 +147,19 @@ class MemoryExtension:
         self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
         await self._storage.initialize()
 
-        embedding_ext = context.get_extension("embedding")
+        embedding_model = context.get_config(
+            "embedding_model", "text-embedding-3-large"
+        )
+        embedder = (
+            context.model_router.get_capability(EmbeddingCapability)
+            if context.model_router
+            else None
+        )
         self._embed_fn = None
         embed_batch_fn = None
-        if embedding_ext and embedding_ext.health_check():
-            self._embed_fn, embed_batch_fn = _build_embed_fns(
-                embedding_ext, embedding_dims
+        if embedder:
+            self._embed_fn, embed_batch_fn = _build_embed_fns_from_capability(
+                embedder, embedding_model, embedding_dims
             )
 
         if self._embed_fn:

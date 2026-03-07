@@ -164,10 +164,6 @@ class TelegramChannelExtension:
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
         self._kv = context.get_extension("kv")
-        if not self._kv:
-            raise RuntimeError(
-                "Telegram channel requires the KV extension. Add it to depends_on and ensure it is enabled."
-            )
 
         self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
         self._stream_edit_interval_ms = int(

@@ -201,6 +201,14 @@ class EventBus:
                 error_msg,
             )
 
+    async def is_user_message_completed(self, event_id: int) -> bool:
+        """Return True if user.message event_id was already fully processed."""
+        return await self._journal.is_user_message_completed(event_id)
+
+    async def record_user_message_completed(self, event_id: int) -> None:
+        """Record that user.message event_id was fully processed."""
+        await self._journal.record_user_message_completed(event_id)
+
     async def _deliver(self, event: Event) -> None:
         """Deliver event to handlers; mark done or failed."""
         handlers = self._subscribers.get(event.topic, [])

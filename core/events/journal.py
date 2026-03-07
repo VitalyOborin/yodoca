@@ -38,6 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_ej_status_created ON event_journal(status, create
 CREATE INDEX IF NOT EXISTS idx_ej_correlation ON event_journal(correlation_id);
 """
 
+_USER_MESSAGE_DEDUP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_message_processing (
+    event_id     INTEGER PRIMARY KEY,
+    completed_at REAL NOT NULL
+);
+"""
+
 
 class EventJournal:
     """SQLite-backed event journal. One connection per instance."""
@@ -56,9 +63,11 @@ class EventJournal:
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
                 await self._conn.execute(f"PRAGMA busy_timeout={self._busy_timeout}")
                 await self._conn.executescript(_SCHEMA)
+                await self._conn.executescript(_USER_MESSAGE_DEDUP_SCHEMA)
                 await self._conn.commit()
                 await self._migrate_retry_count()
                 await self._migrate_processing_since()
+                await self._migrate_user_message_dedup()
             return self._conn
 
     async def _get_table_columns(self) -> set[str]:
@@ -87,6 +96,17 @@ class EventJournal:
             await self._conn.execute(
                 "ALTER TABLE event_journal ADD COLUMN processing_since REAL"
             )
+            await self._conn.commit()
+
+    async def _migrate_user_message_dedup(self) -> None:
+        """Create user_message_processing table if missing (migration for existing DBs)."""
+        if self._conn is None:
+            return
+        cursor = await self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_message_processing'"
+        )
+        if await cursor.fetchone() is None:
+            await self._conn.executescript(_USER_MESSAGE_DEDUP_SCHEMA)
             await self._conn.commit()
 
     async def close(self) -> None:
@@ -262,3 +282,23 @@ class EventJournal:
         )
         await conn.commit()
         return (reset_count, dead_letter_count)
+
+    async def is_user_message_completed(self, event_id: int) -> bool:
+        """Return True if user.message event_id was already fully processed (idempotency check)."""
+        conn = await self._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT 1 FROM user_message_processing WHERE event_id = ?",
+            (event_id,),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
+    async def record_user_message_completed(self, event_id: int) -> None:
+        """Record that user.message event_id was fully processed (agent + channel delivery)."""
+        conn = await self._ensure_conn()
+        now = time.time()
+        await conn.execute(
+            "INSERT OR REPLACE INTO user_message_processing (event_id, completed_at) VALUES (?, ?)",
+            (event_id, now),
+        )
+        await conn.commit()

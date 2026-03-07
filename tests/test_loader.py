@@ -517,3 +517,144 @@ class TestInitializeAndLifecycle:
         await loader.shutdown()
         # Shutdown order should be reverse of load order: a, then b
         assert order == ["a.stop", "a.destroy", "b.stop", "b.destroy"]
+
+
+class TestDependencyCascadeAndFailFast:
+    """Cascade failure when deps fail; get_extension raises (never None)."""
+
+    @pytest.mark.asyncio
+    async def test_load_all_cascades_failure_to_dependents(
+        self, tmp_path: Path
+    ) -> None:
+        """A depends on B; B fails to load; A is ERROR without _load_one."""
+        # Create minimal dirs: b has bad entrypoint so _load_one raises
+        b_dir = tmp_path / "b"
+        b_dir.mkdir()
+        (b_dir / "manifest.yaml").write_text(
+            "id: b\nname: B\nentrypoint: main:Cls\n",
+            encoding="utf-8",
+        )
+        # No main.py -> FileNotFoundError
+        a_dir = tmp_path / "a"
+        a_dir.mkdir()
+        (a_dir / "manifest.yaml").write_text(
+            "id: a\nname: A\nentrypoint: main:Cls\ndepends_on: [b]\n",
+            encoding="utf-8",
+        )
+        (a_dir / "main.py").write_text(
+            "class Cls:\n    pass\n",
+            encoding="utf-8",
+        )
+
+        loader = Loader(
+            extensions_dir=tmp_path, data_dir=tmp_path, settings=_EMPTY_SETTINGS
+        )
+        await loader.discover()
+        await loader.load_all()
+
+        assert "b" not in loader._extensions
+        assert loader._state.get("b") == ExtensionState.ERROR
+        assert "a" not in loader._extensions
+        assert loader._state.get("a") == ExtensionState.ERROR
+
+    @pytest.mark.asyncio
+    async def test_initialize_cascades_dep_error(self) -> None:
+        """A depends on B; B in ERROR; A is ERROR without initialize() being called."""
+        initialized = []
+
+        class MockExt:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def initialize(self, context: object) -> None:
+                initialized.append(self.name)
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        a, b = MockExt("a"), MockExt("b")
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
+        loader._extensions = {"a": a, "b": b}
+        loader._state = {"a": ExtensionState.INACTIVE, "b": ExtensionState.ERROR}
+        router = MessageRouter()
+        await loader.initialize_all(router)
+
+        assert "a" not in initialized
+        assert loader._state.get("a") == ExtensionState.ERROR
+
+    @pytest.mark.asyncio
+    async def test_start_cascades_dep_error(self) -> None:
+        """A depends on B; B in ERROR; A is ERROR without start() being called."""
+        started = []
+
+        class MockExt:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def initialize(self, context: object) -> None:
+                pass
+
+            async def start(self) -> None:
+                started.append(self.name)
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        a, b = MockExt("a"), MockExt("b")
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
+        loader._extensions = {"a": a, "b": b}
+        loader._state = {"a": ExtensionState.INACTIVE, "b": ExtensionState.ERROR}
+        router = MessageRouter()
+        await loader.initialize_all(router)
+        loader.detect_and_wire_all(router)
+        await loader.start_all()
+
+        assert "a" not in started
+        assert loader._state.get("a") == ExtensionState.ERROR
+
+    def test_get_extension_raises_on_missing_dep(self) -> None:
+        """get_extension raises RuntimeError when dep is not loaded."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
+        loader._extensions = {"a": object()}  # b not loaded
+        loader._state = {"a": ExtensionState.ACTIVE}
+        get_ext = loader._make_get_extension("a")
+        with pytest.raises(RuntimeError, match="Dependency 'b' of 'a' is not loaded"):
+            get_ext("b")
+
+    def test_get_extension_raises_on_error_dep(self) -> None:
+        """get_extension raises RuntimeError when dep is in ERROR state."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
+        loader._extensions = {"a": object(), "b": object()}
+        loader._state = {"a": ExtensionState.ACTIVE, "b": ExtensionState.ERROR}
+        get_ext = loader._make_get_extension("a")
+        with pytest.raises(
+            RuntimeError, match="Dependency 'b' of 'a' is in ERROR state"
+        ):
+            get_ext("b")

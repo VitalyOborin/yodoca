@@ -57,12 +57,22 @@ The Event Bus provides:
 | topic          | text | Event topic (e.g. `reminder.due`, `user.message`) |
 | source         | text | Extension ID that published                       |
 | payload        | text | JSON-serialized payload                           |
-| status         | text | `pending` → `processing` → `done` \| `failed`     |
+| status         | text | `pending` → `processing` → `done` \| `failed` \| `dead_letter` |
+| retry_count    | int  | Number of retries (incremented on retry and stale recovery)    |
 | created_at     | real | Unix timestamp                                    |
-| processed_at   | real | Set when done/failed                              |
+| processed_at   | real | Set when done/failed/dead_letter                  |
 | error          | text | Error message if failed                           |
 
 **Indexes:** `(topic, status)`, `(status, created_at)`, `(correlation_id)`.
+
+### `user_message_processing`
+
+Persisted idempotency state for `user.message` events. Prevents duplicate agent invocations and channel deliveries when events are redelivered (retry, crash recovery).
+
+| Column      | Type | Description                          |
+| ----------- | ---- | ------------------------------------ |
+| event_id    | int  | Primary key; references event_journal.id |
+| completed_at| real | Unix timestamp when processing completed |
 
 **Pragmas:** `journal_mode=WAL`, `synchronous=NORMAL`.
 
@@ -198,9 +208,13 @@ The Event Bus runs a single `_dispatch_loop`:
 
 1. **Wait** for `_wake` or `poll_interval` timeout (default 5s)
 2. **Fetch** pending events from journal (limit 3 per iteration)
-3. **Deliver** to all subscribers; mark `processing` → `done` or `failed`
+3. **Deliver** to all subscribers; mark `processing` → `done`, `failed`, or retry
 
-Handlers run sequentially per event. If any handler raises, the event is marked `failed` with the error message (joined by "; " for multiple failures); other handlers for that topic still run. `failed` is a terminal state — failed events are **not** retried. Only events left in `processing` (crash during delivery) are recovered to `pending` on restart.
+Handlers run sequentially per event. If any handler raises:
+- If `retry_count < max_retries`: event is reset to `pending`, `retry_count` incremented; it will be redelivered.
+- Otherwise: event is marked `dead_letter` with the error message.
+
+Only events left in `processing` (crash during delivery) are recovered to `pending` on restart.
 
 ---
 
@@ -211,7 +225,13 @@ Handlers run sequentially per event. If any handler raises, the event is marked 
 1. Reset `processing` → `pending` (events interrupted by crash)
 2. Log total recovered count
 
-The dispatch loop then processes recovered events normally.
+A **watchdog** runs periodically and recovers events stuck in `processing` longer than `stale_timeout`: those with `retry_count < max_retries` are reset to `pending`; others are moved to `dead_letter`.
+
+---
+
+## user.message Idempotency
+
+The kernel handler for `user.message` passes `event.id` into `MessageRouter.handle_user_message()`. The router records completion in `user_message_processing` after successful agent invocation and channel delivery. On replay (retry or crash recovery), the router checks this table and **skips** agent execution, memory hooks, and channel delivery if the event was already processed. This prevents duplicate side effects (LLM calls, tool invocations, file writes, duplicate messages to the user).
 
 ---
 
@@ -289,6 +309,9 @@ Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 | `db_path`       | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root)                                      |
 | `poll_interval` | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce event latency |
 | `batch_size`    | `3`                             | Max pending events fetched per loop iteration                                     |
+| `max_retries`   | `3`                             | Max retries before dead-lettering failed events                                   |
+| `stale_timeout` | `300`                           | Seconds after which stuck `processing` events are recovered by watchdog           |
+| `busy_timeout`  | `5000`                          | SQLite busy timeout in milliseconds                                               |
 
 
 ---

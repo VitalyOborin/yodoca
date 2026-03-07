@@ -29,20 +29,22 @@ Memory integrates via **two subscription mechanisms**:
                                                               ▼
 ┌────────────────────────────────────────────────────────────────────────────────────┐
 │ Loader: kernel_user_message_handler (subscribes to EventBus "user.message")        │
-│   → router.handle_user_message(text, user_id, channel)                             │
+│   → router.handle_user_message(text, user_id, channel, event_id=event.id)           │
 └────────────────────────────────────────────────────────────────────────────────────┘
                                                                │
                                                                ▼
 ┌────────────────────────────────────────────────────────────────────────────────────┐
-│ MessageRouter.handle_user_message(text, user_id, channel)                          │
+│ MessageRouter.handle_user_message(text, user_id, channel, event_id)                 │
 │                                                                                    │
-│   1. Check session timeout → _rotate_session() if inactivity exceeded              │
+│   0. If event_id and already in user_message_processing → skip (idempotency)        │
+│   1. Check session timeout → _rotate_session() if inactivity exceeded               │
 │   2. _emit("user_message", {text, user_id, channel, session_id})  ──► Memory       │
 │   3. If channel is StreamingChannelProvider:                                       │
 │        channel.on_stream_start → invoke_agent_streamed(on_chunk, on_tool_call)      │
 │        → channel.on_stream_end(full_text)                                           │
 │      Else: invoke_agent(text) → channel.send_to_user(user_id, response)             │
 │   4. _emit("agent_response", {text, agent_id, ...})  ──► Memory                    │
+│   5. If event_id: record in user_message_processing (idempotency)                   │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,22 +57,25 @@ Memory integrates via **two subscription mechanisms**:
 
 2. **EventBus persists** — Event is written to `event_journal` (SQLite), then delivered by the dispatch loop to all subscribers.
 
-3. **Kernel handler** — Loader registers `kernel_user_message_handler` on EventBus topic `user.message`. The handler calls `router.handle_user_message(text, user_id, channel)`.
+3. **Kernel handler** — Loader registers `kernel_user_message_handler` on EventBus topic `user.message`. The handler calls `router.handle_user_message(text, user_id, channel, event_id=event.id)`.
 
-4. **Session timeout** — `MessageRouter` checks if `(now - _last_message_at) > session_timeout`. If exceeded, it rotates the session: generates a new session ID, publishes `session.completed` via EventBus for the old session.
+4. **Idempotency** — If `event_id` is set and the event is already recorded in `user_message_processing`, the router skips agent invocation, memory hooks, and channel delivery (prevents duplicate side effects on retry or crash recovery).
 
-5. **MessageRouter** — `handle_user_message()`:
+5. **Session timeout** — `MessageRouter` checks if `(now - _last_message_at) > session_timeout`. If exceeded, it rotates the session: generates a new session ID, publishes `session.completed` via EventBus for the old session.
+
+6. **MessageRouter** — `handle_user_message()`:
    - Emits `user_message` to MessageRouter subscribers (in-memory, synchronous)
    - If the channel implements `StreamingChannelProvider`, uses the streaming path: `on_stream_start` → `invoke_agent_streamed()` (callbacks push chunks and tool status to the channel) → `on_stream_end`. Otherwise invokes the agent and calls `channel.send_to_user()`.
    - Emits `agent_response` to MessageRouter subscribers (with full response text in both paths)
+   - Records completion in `user_message_processing` when `event_id` is set (idempotency)
    - Response is already delivered by the channel (streaming or non-streaming)
 
-6. **Memory ingestion** — Memory subscribes in `initialize()`:
+7. **Memory ingestion** — Memory subscribes in `initialize()`:
    ```python
    context.subscribe("user_message", self._on_user_message)
    context.subscribe("agent_response", self._on_agent_response)
    ```
-   Both handlers:
+   Both handlers (only invoked when the event is not a duplicate):
    - Create an episodic node (fire-and-forget via writer queue)
    - Create a temporal edge to the previous episode (fire-and-forget)
    - Schedule slow-path embedding generation (`asyncio.create_task`)
