@@ -226,6 +226,10 @@ Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cac
 
 The Web Search extension ([ADR 013](adr/013-web-search.md)) implements `ToolProvider` and exposes two tools: **`web_search`** (query → ranked results with snippets) and **`open_page`** (fetch full page content from URLs). It uses configurable search and read providers (DuckDuckGo, Jina, Tavily, Perplexity, SearXNG, etc.). Add `web_search` to the Orchestrator's tool set (e.g. via `uses_tools` or by having the extension in the default capabilities) so the agent can search the web and read pages regardless of LLM provider.
 
+### Inbox (`inbox` extension)
+
+The Inbox extension ([ADR 024](adr/024-unified-inbox.md)) provides unified storage for incoming data from external systems. Source extensions (mail, github, gitlab, etc.) persist records via the Inbox service API (`depends_on: [inbox]` + `context.get_extension("inbox")`). Tools: **`inbox_list`** (list/filter items by source, entity type, status) and **`inbox_read`** (read a single item by `inbox_id`). After each successful write, Inbox emits `inbox.item.ingested` on the Event Bus; consumers (e.g. triage agent) subscribe and call `get_item(inbox_id)` to fetch full payload.
+
 ### `ContextProvider`
 
 Enriches agent context before each invocation. Multiple ContextProviders coexist; the kernel calls them in `context_priority` order (lower = earlier).
@@ -607,4 +611,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `builder_agent`, `simple_agent`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `inbox`, `builder_agent`, `simple_agent`

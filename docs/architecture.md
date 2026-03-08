@@ -230,7 +230,7 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 | Category | Extensions | Protocols | Purpose |
 |----------|-----------|-----------|---------|
 | **Channels** | cli_channel, telegram_channel | ChannelProvider, ServiceProvider | Receive user input; deliver agent responses |
-| **Tools** | kv, scheduler, web_search, shell_exec | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, web_search/open_page, shell execution) |
+| **Tools** | kv, scheduler, web_search, shell_exec, inbox | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, web_search/open_page, shell execution, inbox_list/inbox_read) |
 | **Agents** | builder_agent, simple_agent | AgentProvider | Specialized agents invoked as tools (`integration_mode: tool`) |
 | **Memory** | memory | ToolProvider, ContextProvider, SchedulerProvider | Graph-based cognitive memory: episodes, facts, procedures, opinions. Intent-aware hybrid retrieval, LLM-powered consolidation, Ebbinghaus decay |
 | **Background work** | task_engine | ToolProvider, ServiceProvider | Durable multi-step task execution with checkpointing, retries, subtasks, and human review |

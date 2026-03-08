@@ -51,6 +51,7 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [017](adr/017-agents-registry.md) | Agent Registry and Dynamic Delegation |
 | [018](adr/018-task-chains.md) | Task Chains |
 | [019](adr/019-cost-capability-routing.md) | Cost/Capability Routing |
+| [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
 
 ---
 

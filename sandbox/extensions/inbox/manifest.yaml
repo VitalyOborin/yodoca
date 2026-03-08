@@ -1,0 +1,18 @@
+id: inbox
+name: Inbox
+version: "1.0.0"
+entrypoint: main:InboxExtension
+
+description: |
+  Unified storage for incoming data from external systems.
+  Source extensions (mail, github, gitlab, etc.) persist records via Inbox API.
+  Tools: inbox_list (list/filter items), inbox_read (read single item).
+
+depends_on: []
+config: {}
+enabled: true
+
+events:
+  publishes:
+    - topic: inbox.item.ingested
+      description: Emitted after successful item create, update, or soft-delete

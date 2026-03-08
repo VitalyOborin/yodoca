@@ -261,6 +261,7 @@ Important: a channel can keep working while a ToolProvider extension is unavaila
 | `reminder.due`    | scheduler / extensions | `text`, optional `channel_id`   | Deferred reminders        |
 | `checkin.started` | extensions        | `step`, `total`                 | Multi-step workflows      |
 | `task.received`   | extensions        | `text`                          | Proactive task processing |
+| `inbox.item.ingested` | inbox          | `inbox_id`, `source_type`, `source_account`, `entity_type`, `external_id`, `title`, `change_type`, `occurred_at`, `ingested_at` | Emitted after successful item create, update, or soft-delete |
 
 > `user.message` has a kernel-registered handler (wired in `loader.wire_event_subscriptions()`). The other topics are extension conventions — any extension can publish or subscribe to them.
 
