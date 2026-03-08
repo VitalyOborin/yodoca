@@ -1,5 +1,6 @@
 """Tests for Inbox extension: repository, extension, and tools."""
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -138,6 +139,70 @@ class TestInboxRepository:
         assert row["status"] == "deleted"
 
     @pytest.mark.asyncio
+    async def test_upsert_soft_delete_updates_ingested_at(
+        self, repo: InboxRepository
+    ) -> None:
+        inp = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="msg-del-ts",
+            title="To delete",
+            occurred_at=time.time(),
+            payload={},
+        )
+        inbox_id, _, created_ingested_at = await repo.upsert_item(inp)
+        await asyncio.sleep(0.01)
+        inp_del = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="msg-del-ts",
+            title="Deleted",
+            occurred_at=time.time(),
+            status="deleted",
+            payload={},
+        )
+        _, ct2, deleted_ingested_at = await repo.upsert_item(inp_del)
+        assert ct2 == "deleted"
+        assert deleted_ingested_at > created_ingested_at
+        row = await repo.get_item(inbox_id)
+        assert row is not None
+        assert row["ingested_at"] == deleted_ingested_at
+
+    @pytest.mark.asyncio
+    async def test_upsert_soft_delete_duplicate_suppression(
+        self, repo: InboxRepository
+    ) -> None:
+        inp = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="msg-del-dup",
+            title="To delete",
+            occurred_at=time.time(),
+            payload={},
+        )
+        inbox_id, _, _ = await repo.upsert_item(inp)
+        inp_del = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="msg-del-dup",
+            title="Deleted",
+            occurred_at=time.time(),
+            status="deleted",
+            payload={},
+        )
+        id_del_1, ct_1, _ = await repo.upsert_item(inp_del)
+        id_del_2, ct_2, ingested_2 = await repo.upsert_item(inp_del)
+        assert id_del_1 == inbox_id
+        assert ct_1 == "deleted"
+        assert id_del_2 == inbox_id
+        assert ct_2 == "duplicate"
+        assert ingested_2 == 0.0
+
+    @pytest.mark.asyncio
     async def test_get_item(self, repo: InboxRepository) -> None:
         inp = InboxItemInput(
             source_type="mail",
@@ -250,6 +315,42 @@ class TestInboxExtension:
         await ext.upsert_item(inp)
         ctx.emit.reset_mock()
         result = await ext.upsert_item(inp)
+        assert result.change_type == "duplicate"
+        ctx.emit.assert_not_called()
+        await ext.destroy()
+
+    @pytest.mark.asyncio
+    async def test_soft_delete_duplicate_no_event(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "inbox"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ext = InboxExtension()
+        ctx = MagicMock()
+        ctx.data_dir = data_dir
+        ctx.emit = AsyncMock()
+        await ext.initialize(ctx)
+        inp = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="soft-del-dup-1",
+            title="Del me",
+            occurred_at=time.time(),
+            payload={"same": True},
+        )
+        await ext.upsert_item(inp)
+        inp_del = InboxItemInput(
+            source_type="mail",
+            source_account="default",
+            entity_type="email.message",
+            external_id="soft-del-dup-1",
+            title="Deleted",
+            occurred_at=time.time(),
+            status="deleted",
+            payload={"same": True},
+        )
+        await ext.upsert_item(inp_del)
+        ctx.emit.reset_mock()
+        result = await ext.upsert_item(inp_del)
         assert result.change_type == "duplicate"
         ctx.emit.assert_not_called()
         await ext.destroy()

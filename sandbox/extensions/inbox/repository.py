@@ -152,15 +152,18 @@ class InboxRepository:
 
             existing_id = row["id"]
             existing_hash = row["payload_hash"] or ""
+            existing_status = row["status"] or "active"
 
             if input.status == "deleted":
-                existing_ingested = row["ingested_at"] or ingested_at
+                if existing_status == "deleted":
+                    await conn.rollback()
+                    return (existing_id, "duplicate", 0.0)
                 await conn.execute(
-                    "UPDATE inbox_items SET status = 'deleted' WHERE id = ?",
-                    (existing_id,),
+                    "UPDATE inbox_items SET status = 'deleted', ingested_at = ? WHERE id = ?",
+                    (ingested_at, existing_id),
                 )
                 await conn.commit()
-                return (existing_id, "deleted", existing_ingested)
+                return (existing_id, "deleted", ingested_at)
 
             if existing_hash == payload_hash:
                 await conn.rollback()
