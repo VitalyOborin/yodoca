@@ -69,7 +69,7 @@ agents:
   orchestrator:
     provider: openai
     model: gpt-5.2
-    instructions: prompts/orchestrator.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
 ```
 
 | Field | Type | Description |

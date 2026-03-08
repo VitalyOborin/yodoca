@@ -29,11 +29,11 @@ Example:
 ```yaml
 agents:
   default:
-    instructions: prompts/default.jinja2
+    instructions: sandbox/prompts/default.jinja2
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: prompts/default.jinja2
+    instructions: sandbox/prompts/default.jinja2
     model: gpt-5.2
     provider: openai
 ```
@@ -154,11 +154,11 @@ Typical content after running the setup wizard:
 ```yaml
 agents:
   default:
-    instructions: prompts/default.jinja2
+    instructions: sandbox/prompts/default.jinja2
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: prompts/default.jinja2
+    instructions: sandbox/prompts/default.jinja2
     model: gpt-5.2
     provider: openai
 

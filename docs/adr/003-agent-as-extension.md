@@ -250,7 +250,7 @@ description: |
 agent:
   integration_mode: tool
   model: gpt-4o-mini
-  instructions: prompts/code_reviewer.jinja2
+  instructions: sandbox/prompts/code_reviewer.jinja2
 
   parameters:
     temperature: 0.2
@@ -292,7 +292,7 @@ description: |
 agent:
   integration_mode: tool
   model: gpt-5.2-codex
-  instructions: prompts/builder.jinja2
+  instructions: sandbox/prompts/builder.jinja2
   uses_tools:
     - file_manager
   limits:
@@ -322,7 +322,7 @@ The `agent` section is optional in `ExtensionManifest`. Its presence signals the
 
 The `instructions` field supports three formats:
 
-1. **File path** — `prompts/code_reviewer.jinja2` — loaded relative to extension dir, then project root. Jinja2 templates are rendered with manifest config as variables.
+1. **File path** — `sandbox/prompts/code_reviewer.jinja2` — loaded relative to project root. Jinja2 templates are rendered with manifest config as variables.
 2. **Inline text** — multi-line YAML string directly in the manifest. For simple agents with short prompts.
 3. **Empty/omitted** — agent runs with no system prompt (rare, but valid for extremely generic agents).
 

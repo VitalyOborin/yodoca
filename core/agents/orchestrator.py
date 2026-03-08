@@ -42,7 +42,7 @@ def create_orchestrator_agent(
 ) -> Agent:
     """Create the Orchestrator agent from config; merge core tools and extension tools."""
     instructions_spec = get_setting(
-        settings, "agents.orchestrator.instructions", "prompts/orchestrator.jinja2"
+        settings, "agents.orchestrator.instructions", "sandbox/prompts/orchestrator.jinja2"
     )
     instructions = _resolve_instructions(
         instructions_spec,

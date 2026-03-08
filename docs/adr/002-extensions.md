@@ -362,9 +362,9 @@ sandbox/
     memory/
     task_scheduler/
 
-prompts/
+sandbox/prompts/
   orchestrator.jinja2
-  builder.jinja2         ← Builder Agent: contract + code examples
+  default.jinja2         ← default agent instructions
 
 config/
   settings.yaml
