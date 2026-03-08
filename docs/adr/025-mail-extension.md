@@ -103,6 +103,30 @@ All tools return structured output (Pydantic models or fixed-shape dicts).
    - `AUTH[CLIENTBUG]` → advise checking the pasted password;
    - Timeout → advise checking network / provider host.
 
+#### What `mail_account_remove` does internally
+
+1. **Delete secret** — `ctx.set_secret(f"mail.{account_id}.app_password", "")` or
+   equivalent removal (clear the stored credential so it is not retrievable).
+2. **Delete cursors** — call `inbox.delete_cursors(source_type="mail", source_account=account_id)`
+   to remove all cursor rows for this account. This prevents stale cursor entries from
+   accumulating in the inbox database.
+3. **Remove from accounts.json** — delete the account entry from the local registry.
+4. **Inbox items are retained** — items already ingested with `source_account = account_id`
+   remain in inbox. They are historical records owned by inbox, not by `mail`. This
+   follows the separation of responsibilities defined in ADR 024.
+
+**Note:** the inbox Cursor API (ADR 024) currently provides `get_cursor` and `set_cursor`
+but no `delete_cursors`. Implementing `mail_account_remove` requires adding a cursor
+deletion method to the inbox service API:
+
+```
+delete_cursors(source_type: str, source_account: str) -> None
+```
+
+This removes all cursor rows matching the given source identity. The method belongs in
+inbox because cursors are owned by inbox; `mail` only requests cleanup via the
+service API.
+
 #### Security note for Telegram
 
 App Passwords typed in Telegram chat remain in message history. MVP mitigation:
@@ -120,12 +144,34 @@ schedules:
     task: sync_all
 ```
 
-`execute_task("sync_all")` returns `None` (no user notification) on normal runs.
+`execute_task("sync_all")` iterates all enabled accounts. Per-account errors are
+collected; the return value determines whether the user is notified:
+
+| Outcome | `execute_task` return | User sees |
+|---------|----------------------|-----------|
+| All accounts synced OK | `None` | Nothing |
+| Transient error (network timeout, DNS, IMAP disconnect) | `None` | Nothing (logged, retried next cycle) |
+| Initial sync progress | n/a | `ctx.notify_user` called directly (see step 0/5 below) |
+| Credential error (auth failed, app_password revoked) | `{"text": "..."}` | Notification via SchedulerManager |
+| Secret missing (`get_secret` → `None`) | `{"text": "..."}` | Notification via SchedulerManager |
+
+**Rationale:** transient network issues resolve on the next 5-minute cycle — notifying
+the user every time would be noisy. Credential failures require user action (re-create
+App Password) and will not self-heal, so the user must be informed. The notification
+includes the account email and a hint on what to do.
+
+After a credential error, the account's `enabled` flag is **not** automatically set to
+`false` — the user may fix the password and the next cycle will succeed. If the error
+persists for 3 consecutive cycles, the extension logs a warning but still does not
+disable the account (only the user can do that via `mail_account_remove`).
 
 #### Sync algorithm per account
 
 ```
 for each account where enabled = true:
+
+  0. If initial_sync_done == false:
+        ctx.notify_user("Starting initial sync for {email} (last {N} days)…")
 
   1. Retrieve app_password via ctx.get_secret(...)
      → skip account with warning if None
@@ -144,7 +190,11 @@ for each account where enabled = true:
 
   4. Disconnect
 
-  5. Emit event: mail.sync.completed {account_id, new_items, errors}
+  5. If initial_sync_done was false:
+        Mark initial_sync_done = true in accounts.json
+        ctx.notify_user("Initial sync for {email} complete: {count} messages imported.")
+
+  6. Emit event: mail.sync.completed {account_id, new_items, errors}
 ```
 
 Cursor is updated **strictly after** successful persistence, ensuring crash-safe
@@ -174,6 +224,13 @@ Message-ID is used as `external_id` because it is stable even if the message is 
 between IMAP folders (UID changes on move, Message-ID does not). This prevents
 duplicates across mailboxes.
 
+**Charset handling:** `part.get_payload(decode=True)` handles transfer encoding
+(base64, quoted-printable) and returns raw bytes. Those bytes are decoded using
+`part.get_content_charset()` with `"utf-8"` as fallback and `errors="replace"`.
+This is important for Yandex.Mail where messages often use `windows-1251` or `koi8-r`,
+and charset headers are sometimes missing or mislabelled. The same `errors="replace"`
+strategy applies to header decoding (`email.header.decode_header`).
+
 ### 7) Account storage
 
 Non-secret account metadata is stored in `ctx.data_dir/accounts.json`:
@@ -194,6 +251,11 @@ Non-secret account metadata is stored in `ctx.data_dir/accounts.json`:
 
 Secrets (app_password) are stored exclusively via `ctx.set_secret()` (OS keyring
 with `.env` fallback), never in JSON files.
+
+**Concurrency:** `sync_all` (SchedulerProvider) and `mail_account_add` (ToolProvider)
+can execute concurrently within the same asyncio loop — both access `accounts.json`.
+`AccountStore` must guard all reads and writes with a single `asyncio.Lock` to prevent
+race conditions (e.g. adding an account while sync iterates the account list).
 
 ### 8) Provider configuration
 
@@ -219,12 +281,19 @@ auth strategy — no changes to sync, parsing, or inbox integration.
 
 ### 9) Health check
 
+The Loader's `HealthCheckManager` calls `health_check()` every 30 seconds; returning
+`False` triggers `mark_error` + `stop()`, permanently disabling the extension until
+restart. Therefore `health_check` must return `True` for any valid operating state,
+including "no accounts configured yet" (the extension is idle, not broken).
+
 ```python
 def health_check(self) -> bool:
-    # True if at least one account is configured
-    # AND the last sync_all did not fail critically.
-    # Does not perform live IMAP connection (too expensive for periodic health checks).
+    # True  — no accounts (idle, waiting for setup)
+    # True  — accounts exist and last sync did not fail critically
+    # False — only on unrecoverable internal error (e.g. data_dir inaccessible)
 ```
+
+`False` is reserved for genuinely broken states, not for "nothing to do".
 
 ### 10) File structure
 
@@ -249,6 +318,12 @@ description: >
   Periodically syncs email from Gmail and Yandex.Mail via IMAP.
   Stores new messages in Inbox.
   Setup: use mail_account_add tool to connect a mailbox.
+
+setup_instructions: >
+  Use mail_account_add to connect Gmail or Yandex.Mail.
+  Prerequisites: 2FA must be enabled on the mail account.
+  Gmail: https://myaccount.google.com/apppasswords
+  Yandex: enable IMAP in settings, then https://id.yandex.ru/security/app-passwords
 
 depends_on:
   - inbox
