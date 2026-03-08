@@ -271,7 +271,7 @@ agent = create_orchestrator_agent(
 
 ### 9. Orchestrator prompt update
 
-The Orchestrator prompt (`prompts/orchestrator.jinja2`) gets a brief section on delegation:
+The Orchestrator prompt (`sandbox/prompts/orchestrator.jinja2`) gets a brief section on delegation:
 
 ```
 ## Delegation

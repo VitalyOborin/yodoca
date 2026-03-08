@@ -315,7 +315,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 
 **Limits defaults:** `max_turns=10`, `max_tokens_per_invocation=50000`, `time_budget_ms=120000`.
 
-**Prompt resolution:** Agent extensions may have `prompt.jinja2` in `extensions/<id>/`. The Loader auto-detects it at startup (no manifest field). If present, file content is used first; then `instructions` from manifest is appended. Only extension dir is searched; project `prompts/` is system-only.
+**Prompt resolution:** Agent extensions may have `prompt.jinja2` in `extensions/<id>/`. The Loader auto-detects it at startup (no manifest field). If present, file content is used first; then `instructions` from manifest is appended. Only extension dir is searched; `sandbox/prompts/` is system-only.
 
 ### Events Section (`events`)
 

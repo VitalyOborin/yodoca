@@ -1,10 +1,10 @@
 agents:
   default:
-    instructions: prompts/default.jinja2
+    instructions: sandbox/prompts/default.jinja2
     model: gpt-5-mini
     provider: openai
   orchestrator:
-    instructions: prompts/orchestrator.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
     model: qwen/qwen3.5-9b
     provider: lm_studio
 event_bus:

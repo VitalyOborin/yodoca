@@ -27,7 +27,7 @@ This file provides **default working protocol and context** for AI coding agents
 - **Run the app:** `uv run python -m supervisor`. If config is missing, onboarding runs automatically; or run `uv run python -m onboarding` manually.
 - **Config:** `config/settings.yaml` (create from `config/settings.example.yaml` if present). Never put API keys in YAML; use keyring or `.env`. Reset everything: `uv run python scripts/reset.py`.
 - **Extensions:** Each extension is `sandbox/extensions/<id>/` with `manifest.yaml` and `main.py` (or declarative agent with `agent` section only). Add new extensions there; core does not reference extension IDs for behavior.
-- **Prompts:** System agent prompts live in `prompts/` (root). Extension-specific prompts can live in `sandbox/extensions/<id>/` (e.g. `prompt.jinja2`). See [.cursor/rules/development.mdc](.cursor/rules/development.mdc).
+- **Prompts:** System agent prompts live in `sandbox/prompts/`. Extension-specific prompts can live in `sandbox/extensions/<id>/` (e.g. `prompt.jinja2`). See [.cursor/rules/development.mdc](.cursor/rules/development.mdc).
 - **Jump to code:** Core bootstrap: `core/runner.py`. Extension contracts: `core/extensions/contract.py`. Loader: `core/extensions/loader.py`. Example extensions: `sandbox/extensions/cli_channel/`, `sandbox/extensions/memory/`, `sandbox/extensions/task_engine/`.
 
 ---
@@ -83,7 +83,7 @@ These align with `.cursor/rules/` and `.cursor/skills/`. When in doubt, follow t
 ### Where things live
 
 - **Documentation:** All required project docs in `docs/`; read before starting a task and update after implementation if behavior or contracts change.
-- **Prompts:** Root-level agent prompts in `prompts/`; extension prompts in `sandbox/extensions/<id>/` as needed.
+- **Prompts:** System prompts in `sandbox/prompts/`; extension prompts in `sandbox/extensions/<id>/` as needed.
 
 ---
 
@@ -122,7 +122,7 @@ Use these when implementing or reviewing the corresponding areas:
 
 - **Change extension config or secrets:** Read config via `context.get_config(key, default)` (resolution: `settings.yaml` → `extensions.<id>.<key>` then manifest `config.<key>`). Secrets: `await context.get_secret(name)` (keyring then `.env`); never store API keys in YAML. Add required env/secret names to manifest `secrets` for onboarding. See configuration and secrets skills, [docs/configuration.md](docs/configuration.md), [docs/secrets.md](docs/secrets.md).
 
-- **Update agent prompts:** System/orchestrator prompts live in `prompts/` (root); extension-specific prompts in `sandbox/extensions/<id>/` (e.g. `prompt.jinja2`). Loader merges extension prompt file + manifest `agent.instructions`. Use Jinja2 for templates. See [.cursor/rules/development.mdc](.cursor/rules/development.mdc).
+- **Update agent prompts:** System/orchestrator prompts live in `sandbox/prompts/`; extension-specific prompts in `sandbox/extensions/<id>/` (e.g. `prompt.jinja2`). Loader merges extension prompt file + manifest `agent.instructions`. Use Jinja2 for templates. See [.cursor/rules/development.mdc](.cursor/rules/development.mdc).
 
 - **Enrich agent context (ContextProvider):** Implement `ContextProvider`: `get_context(prompt, turn_context)` and `context_priority` (lower = earlier in chain). Return a string to inject into the system prompt, or `None`. Used e.g. by the memory extension for intent-aware retrieval. Wire is automatic via Loader. See [docs/extensions.md](docs/extensions.md) (ContextProvider) and `sandbox/extensions/memory/`.
 

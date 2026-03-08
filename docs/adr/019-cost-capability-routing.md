@@ -80,7 +80,7 @@ New tool for `create_agent` workflows: returns models from the catalog with cost
 
 ### 4. Orchestrator prompt update
 
-Add cost-optimization guidance to `prompts/orchestrator.jinja2`:
+Add cost-optimization guidance to `sandbox/prompts/orchestrator.jinja2`:
 
 - Prefer agents with `cost_tier=low` for routine/simple tasks.
 - Prefer higher `capability_tier` for complex tasks (code generation, multi-step reasoning).

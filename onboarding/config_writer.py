@@ -38,13 +38,13 @@ def write_config(
     base["agents"] = state.agents
     # Ensure default agent has explicit default instructions path
     if "default" in base["agents"] and isinstance(base["agents"]["default"], dict):
-        base["agents"]["default"].setdefault("instructions", "prompts/default.jinja2")
+        base["agents"]["default"].setdefault("instructions", "sandbox/prompts/default.jinja2")
     default_cfg = base["agents"].get("default")
     if isinstance(default_cfg, dict):
         base["agents"]["orchestrator"] = {
             k: v
             for k, v in {
-                "instructions": default_cfg.get("instructions", "prompts/default.jinja2"),
+                "instructions": default_cfg.get("instructions", "sandbox/prompts/default.jinja2"),
                 "model": default_cfg.get("model"),
                 "provider": default_cfg.get("provider"),
             }.items()
