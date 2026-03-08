@@ -159,7 +159,8 @@ class InboxRepository:
                     await conn.rollback()
                     return (existing_id, "duplicate", 0.0)
                 await conn.execute(
-                    "UPDATE inbox_items SET status = 'deleted', ingested_at = ? WHERE id = ?",
+                    "UPDATE inbox_items SET status = 'deleted', ingested_at = ? "
+                    "WHERE id = ?",
                     (ingested_at, existing_id),
                 )
                 await conn.commit()
@@ -291,5 +292,17 @@ class InboxRepository:
             VALUES (?, ?, ?, ?, ?)
             """,
             (source_type, source_account, stream, value, now),
+        )
+        await conn.commit()
+
+    async def delete_cursors(self, source_type: str, source_account: str) -> None:
+        """Delete all cursor rows for the given source identity."""
+        conn = await self.ensure_conn()
+        await conn.execute(
+            """
+            DELETE FROM inbox_cursors
+            WHERE source_type = ? AND source_account = ?
+            """,
+            (source_type, source_account),
         )
         await conn.commit()

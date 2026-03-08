@@ -1,0 +1,38 @@
+id: mail
+name: Mail
+version: "1.0.0"
+entrypoint: main:MailExtension
+
+description: >
+  Periodically syncs email from Gmail and Yandex.Mail via IMAP.
+  Stores new messages in Inbox.
+  Setup: use mail_account_add tool to connect a mailbox.
+
+setup_instructions: >
+  Use mail_account_add to connect Gmail or Yandex.Mail.
+  Prerequisites: 2FA must be enabled on the mail account.
+  Gmail: https://myaccount.google.com/apppasswords
+  Yandex: enable IMAP in settings, then https://id.yandex.ru/security/app-passwords
+
+depends_on:
+  - inbox
+
+config:
+  initial_sync_days: 4
+  sync_mailboxes: ["INBOX"]
+  batch_size: 50
+  body_max_bytes: 8192
+
+schedules:
+  - name: sync_all
+    cron: "*/5 * * * *"
+    task: sync_all
+
+events:
+  publishes:
+    - topic: mail.sync.completed
+      description: >
+        Emitted after each sync cycle per account.
+        Payload: account_id, new_items (int), errors (list).
+
+enabled: true

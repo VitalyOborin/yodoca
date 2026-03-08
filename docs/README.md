@@ -55,6 +55,7 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [021](adr/021-hard-dependency-contracts.md) | Hard Dependency Contracts |
 | [022](adr/022-move-prompts-to-sandbox.md) | Move Prompts Directory to Sandbox |
 | [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
+| [025](adr/025-mail-extension.md) | Mail Extension (Source Extension for Email Ingestion) |
 
 ---
 

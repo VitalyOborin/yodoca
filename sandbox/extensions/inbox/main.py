@@ -125,6 +125,11 @@ class InboxExtension:
         if self._repo:
             await self._repo.set_cursor(source_type, source_account, stream, value)
 
+    async def delete_cursors(self, source_type: str, source_account: str) -> None:
+        """Delete all cursor rows for the given source identity."""
+        if self._repo:
+            await self._repo.delete_cursors(source_type, source_account)
+
     # --- ToolProvider ---
 
     def get_tools(self) -> list[Any]:

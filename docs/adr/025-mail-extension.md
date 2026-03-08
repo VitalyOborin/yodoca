@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted. Implemented.
 
 ## Context
 
@@ -433,3 +433,9 @@ setup verification via `asyncio.to_thread`).
   deletion) deferred.
 - **Yandex IMAP disabled by default** — agent instructs user to enable "IMAP access"
   in Yandex Mail settings during setup.
+
+## Implementation notes
+
+- Extension: `sandbox/extensions/mail/`
+- Inbox: `delete_cursors` added to `sandbox/extensions/inbox/repository.py` and `main.py`
+- Dependencies: `aioimaplib>=1.1.0`, `beautifulsoup4>=4.12.0` in `pyproject.toml`
