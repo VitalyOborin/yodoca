@@ -1,7 +1,7 @@
 """MailSyncer: per-account IMAP sync orchestration."""
 
 import logging
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from aioimaplib import IMAP4_SSL
@@ -101,7 +101,13 @@ class MailSyncer:
                 port=provider_config.imap_port,
             )
             await imap.wait_hello_from_server()
-            await imap.login(account.email, app_password)
+
+            login_resp = await imap.login(account.email, app_password)
+            if login_resp.result != "OK":
+                msg = (login_resp.lines[0:1] or [b""])[0]
+                if isinstance(msg, bytes):
+                    msg = msg.decode("utf-8", errors="replace")
+                raise RuntimeError(f"IMAP login failed: {msg}")
 
             total_new = 0
             for mailbox in self._sync_mailboxes:
@@ -114,7 +120,7 @@ class MailSyncer:
 
             # Step 5: mark initial sync done, notify
             if not account.initial_sync_done:
-                now = date.today().isoformat()
+                now = datetime.now(UTC).date().isoformat()
                 await self._accounts.update_account(
                     account_id,
                     initial_sync_done=True,
@@ -125,8 +131,10 @@ class MailSyncer:
                     f"{total_new} messages imported."
                 )
             else:
+                now = datetime.now(UTC).date().isoformat()
                 await self._accounts.update_account(
-                    account_id, last_sync_at=date.today().isoformat()
+                    account_id,
+                    last_sync_at=now,
                 )
 
             await self._ctx.emit(
@@ -154,46 +162,97 @@ class MailSyncer:
         _host: str,
     ) -> int:
         """Sync one mailbox. Returns count of new items."""
-        await imap.select(mailbox)
-        cursor = await self._inbox.get_cursor("mail", account.account_id, mailbox)
+        sel_resp = await imap.select(mailbox)
+        if sel_resp.result != "OK":
+            logger.warning(
+                "SELECT %s failed for %s: %s",
+                mailbox,
+                account.email,
+                sel_resp.lines,
+            )
+            return 0
+
+        cursor = await self._inbox.get_cursor(
+            "mail",
+            account.account_id,
+            mailbox,
+        )
 
         if cursor is None:
-            since = date.today() - timedelta(days=self._initial_sync_days)
+            since = datetime.now(UTC).date() - timedelta(
+                days=self._initial_sync_days,
+            )
             since_str = _format_since_date(since)
-            response = await imap.uid("search", None, "SINCE", since_str)
+            response = await imap.uid_search("SINCE", since_str)
         else:
             next_uid = int(cursor) + 1
-            response = await imap.uid("search", None, f"UID {next_uid}:*")
+            response = await imap.uid_search(f"UID {next_uid}:*")
+
+        if response.result != "OK":
+            logger.warning(
+                "UID SEARCH failed for %s/%s: %s",
+                account.email,
+                mailbox,
+                response.lines,
+            )
+            return 0
 
         uids = self._parse_search_response(response)
+        logger.info(
+            "Search %s/%s: %d UIDs found",
+            account.email,
+            mailbox,
+            len(uids),
+        )
         if not uids:
             return 0
 
         max_uid = 0
         count = 0
+        fetch_errors = 0
         for i in range(0, len(uids), self._batch_size):
             batch = uids[i : i + self._batch_size]
             for uid in batch:
                 raw = await self._fetch_message(imap, uid)
-                if raw:
-                    item = parse_message(
-                        raw,
-                        uid,
-                        mailbox,
-                        account.account_id,
-                        body_max_bytes=self._body_max_bytes,
-                    )
-                    result = await self._inbox.upsert_item(item)
-                    if result.success and result.change_type != "duplicate":
-                        count += 1
-                    max_uid = max(max_uid, uid)
+                if not raw:
+                    fetch_errors += 1
+                    continue
+                item = parse_message(
+                    raw,
+                    uid,
+                    mailbox,
+                    account.account_id,
+                    body_max_bytes=self._body_max_bytes,
+                )
+                result = await self._inbox.upsert_item(item)
+                if result.success and result.change_type != "duplicate":
+                    count += 1
+                max_uid = max(max_uid, uid)
 
-        # Cursor only after all items persisted (crash-safe)
-        if max_uid > 0:
-            await self._inbox.set_cursor(
-                "mail", account.account_id, mailbox, str(max_uid)
+        if fetch_errors:
+            logger.warning(
+                "Fetch errors for %s/%s: %d of %d",
+                account.email,
+                mailbox,
+                fetch_errors,
+                len(uids),
             )
 
+        if max_uid > 0:
+            await self._inbox.set_cursor(
+                "mail",
+                account.account_id,
+                mailbox,
+                str(max_uid),
+            )
+
+        logger.info(
+            "Sync %s/%s done: %d new, %d fetch_errors",
+            account.email,
+            mailbox,
+            count,
+            fetch_errors,
+        )
         return count
 
     def _parse_search_response(self, response: Any) -> list[int]:
@@ -213,24 +272,20 @@ class MailSyncer:
 
     async def _fetch_message(self, imap: IMAP4_SSL, uid: int) -> bytes | None:
         """Fetch raw RFC822 for one UID. Uses BODY.PEEK[] to avoid marking as read."""
-        response = await imap.uid("fetch", str(uid), "(BODY.PEEK[])")
-        lines = getattr(response, "lines", [])
-        if not lines:
+        response = await imap.uid("fetch", str(uid), "BODY.PEEK[]")
+        if response.result != "OK":
+            logger.debug("FETCH UID %d: result=%s", uid, response.result)
             return None
-        # Fetch response: lines[0] may be metadata (UID FETCH ...), lines[1:] message
-        # aioimaplib returns Response with .lines; message is typically in a literal
-        for i, line in enumerate(lines):
-            if isinstance(line, bytes):
-                # Skip metadata line (e.g. b'1 (UID 1 BODY[] {1234}')
-                if i == 0 and b"BODY" in line and b"{" in line:
-                    continue
-                # Message bytes (RFC822)
-                if len(line) > 50 and (line.startswith(b"From ") or b"\r\n" in line):
-                    return line
-                if len(line) > 100:
-                    return line
-        # Fallback: concatenate all bytes
-        parts = [ln for ln in lines if isinstance(ln, bytes) and len(ln) > 0]
-        if parts:
-            return b"\r\n".join(parts)
+        # aioimaplib response: lines[0]=metadata, lines[1]=RFC822 literal (bytearray)
+        if len(response.lines) >= 2 and isinstance(
+            response.lines[1],
+            (bytes, bytearray),
+        ):
+            return bytes(response.lines[1])
+        logger.warning(
+            "FETCH UID %d: unexpected response structure (lines=%d, types=%s)",
+            uid,
+            len(response.lines),
+            [type(ln).__name__ for ln in response.lines[:4]],
+        )
         return None

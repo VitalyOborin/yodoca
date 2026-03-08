@@ -2,40 +2,15 @@
 
 import asyncio
 import imaplib
-import importlib.util
 import logging
-import sys
-from pathlib import Path
 from typing import Any, Literal
 
 from agents import function_tool
 from pydantic import BaseModel, Field
 
-try:
-    from sandbox.extensions.mail.accounts import AccountInfo, AccountStore
-    from sandbox.extensions.mail.providers import PROVIDERS
-    from sandbox.extensions.mail.sync import MailSyncer
-except ImportError:  # pragma: no cover - fallback for direct module loading
-    _mail_dir = Path(__file__).resolve().parent
-    for mod_name, mod_file in [
-        ("accounts", "accounts.py"),
-        ("providers", "providers.py"),
-        ("sync", "sync.py"),
-    ]:
-        _path = _mail_dir / mod_file
-        _spec = importlib.util.spec_from_file_location(f"ext_mail_{mod_name}", _path)
-        if _spec is None or _spec.loader is None:
-            raise ImportError(f"Cannot load {mod_name} from {_path}") from None
-        _mod = importlib.util.module_from_spec(_spec)
-        sys.modules[_spec.name] = _mod
-        _spec.loader.exec_module(_mod)
-        if mod_name == "accounts":
-            AccountInfo = _mod.AccountInfo
-            AccountStore = _mod.AccountStore
-        elif mod_name == "providers":
-            PROVIDERS = _mod.PROVIDERS
-        else:
-            MailSyncer = _mod.MailSyncer
+from sandbox.extensions.mail.accounts import AccountInfo, AccountStore
+from sandbox.extensions.mail.providers import PROVIDERS
+from sandbox.extensions.mail.sync import MailSyncer
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +82,7 @@ class MailExtension:
         self._inbox: Any = None
         self._accounts: AccountStore | None = None
         self._syncer: MailSyncer | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def initialize(self, context: Any) -> None:
         self._ctx = context
@@ -127,9 +103,13 @@ class MailExtension:
         pass
 
     async def stop(self) -> None:
-        pass
+        for task in self._background_tasks:
+            task.cancel()
+        await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     async def destroy(self) -> None:
+        self._background_tasks.clear()
         self._syncer = None
         self._accounts = None
         self._inbox = None
@@ -138,6 +118,25 @@ class MailExtension:
     def health_check(self) -> bool:
         """True unless internal state is broken (e.g. data_dir inaccessible)."""
         return True
+
+    def _run_sync_background(self, account: AccountInfo) -> None:
+        """Fire-and-forget sync with strong reference + exception logging."""
+        task = asyncio.create_task(self._syncer.sync_account(account))
+        self._background_tasks.add(task)
+
+        def _on_done(t: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(t)
+            if t.cancelled():
+                logger.info("Sync task for %s cancelled", account.email)
+            elif exc := t.exception():
+                logger.error(
+                    "Sync task for %s failed: %s",
+                    account.email,
+                    exc,
+                    exc_info=exc,
+                )
+
+        task.add_done_callback(_on_done)
 
     def get_tools(self) -> list[Any]:
         if not self._ctx or not self._accounts:
@@ -200,7 +199,8 @@ class MailExtension:
                         success=False,
                         message=f"IMAP verification failed: {err}. {hint}",
                     )
-                aid = account_id or f"{provider}_{email.split('@')[0]}"
+                local, domain = email.strip().rsplit("@", 1)
+                aid = account_id or f"{provider}_{local}_{domain}"
                 await ext._ctx.set_secret(f"mail.{aid}.app_password", app_password)
                 account = AccountInfo(
                     account_id=aid,
@@ -210,7 +210,7 @@ class MailExtension:
                 )
                 await ext._accounts.add_account(account)
                 if ext._syncer:
-                    asyncio.create_task(ext._syncer.sync_account(account))
+                    ext._run_sync_background(account)
                 return MailAccountAddResult(
                     success=True,
                     account_id=aid,

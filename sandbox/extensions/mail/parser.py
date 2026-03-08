@@ -6,24 +6,7 @@ from email.utils import parsedate_to_datetime
 
 from bs4 import BeautifulSoup
 
-try:
-    from sandbox.extensions.inbox.models import InboxItemInput
-except ImportError:  # pragma: no cover - fallback for direct module loading
-    import importlib.util
-    import sys
-    from pathlib import Path
-
-    _inbox_parent = Path(__file__).resolve().parent.parent / "inbox"
-    _models_path = _inbox_parent / "models.py"
-    if not _models_path.exists():
-        raise ImportError(f"Inbox models not found at {_models_path}") from None
-    _spec = importlib.util.spec_from_file_location("ext_inbox_models", _models_path)
-    if _spec is None or _spec.loader is None:
-        raise ImportError(f"Cannot load inbox models from {_models_path}") from None
-    _mod = importlib.util.module_from_spec(_spec)
-    sys.modules[_spec.name] = _mod
-    _spec.loader.exec_module(_mod)
-    InboxItemInput = _mod.InboxItemInput
+from sandbox.extensions.inbox.models import InboxItemInput
 
 
 def _decode_header_value(value: str | None) -> str:
