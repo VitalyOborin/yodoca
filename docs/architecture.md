@@ -127,6 +127,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Role:** Discovers extensions, loads them in dependency order, initializes, wires protocols, manages lifecycle.
 - **Wiring:** Detects all Protocol implementors above and registers them with the MessageRouter or internal registries.
 - **Import model:** Programmatic extensions are loaded via `importlib.util.spec_from_file_location(...)` using `manifest.entrypoint` (for example `main:MyExtension`). In this mode extension modules are not loaded as package modules, so `from .x import ...` may fail without a fallback.
+- **Hard dependency contracts:** `depends_on` is a hard contract. If a dependency fails to load, initialize, or start, all dependents are cascaded to ERROR and never run. `get_extension()` raises `RuntimeError` (never returns `None`) when a declared dependency is unavailable. See [ADR 021](adr/021-hard-dependency-contracts.md) and [extensions.md](extensions.md#dependency-order).
 
 **Extension import rule (important):**
 
@@ -134,7 +135,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
   - package context (relative import works)
   - file-spec context used by Loader (relative import may not have a parent package)
 - For sibling modules in the same extension (for example `executors.py`), use a safe fallback import strategy (explicit file-based import) if relative import fails.
-- If an extension fails to import, Loader skips it and it is excluded from ToolProvider/AgentProvider wiring; consequently its tools are not available to the Orchestrator.
+- If an extension fails to import, Loader skips it and dependents that declare it in `depends_on` are also cascaded to ERROR. Tools from failed extensions are excluded from Orchestrator capabilities.
 
 ### EventBus
 
@@ -250,3 +251,6 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 - [configuration.md](configuration.md) — Settings reference
 - [ADR 017](adr/017-agents-registry.md) — Agent Registry and Dynamic Delegation
 - [ADR 019](adr/019-cost-capability-routing.md) — Cost/Capability Routing
+- [ADR 020](adr/020-consolidate-openai-compatible-provider.md) — Consolidate OpenAI-Compatible Provider
+- [ADR 021](adr/021-hard-dependency-contracts.md) — Hard Dependency Contracts
+- [ADR 024](adr/024-unified-inbox.md) — Unified Inbox Extension

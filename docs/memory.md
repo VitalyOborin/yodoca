@@ -74,7 +74,7 @@ When a `user_message` arrives with a new `session_id`, the extension registers t
 3. **Enrich** — generate LLM summaries for entities with sparse profiles.
 4. **Causal inference** — analyze consecutive episode pairs for cause-effect relationships.
 
-**Dependency:** `embedding` (for vector search and embedding generation).
+**Embedding access:** The memory extension uses the capability layer (`model_router.get_capability(EmbeddingCapability)`) for vector search and embedding generation. It does **not** declare `embedding` in `depends_on` — this is intentional: embedding is an optional enhancement, and memory degrades gracefully to FTS5-only search when no embedding provider is available. See [ADR 021](adr/021-hard-dependency-contracts.md) for the distinction between hard dependencies (`depends_on`) and optional capabilities.
 
 ---
 

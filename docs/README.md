@@ -51,6 +51,9 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [017](adr/017-agents-registry.md) | Agent Registry and Dynamic Delegation |
 | [018](adr/018-task-chains.md) | Task Chains |
 | [019](adr/019-cost-capability-routing.md) | Cost/Capability Routing |
+| [020](adr/020-consolidate-openai-compatible-provider.md) | Consolidate OpenAI-Compatible Provider |
+| [021](adr/021-hard-dependency-contracts.md) | Hard Dependency Contracts |
+| [022](adr/022-move-prompts-to-sandbox.md) | Move Prompts Directory to Sandbox |
 | [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
 
 ---
