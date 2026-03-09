@@ -102,6 +102,7 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 | `config.streaming_enabled` | true | Use streaming (edit message + typing) when true |
 | `config.stream_edit_interval_ms` | 500 | Min interval between message edits (ms) |
 | `config.stream_min_chunk_chars` | 20 | Min characters before an edit |
+| `config.web_channel_log_file` | `sandbox/logs/web.log` | Dedicated log file path used by `web_channel` request/response audit logger |
 
 **Setup:**
 

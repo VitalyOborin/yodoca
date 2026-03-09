@@ -22,3 +22,5 @@ sandbox/logs/
 config/settings.yaml
 # huge documents about discovery process
 docs/discovery/
+node_modules/
+.vscode/

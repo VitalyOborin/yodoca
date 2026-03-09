@@ -2,6 +2,7 @@
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -40,6 +41,45 @@ def create_app(extension: Any) -> FastAPI:
     )
 
     api_key = extension._config.get("api_key") or ""
+
+    @app.middleware("http")
+    async def request_log_middleware(request: Request, call_next):
+        request_logger = getattr(extension, "_request_logger", None)
+        request_id = uuid.uuid4().hex[:12]
+        started = time.monotonic()
+        if request_logger:
+            request_logger.info(
+                "incoming request_id=%s method=%s path=%s client=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                request.client.host if request.client else "-",
+            )
+        try:
+            response = await call_next(request)
+        except Exception:
+            if request_logger:
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                request_logger.exception(
+                    "outgoing request_id=%s method=%s path=%s status=%s duration_ms=%s",
+                    request_id,
+                    request.method,
+                    request.url.path,
+                    500,
+                    elapsed_ms,
+                )
+            raise
+        if request_logger:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            request_logger.info(
+                "outgoing request_id=%s method=%s path=%s status=%s duration_ms=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+            )
+        return response
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
