@@ -1,5 +1,7 @@
 """ResponseDeliveryService: channel-specific response delivery logic."""
 
+from typing import Any
+
 from core.extensions.agent_invoker import AgentInvoker
 from core.extensions.contract import (
     ChannelProvider,
@@ -20,6 +22,7 @@ class ResponseDeliveryService:
         user_id: str,
         text: str,
         turn_context: TurnContext,
+        session: Any = None,
     ) -> str:
         if isinstance(channel, StreamingChannelProvider):
             async def _on_chunk(chunk: str) -> None:
@@ -34,9 +37,12 @@ class ResponseDeliveryService:
                 on_chunk=_on_chunk,
                 on_tool_call=_on_tool_call,
                 turn_context=turn_context,
+                session=session,
             )
             await channel.on_stream_end(user_id, response)
         else:
-            response = await self._invoker.invoke_agent(text, turn_context)
+            response = await self._invoker.invoke_agent(
+                text, turn_context, session=session
+            )
             await channel.send_to_user(user_id, response)
         return response

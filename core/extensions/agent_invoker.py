@@ -94,17 +94,19 @@ class AgentInvoker:
         self,
         prompt: str,
         turn_context: TurnContext | None = None,
+        session: Any = None,
     ) -> str:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
+        sess = session if session is not None else self._sessions.session
         async with self._user_lock:
             try:
                 channel_id = turn_context.channel_id if turn_context else None
                 result = await self._approval.run_with_approval_loop(
                     agent=agent,
                     input_or_state=stripped,
-                    session=self._sessions.session,
+                    session=sess,
                     channel_id=channel_id,
                 )
                 return result.final_output or ""
@@ -191,14 +193,16 @@ class AgentInvoker:
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
         turn_context: TurnContext | None = None,
+        session: Any = None,
     ) -> str:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
+        sess = session if session is not None else self._sessions.session
         return await self._run_streamed_invoke(
             agent=agent,
             stripped=stripped,
-            session=self._sessions.session,
+            session=sess,
             on_chunk=on_chunk,
             on_tool_call=on_tool_call,
             use_background_lock=False,

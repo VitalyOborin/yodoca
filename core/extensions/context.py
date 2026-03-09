@@ -168,6 +168,14 @@ class ExtensionContext:
         """Get an instance of another extension (only from depends_on)."""
         return self._get_extension(extension_id)
 
+    def list_sessions(self) -> list[str]:
+        """List session IDs in the session pool (for web channel /api/conversations)."""
+        return self._router.list_session_ids()
+
+    def delete_session(self, session_id: str) -> bool:
+        """Remove a session from the pool. Returns True if it existed."""
+        return self._router.delete_session(session_id)
+
     @property
     def data_dir(self) -> Path:
         """Private extension folder: sandbox/data/<extension_id>/."""

@@ -81,6 +81,14 @@ class MessageRouter:
     def set_session(self, session: Any, session_id: str) -> None:
         self._sessions.set_session(session, session_id)
 
+    def list_session_ids(self) -> list[str]:
+        """List session IDs in the pool (for web channel /api/conversations)."""
+        return self._sessions.list_session_ids()
+
+    def delete_session(self, session_id: str) -> bool:
+        """Remove a session from the pool. Returns True if it existed."""
+        return self._sessions.delete_session(session_id)
+
     def configure_session(
         self,
         session_db_path: str,
@@ -171,6 +179,7 @@ class MessageRouter:
         channel: ChannelProvider,
         channel_id: str,
         event_id: int | None = None,
+        session_id: str | None = None,
     ) -> None:
         if event_id is not None and self._event_bus:
             if await self._event_bus.is_user_message_completed(event_id):
@@ -180,12 +189,19 @@ class MessageRouter:
                 )
                 return
 
-        await self._maybe_rotate_session()
+        if session_id is not None:
+            session = self._sessions.get_or_create_session(session_id)
+            effective_session_id = session_id
+        else:
+            await self._maybe_rotate_session()
+            session = self._sessions.session
+            effective_session_id = self._sessions.session_id
+
         turn_context = TurnContext(
             agent_id=self._invoker.agent_id,
             channel_id=channel_id,
             user_id=user_id,
-            session_id=self._sessions.session_id,
+            session_id=effective_session_id,
         )
         await self._emit(
             "user_message",
@@ -193,7 +209,7 @@ class MessageRouter:
                 "text": text,
                 "user_id": user_id,
                 "channel": channel,
-                "session_id": self._sessions.session_id,
+                "session_id": effective_session_id,
             },
         )
         response = await self._delivery.deliver(
@@ -201,6 +217,7 @@ class MessageRouter:
             user_id=user_id,
             text=text,
             turn_context=turn_context,
+            session=session,
         )
         await self._emit(
             "agent_response",
@@ -208,7 +225,7 @@ class MessageRouter:
                 "user_id": user_id,
                 "text": response,
                 "channel": channel,
-                "session_id": self._sessions.session_id,
+                "session_id": effective_session_id,
                 "agent_id": self._invoker.agent_id,
             },
         )

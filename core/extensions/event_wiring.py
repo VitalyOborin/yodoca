@@ -159,6 +159,7 @@ class EventWiringManager:
         text = event.payload.get("text", "").strip()
         user_id = event.payload.get("user_id", "default")
         channel_id = event.payload.get("channel_id")
+        session_id = event.payload.get("session_id")
         if not text or not channel_id:
             logger.warning(
                 "user.message missing text or channel_id: %s", event.payload
@@ -169,7 +170,12 @@ class EventWiringManager:
             logger.warning("user.message: unknown channel_id %s", channel_id)
             return
         await router.handle_user_message(
-            text, user_id, channel, channel_id, event_id=event.id
+            text,
+            user_id,
+            channel,
+            channel_id,
+            event_id=event.id,
+            session_id=session_id,
         )
 
     def _make_proactive_handler(

@@ -16,6 +16,7 @@ class SessionManager:
         self._session_timeout: int = 1800
         self._session_db_path: str | None = None
         self._event_bus: Any = None
+        self._session_pool: dict[str, Any] = {}
 
     @property
     def session(self) -> Any:
@@ -32,6 +33,31 @@ class SessionManager:
     def set_session(self, session: Any, session_id: str) -> None:
         self._session = session
         self._session_id = session_id
+
+    def get_or_create_session(self, session_id: str) -> Any:
+        """Get or create a session from the pool keyed by session_id."""
+        if self._session_db_path is None:
+            raise RuntimeError(
+                "Session not configured: call configure_session before invoke"
+            )
+        if session_id not in self._session_pool:
+            from agents import SQLiteSession
+
+            self._session_pool[session_id] = SQLiteSession(
+                session_id, self._session_db_path
+            )
+        return self._session_pool[session_id]
+
+    def list_session_ids(self) -> list[str]:
+        """List all session IDs in the pool (for /api/conversations)."""
+        return list(self._session_pool.keys())
+
+    def delete_session(self, session_id: str) -> bool:
+        """Remove a session from the pool. Returns True if it existed."""
+        if session_id in self._session_pool:
+            del self._session_pool[session_id]
+            return True
+        return False
 
     def configure_session(
         self,

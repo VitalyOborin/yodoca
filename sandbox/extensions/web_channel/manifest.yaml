@@ -1,0 +1,23 @@
+id: web_channel
+name: Web Channel
+version: "1.0.0"
+entrypoint: main:WebChannelExtension
+
+description: |
+  HTTP API for frontend applications. Provides OpenAI-compatible Chat Completions
+  and Responses API endpoints, plus custom application REST API.
+  Supports streaming via Server-Sent Events (SSE).
+  Compatible with LibreChat, LobeChat, Open WebUI, and other OpenAI-compatible frontends.
+
+depends_on: []
+
+config:
+  host: "127.0.0.1"
+  port: 8080
+  api_key: ""
+  cors_origins: ["*"]
+  request_timeout_seconds: 120
+  model_name: "yodoca"
+  default_user_id: "web_user"
+
+enabled: true
