@@ -27,7 +27,10 @@ def mock_context():
     ctx.get_secret = AsyncMock(return_value=None)
     ctx.emit = AsyncMock()
     ctx.list_sessions = MagicMock(return_value=[])
+    ctx.list_session_summaries = AsyncMock(return_value=[])
     ctx.delete_session = MagicMock(return_value=False)
+    ctx.get_session_history = AsyncMock(return_value=None)
+    ctx.get_session_updated_at = AsyncMock(return_value=None)
     return ctx
 
 
@@ -64,13 +67,17 @@ def test_get_health(web_channel_app):
 
 def test_get_conversations(web_channel_app, mock_context):
     """GET /api/conversations returns session list."""
-    mock_context.list_sessions.return_value = ["sess_1", "sess_2"]
+    mock_context.list_session_summaries.return_value = [
+        {"id": "sess_1", "updated_at": 1773096583},
+        {"id": "sess_2", "updated_at": 1773096584},
+    ]
     client = TestClient(web_channel_app)
     resp = client.get("/api/conversations")
     assert resp.status_code == 200
     data = resp.json()
     assert "conversations" in data
     assert len(data["conversations"]) == 2
+    assert isinstance(data["conversations"][0]["updated_at"], int)
 
 
 def test_delete_conversation_not_found(web_channel_app, mock_context):
@@ -88,6 +95,32 @@ def test_delete_conversation_ok(web_channel_app, mock_context):
     resp = client.delete("/api/conversations/sess_1")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+def test_get_conversation_history_ok(web_channel_app, mock_context):
+    """GET /api/conversations/{id} returns one conversation with history."""
+    mock_context.get_session_history.return_value = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    mock_context.get_session_updated_at.return_value = 1773096583
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/conversations/sess_1")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["conversation"]["id"] == "sess_1"
+    assert data["conversation"]["updated_at"] == 1773096583
+    assert len(data["history"]) == 2
+    assert data["history"][0]["role"] == "user"
+
+
+def test_get_conversation_history_not_found(web_channel_app, mock_context):
+    """GET /api/conversations/{id} returns 404 when session missing."""
+    mock_context.get_session_history.return_value = None
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/conversations/missing_id")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "session_not_found"
 
 
 def test_get_notifications_empty(web_channel_app):

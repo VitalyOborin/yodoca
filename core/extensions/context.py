@@ -172,9 +172,23 @@ class ExtensionContext:
         """List session IDs in the session pool (for web channel /api/conversations)."""
         return self._router.list_session_ids()
 
+    async def list_session_summaries(self) -> list[dict[str, Any]]:
+        """List sessions with stable integer updated_at metadata."""
+        return await self._router.list_session_summaries()
+
     def delete_session(self, session_id: str) -> bool:
         """Remove a session from the pool. Returns True if it existed."""
         return self._router.delete_session(session_id)
+
+    async def get_session_history(
+        self, session_id: str
+    ) -> list[dict[str, Any]] | None:
+        """Return stored messages/items for a session. None if session is unknown."""
+        return await self._router.get_session_history(session_id)
+
+    async def get_session_updated_at(self, session_id: str) -> int | None:
+        """Return stable integer updated_at for a session."""
+        return await self._router.get_session_updated_at(session_id)
 
     @property
     def data_dir(self) -> Path:

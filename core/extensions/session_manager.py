@@ -1,5 +1,7 @@
 """SessionManager: session lifecycle, rotation, and timeout handling."""
 
+import asyncio
+import sqlite3
 import time
 from typing import Any
 
@@ -17,6 +19,78 @@ class SessionManager:
         self._session_db_path: str | None = None
         self._event_bus: Any = None
         self._session_pool: dict[str, Any] = {}
+
+    @staticmethod
+    def _ensure_session_meta_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS yodoca_session_meta (
+                session_id TEXT PRIMARY KEY,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+
+    @staticmethod
+    def _read_last_message_ts(
+        conn: sqlite3.Connection, session_id: str
+    ) -> int | None:
+        row = conn.execute(
+            """
+            SELECT CAST(strftime('%s', MAX(created_at)) AS INTEGER)
+            FROM agent_messages
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        value = row[0] if row else None
+        return int(value) if value is not None else None
+
+    @staticmethod
+    def _read_session_fallback_ts(
+        conn: sqlite3.Connection, session_id: str
+    ) -> int | None:
+        row = conn.execute(
+            """
+            SELECT CAST(strftime('%s', updated_at) AS INTEGER)
+            FROM agent_sessions
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        value = row[0] if row else None
+        return int(value) if value is not None else None
+
+    @staticmethod
+    def _read_meta_ts(conn: sqlite3.Connection, session_id: str) -> int | None:
+        row = conn.execute(
+            "SELECT updated_at FROM yodoca_session_meta WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        value = row[0] if row else None
+        return int(value) if value is not None else None
+
+    @staticmethod
+    def _upsert_meta_ts(conn: sqlite3.Connection, session_id: str, updated_at: int) -> None:
+        conn.execute(
+            """
+            INSERT INTO yodoca_session_meta (session_id, updated_at)
+            VALUES (?, ?)
+            ON CONFLICT(session_id)
+            DO UPDATE SET updated_at = excluded.updated_at
+            """,
+            (session_id, updated_at),
+        )
+
+    def _sync_session_updated_at(self, conn: sqlite3.Connection, session_id: str) -> int:
+        last_message_ts = self._read_last_message_ts(conn, session_id)
+        fallback_ts = self._read_session_fallback_ts(conn, session_id)
+        target_updated_at = last_message_ts if last_message_ts is not None else (fallback_ts or 0)
+
+        existing = self._read_meta_ts(conn, session_id)
+        if existing != target_updated_at:
+            self._upsert_meta_ts(conn, session_id, target_updated_at)
+        return target_updated_at
 
     @property
     def session(self) -> Any:
@@ -58,6 +132,50 @@ class SessionManager:
             del self._session_pool[session_id]
             return True
         return False
+
+    async def get_session_items(self, session_id: str) -> list[dict[str, Any]] | None:
+        """Return stored session items for an existing pooled session."""
+        session = self._session_pool.get(session_id)
+        if session is None:
+            return None
+        items = await session.get_items()
+        return [item for item in items if isinstance(item, dict)]
+
+    async def get_session_updated_at(self, session_id: str) -> int | None:
+        """Return persisted integer updated_at for a pooled session."""
+        if session_id not in self._session_pool:
+            return None
+        if self._session_db_path is None:
+            return None
+
+        def _read() -> int:
+            with sqlite3.connect(self._session_db_path) as conn:
+                self._ensure_session_meta_table(conn)
+                updated_at = self._sync_session_updated_at(conn, session_id)
+                conn.commit()
+                return updated_at
+
+        return await asyncio.to_thread(_read)
+
+    async def list_session_summaries(self) -> list[dict[str, Any]]:
+        """List pooled sessions with stable integer updated_at."""
+        session_ids = list(self._session_pool.keys())
+        if not session_ids:
+            return []
+        if self._session_db_path is None:
+            return [{"id": sid, "updated_at": 0} for sid in session_ids]
+
+        def _read() -> list[dict[str, Any]]:
+            with sqlite3.connect(self._session_db_path) as conn:
+                self._ensure_session_meta_table(conn)
+                summaries: list[dict[str, Any]] = []
+                for sid in session_ids:
+                    updated_at = self._sync_session_updated_at(conn, sid)
+                    summaries.append({"id": sid, "updated_at": updated_at})
+                conn.commit()
+                return summaries
+
+        return await asyncio.to_thread(_read)
 
     def configure_session(
         self,

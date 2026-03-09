@@ -1,5 +1,7 @@
 """Direct unit tests for router subcomponents after MessageRouter decomposition."""
 
+import asyncio
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -46,6 +48,56 @@ class TestSessionManager:
 
         assert manager.session_id != old_id
         event_bus.publish.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_updated_at_is_integer_and_stable_without_new_messages(
+        self, tmp_path
+    ) -> None:
+        manager = SessionManager()
+        db_path = tmp_path / "session.db"
+        manager.configure_session(
+            session_db_path=str(db_path),
+            session_timeout=1800,
+            event_bus=None,
+            now_ts=1000.0,
+        )
+        session = manager.get_or_create_session("sess01")
+        await session.add_items([{"role": "user", "content": "Hello"}])
+
+        first = await manager.get_session_updated_at("sess01")
+        second = await manager.get_session_updated_at("sess01")
+        assert isinstance(first, int)
+        assert first == second
+
+    @pytest.mark.asyncio
+    async def test_updated_at_changes_only_after_new_message(self, tmp_path) -> None:
+        manager = SessionManager()
+        db_path = tmp_path / "session.db"
+        manager.configure_session(
+            session_db_path=str(db_path),
+            session_timeout=1800,
+            event_bus=None,
+            now_ts=1000.0,
+        )
+        session = manager.get_or_create_session("sess01")
+        await session.add_items([{"role": "user", "content": "Hello"}])
+        before = await manager.get_session_updated_at("sess01")
+
+        same = await manager.get_session_updated_at("sess01")
+        assert same == before
+
+        await asyncio.sleep(1.1)
+        await session.add_items([{"role": "assistant", "content": "Hi"}])
+        after = await manager.get_session_updated_at("sess01")
+        assert after > before
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT updated_at FROM yodoca_session_meta WHERE session_id = ?",
+                ("sess01",),
+            ).fetchone()
+        assert row is not None
+        assert isinstance(row[0], int)
 
 
 class TestApprovalCoordinator:
@@ -116,6 +168,7 @@ class TestResponseDeliveryService:
             on_chunk,
             on_tool_call,
             turn_context: TurnContext | None = None,
+            session=None,
         ) -> str:
             await on_chunk("hi ")
             await on_tool_call("calculator")

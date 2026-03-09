@@ -120,7 +120,7 @@ class Conversation(BaseModel):
 
     id: str
     title: str | None = None
-    updated_at: float
+    updated_at: int
 
 
 class Notification(BaseModel):

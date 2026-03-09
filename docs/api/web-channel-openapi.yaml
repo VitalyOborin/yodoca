@@ -173,6 +173,28 @@ paths:
         "401":
           $ref: "#/components/responses/UnauthorizedError"
   /api/conversations/{id}:
+    get:
+      tags: [conversations]
+      summary: Get one conversation session history
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Conversation metadata and history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationDetailResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
     delete:
       tags: [conversations]
       summary: Delete conversation session
@@ -722,8 +744,22 @@ components:
           type: string
           nullable: true
           description: Optional generated title; may be null in Phase 1.
-        updated_at: { type: number }
+        updated_at: { type: integer }
       required: [id, updated_at]
+    ConversationHistoryItem:
+      description: Stored item from session history.
+      type: object
+      additionalProperties: true
+    ConversationDetailResponse:
+      type: object
+      properties:
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationHistoryItem"
+      required: [conversation, history]
     Notification:
       type: object
       properties:

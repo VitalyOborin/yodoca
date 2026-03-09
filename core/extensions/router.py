@@ -85,9 +85,23 @@ class MessageRouter:
         """List session IDs in the pool (for web channel /api/conversations)."""
         return self._sessions.list_session_ids()
 
+    async def list_session_summaries(self) -> list[dict[str, Any]]:
+        """List pooled sessions with stable integer updated_at."""
+        return await self._sessions.list_session_summaries()
+
     def delete_session(self, session_id: str) -> bool:
         """Remove a session from the pool. Returns True if it existed."""
         return self._sessions.delete_session(session_id)
+
+    async def get_session_history(
+        self, session_id: str
+    ) -> list[dict[str, Any]] | None:
+        """Read stored items for a pooled session."""
+        return await self._sessions.get_session_items(session_id)
+
+    async def get_session_updated_at(self, session_id: str) -> int | None:
+        """Get stable integer updated_at for one pooled session."""
+        return await self._sessions.get_session_updated_at(session_id)
 
     def configure_session(
         self,

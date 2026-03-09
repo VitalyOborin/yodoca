@@ -1,4 +1,4 @@
-"""Custom API routes: /api/health, /api/conversations, /api/notifications."""
+"""Custom API routes for health, conversations, and notifications."""
 
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse
@@ -36,12 +36,14 @@ async def get_conversations(request: Request) -> JSONResponse:
     """List conversation sessions from session pool."""
     ext = _get_extension(request)
     ctx = ext._context
-    session_ids = ctx.list_sessions()
-    import time
-
-    now = time.time()
+    summaries = await ctx.list_session_summaries()
     conversations = [
-        Conversation(id=sid, title=None, updated_at=now) for sid in session_ids
+        Conversation(
+            id=summary["id"],
+            title=None,
+            updated_at=int(summary["updated_at"]),
+        )
+        for summary in summaries
     ]
     data = {"conversations": [c.model_dump() for c in conversations]}
     return JSONResponse(content=data)
@@ -68,6 +70,39 @@ async def delete_conversation(
         )
     return JSONResponse(
         content=OperationResult(success=True, message="Session deleted").model_dump()
+    )
+
+
+@router.get("/conversations/{session_id}")
+async def get_conversation(
+    request: Request, session_id: str
+) -> JSONResponse:
+    """Return one conversation session metadata and stored history."""
+    ext = _get_extension(request)
+    ctx = ext._context
+    history = await ctx.get_session_history(session_id)
+    if history is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Session {session_id} not found",
+                    "type": "not_found",
+                    "code": "session_not_found",
+                }
+            },
+        )
+    updated_at = await ctx.get_session_updated_at(session_id)
+    conversation = Conversation(
+        id=session_id,
+        title=None,
+        updated_at=updated_at or 0,
+    )
+    return JSONResponse(
+        content={
+            "conversation": conversation.model_dump(),
+            "history": history,
+        }
     )
 
 
