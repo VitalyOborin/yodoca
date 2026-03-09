@@ -1,0 +1,761 @@
+openapi: 3.1.0
+info:
+  title: Yodoca Web Channel API
+  version: 0.1.0
+  description: >
+    OpenAPI specification for ADR 026 Web Channel extension.
+    Includes OpenAI-compatible endpoints and custom application endpoints.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local default
+tags:
+  - name: openai-compatible
+  - name: system
+  - name: conversations
+  - name: notifications
+  - name: inbox
+  - name: memory
+  - name: agents
+  - name: prompts
+  - name: extensions
+  - name: events
+paths:
+  /v1/models:
+    get:
+      tags: [openai-compatible]
+      summary: List available models
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OpenAI-compatible model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelsResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /v1/chat/completions:
+    post:
+      tags: [openai-compatible]
+      summary: Create chat completion
+      description: >
+        OpenAI-compatible Chat Completions endpoint. If `stream=true`,
+        returns `text/event-stream`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionsRequest"
+      responses:
+        "200":
+          description: Completion response (JSON or SSE stream)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionsResponse"
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                stream:
+                  value: |
+                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                    data: [DONE]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/BusyError"
+  /v1/responses:
+    post:
+      tags: [openai-compatible]
+      summary: Create response (OpenAI Responses API)
+      description: >
+        OpenAI Responses API endpoint. Supports `input` as string or array.
+        If `stream=true`, returns `text/event-stream`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
+      responses:
+        "200":
+          description: Responses API result (JSON or SSE stream)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsesResponse"
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                stream:
+                  value: |
+                    event: response.created
+                    data: {"id":"resp_123","object":"response","status":"in_progress"}
+
+                    event: response.output_item.added
+                    data: {"item":{"type":"status_update","text":"Using: search_memory"}}
+
+                    event: response.output_item.added
+                    data: {"item":{"id":"msg_123","type":"message","role":"assistant","content":[]}}
+
+                    event: response.content_part.added
+                    data: {"item_id":"msg_123","content_index":0,"part":{"type":"output_text","text":""}}
+
+                    event: response.output_text.delta
+                    data: {"item_id":"msg_123","content_index":0,"delta":"Hello"}
+
+                    event: response.output_text.done
+                    data: {"item_id":"msg_123","content_index":0,"text":"Hello"}
+
+                    event: response.completed
+                    data: {"id":"resp_123","object":"response","status":"completed"}
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/BusyError"
+  /api/health:
+    get:
+      tags: [system]
+      summary: Health check
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/conversations:
+    get:
+      tags: [conversations]
+      summary: List conversation sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XSessionId"
+      responses:
+        "200":
+          description: Conversation list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Conversation"
+                required: [conversations]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/conversations/{id}:
+    delete:
+      tags: [conversations]
+      summary: Delete conversation session
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/notifications:
+    get:
+      tags: [notifications]
+      summary: Long-poll proactive notifications
+      description: >
+        Long-poll endpoint backed by in-memory ring buffer. If empty, waits up to `timeout`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: timeout
+          in: query
+          description: Long-poll timeout in seconds (default 30, max 60)
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+            default: 30
+      responses:
+        "200":
+          description: Notification batch (possibly empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationsResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  # Phase 2 endpoints from ADR 026
+  /api/inbox:
+    get:
+      tags: [inbox]
+      summary: List inbox items
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_type
+          in: query
+          schema: { type: string }
+        - name: entity_type
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Inbox items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InboxItem"
+                  total:
+                    type: integer
+                required: [items, total]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/inbox/{id}:
+    get:
+      tags: [inbox]
+      summary: Read inbox item
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Inbox item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxItem"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/memory/search:
+    get:
+      tags: [memory]
+      summary: Search memory
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Memory search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                required: [items]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/agents:
+    get:
+      tags: [agents]
+      summary: List agents
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Agents list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                required: [agents]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/agents/{id}:
+    get:
+      tags: [agents]
+      summary: Get agent config
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Agent configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    put:
+      tags: [agents]
+      summary: Update agent config
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/prompts:
+    get:
+      tags: [prompts]
+      summary: List prompts
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Prompt list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prompts:
+                    type: array
+                    items:
+                      type: string
+                required: [prompts]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/prompts/{name}:
+    get:
+      tags: [prompts]
+      summary: Get prompt content
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Prompt data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  content: { type: string }
+                required: [name, content]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    put:
+      tags: [prompts]
+      summary: Update prompt content
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+              required: [content]
+      responses:
+        "200":
+          description: Update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/extensions:
+    get:
+      tags: [extensions]
+      summary: List loaded extensions
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Extensions list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  extensions:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                required: [extensions]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/events:
+    get:
+      tags: [events]
+      summary: List recent events
+      description: Phase 2 endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Event list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                required: [events]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: APIKey
+  parameters:
+    XSessionId:
+      name: X-Session-Id
+      in: header
+      required: false
+      description: Optional conversation session identifier for session pool routing.
+      schema:
+        type: string
+  responses:
+    UnauthorizedError:
+      description: Missing or invalid Bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ValidationError:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BusyError:
+      description: Another request is currently in progress
+      headers:
+        Retry-After:
+          description: Recommended retry delay in seconds
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ModelsResponse:
+      type: object
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelObject"
+      required: [object, data]
+    ModelObject:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: model }
+        created: { type: integer }
+        owned_by: { type: string }
+      required: [id, object, created, owned_by]
+    ChatCompletionsRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          default: yodoca
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        stream:
+          type: boolean
+          default: false
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+      required: [model, messages]
+    ChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+      required: [role, content]
+    ChatCompletionsResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: chat.completion }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message:
+                type: object
+                properties:
+                  role: { type: string, const: assistant }
+                  content: { type: string }
+                required: [role, content]
+              finish_reason: { type: string, nullable: true }
+            required: [index, message, finish_reason]
+        usage:
+          $ref: "#/components/schemas/UsageChat"
+      required: [id, object, created, model, choices, usage]
+    ResponsesRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          default: yodoca
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+        stream:
+          type: boolean
+          default: false
+      required: [model, input]
+    ResponsesResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: response }
+        status: { type: string, enum: [completed, in_progress, failed] }
+        output:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        model: { type: string }
+        usage:
+          $ref: "#/components/schemas/UsageResponses"
+      required: [id, object, status, output, model, usage]
+    UsageChat:
+      description: Token counts are approximate and may be zero in Phase 1.
+      type: object
+      properties:
+        prompt_tokens: { type: integer, minimum: 0 }
+        completion_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+      required: [prompt_tokens, completion_tokens, total_tokens]
+    UsageResponses:
+      description: Token counts are approximate and may be zero in Phase 1.
+      type: object
+      properties:
+        input_tokens: { type: integer, minimum: 0 }
+        output_tokens: { type: integer, minimum: 0 }
+        total_tokens: { type: integer, minimum: 0 }
+      required: [input_tokens, output_tokens, total_tokens]
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [ok] }
+        uptime_seconds: { type: number, minimum: 0 }
+      required: [status, uptime_seconds]
+    Conversation:
+      description: Conversation session metadata.
+      type: object
+      properties:
+        id: { type: string }
+        title:
+          type: string
+          nullable: true
+          description: Optional generated title; may be null in Phase 1.
+        updated_at: { type: number }
+      required: [id, updated_at]
+    Notification:
+      type: object
+      properties:
+        id: { type: string }
+        text: { type: string }
+        created_at: { type: integer }
+      required: [id, text, created_at]
+    NotificationsResponse:
+      type: object
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+      required: [notifications]
+    InboxItem:
+      type: object
+      additionalProperties: true
+    OperationResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+      required: [success]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string, nullable: true }
+          required: [message, type]
+      required: [error]
