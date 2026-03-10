@@ -70,13 +70,14 @@ async def get_models(request: Request) -> ModelsResponse:
     """List available models (virtual model from config)."""
     ext = _get_extension(request)
     model_name = ext._config.get("model_name", "yodoca")
+    created = getattr(request.app.state, "start_epoch", None) or int(time.time())
     return ModelsResponse(
         object="list",
         data=[
             ModelObject(
                 id=model_name,
                 object="model",
-                created=int(time.time()),
+                created=created,
                 owned_by="yodoca",
             )
         ],

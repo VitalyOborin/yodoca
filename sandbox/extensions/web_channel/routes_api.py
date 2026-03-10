@@ -22,8 +22,6 @@ from sandbox.extensions.web_channel.models import (
 
 router = APIRouter(include_in_schema=True)
 
-_start_time: float | None = None
-
 
 def _get_extension(request: Request):
     return request.app.state.extension
@@ -40,10 +38,11 @@ def _project_model(data: ProjectInfo | dict) -> Project:
 @router.get("/health")
 async def get_health(request: Request) -> HealthResponse:
     """Health check with uptime."""
-    global _start_time
-    if _start_time is None:
-        _start_time = time.monotonic()
-    uptime = time.monotonic() - _start_time
+    start = getattr(request.app.state, "start_monotonic", None)
+    if start is None:
+        start = time.monotonic()
+        request.app.state.start_monotonic = start
+    uptime = time.monotonic() - start
     return HealthResponse(status="ok", uptime_seconds=int(uptime))
 
 

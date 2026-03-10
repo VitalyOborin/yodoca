@@ -17,10 +17,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Set uptime start when server starts."""
-    import sandbox.extensions.web_channel.routes_api as routes_api
-
-    routes_api._start_time = time.monotonic()
+    """Set app start time (monotonic and Unix epoch) when server starts."""
+    app.state.start_monotonic = time.monotonic()
+    app.state.start_epoch = int(time.time())
     yield
 
 
