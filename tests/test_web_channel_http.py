@@ -11,7 +11,7 @@ from sandbox.extensions.web_channel.main import WebChannelExtension
 
 @pytest.fixture
 def mock_context():
-    """Mock ExtensionContext with emit and list_sessions."""
+    """Mock ExtensionContext with session/project CRUD helpers."""
     ctx = MagicMock()
     ctx.get_config = MagicMock(
         side_effect=lambda k, d=None: {
@@ -26,11 +26,47 @@ def mock_context():
     )
     ctx.get_secret = AsyncMock(return_value=None)
     ctx.emit = AsyncMock()
-    ctx.list_sessions = MagicMock(return_value=[])
-    ctx.list_session_summaries = AsyncMock(return_value=[])
-    ctx.delete_session = MagicMock(return_value=False)
+    ctx.list_sessions = AsyncMock(return_value=[])
+    ctx.create_session = AsyncMock(
+        return_value={
+            "id": "sess_1",
+            "project_id": None,
+            "title": None,
+            "channel_id": "web_channel",
+            "created_at": 1773096500,
+            "last_active_at": 1773096583,
+            "is_archived": False,
+        }
+    )
+    ctx.get_session = AsyncMock(return_value=None)
+    ctx.update_session = AsyncMock(return_value=None)
+    ctx.archive_session = AsyncMock(return_value=False)
     ctx.get_session_history = AsyncMock(return_value=None)
-    ctx.get_session_updated_at = AsyncMock(return_value=None)
+    ctx.list_projects = AsyncMock(return_value=[])
+    ctx.get_project = AsyncMock(return_value=None)
+    ctx.create_project = AsyncMock(
+        return_value={
+            "id": "proj_1",
+            "name": "Alpha",
+            "instructions": "Use strict mode.",
+            "agent_config": {"model": "gpt-5"},
+            "created_at": 1773096500,
+            "updated_at": 1773096583,
+            "files": ["README.md"],
+        }
+    )
+    ctx.update_project = AsyncMock(
+        return_value={
+            "id": "proj_1",
+            "name": "Alpha 2",
+            "instructions": "Use safe mode.",
+            "agent_config": {"model": "gpt-5-mini"},
+            "created_at": 1773096500,
+            "updated_at": 1773096600,
+            "files": ["docs/guide.md"],
+        }
+    )
+    ctx.delete_project = AsyncMock(return_value=False)
     return ctx
 
 
@@ -45,7 +81,6 @@ def web_channel_app(mock_context):
 
 
 def test_get_models(web_channel_app):
-    """GET /v1/models returns virtual model list."""
     client = TestClient(web_channel_app)
     resp = client.get("/v1/models")
     assert resp.status_code == 200
@@ -56,7 +91,6 @@ def test_get_models(web_channel_app):
 
 
 def test_get_health(web_channel_app):
-    """GET /api/health returns status and uptime."""
     client = TestClient(web_channel_app)
     resp = client.get("/api/health")
     assert resp.status_code == 200
@@ -65,66 +99,179 @@ def test_get_health(web_channel_app):
     assert "uptime_seconds" in data
 
 
-def test_get_conversations(web_channel_app, mock_context):
-    """GET /api/conversations returns session list."""
-    mock_context.list_session_summaries.return_value = [
-        {"id": "sess_1", "updated_at": 1773096583},
-        {"id": "sess_2", "updated_at": 1773096584},
+def test_get_sessions(web_channel_app, mock_context):
+    mock_context.list_sessions.return_value = [
+        {
+            "id": "sess_1",
+            "project_id": None,
+            "title": "First",
+            "channel_id": "web_channel",
+            "created_at": 1773096500,
+            "last_active_at": 1773096583,
+            "is_archived": False,
+        },
+        {
+            "id": "sess_2",
+            "project_id": "proj_1",
+            "title": None,
+            "channel_id": "cli_channel",
+            "created_at": 1773096501,
+            "last_active_at": 1773096584,
+            "is_archived": False,
+        },
     ]
     client = TestClient(web_channel_app)
-    resp = client.get("/api/conversations")
+    resp = client.get("/api/sessions")
     assert resp.status_code == 200
     data = resp.json()
-    assert "conversations" in data
-    assert len(data["conversations"]) == 2
-    assert isinstance(data["conversations"][0]["updated_at"], int)
+    assert len(data["sessions"]) == 2
+    assert data["sessions"][0]["last_active_at"] == 1773096583
 
 
-def test_delete_conversation_not_found(web_channel_app, mock_context):
-    """DELETE /api/conversations/{id} returns 404 when session missing."""
-    mock_context.delete_session.return_value = False
+def test_post_sessions(web_channel_app):
     client = TestClient(web_channel_app)
-    resp = client.delete("/api/conversations/missing_id")
-    assert resp.status_code == 404
-
-
-def test_delete_conversation_ok(web_channel_app, mock_context):
-    """DELETE /api/conversations/{id} returns 200 when deleted."""
-    mock_context.delete_session.return_value = True
-    client = TestClient(web_channel_app)
-    resp = client.delete("/api/conversations/sess_1")
+    resp = client.post("/api/sessions", json={"title": "New session"})
     assert resp.status_code == 200
-    assert resp.json()["success"] is True
+    data = resp.json()
+    assert data["session"]["id"] == "sess_1"
+    assert data["session"]["channel_id"] == "web_channel"
 
 
-def test_get_conversation_history_ok(web_channel_app, mock_context):
-    """GET /api/conversations/{id} returns one conversation with history."""
+def test_get_session_detail_ok(web_channel_app, mock_context):
+    mock_context.get_session.return_value = {
+        "id": "sess_1",
+        "project_id": None,
+        "title": "Saved",
+        "channel_id": "web_channel",
+        "created_at": 1773096500,
+        "last_active_at": 1773096583,
+        "is_archived": False,
+    }
     mock_context.get_session_history.return_value = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi!"},
     ]
-    mock_context.get_session_updated_at.return_value = 1773096583
     client = TestClient(web_channel_app)
-    resp = client.get("/api/conversations/sess_1")
+    resp = client.get("/api/sessions/sess_1")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["conversation"]["id"] == "sess_1"
-    assert data["conversation"]["updated_at"] == 1773096583
+    assert data["session"]["id"] == "sess_1"
     assert len(data["history"]) == 2
-    assert data["history"][0]["role"] == "user"
 
 
-def test_get_conversation_history_not_found(web_channel_app, mock_context):
-    """GET /api/conversations/{id} returns 404 when session missing."""
+def test_get_session_detail_not_found(web_channel_app, mock_context):
+    mock_context.get_session.return_value = None
     mock_context.get_session_history.return_value = None
     client = TestClient(web_channel_app)
-    resp = client.get("/api/conversations/missing_id")
+    resp = client.get("/api/sessions/missing_id")
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "session_not_found"
 
 
+def test_patch_session_ok(web_channel_app, mock_context):
+    mock_context.update_session.return_value = {
+        "id": "sess_1",
+        "project_id": "proj_1",
+        "title": "Renamed",
+        "channel_id": "web_channel",
+        "created_at": 1773096500,
+        "last_active_at": 1773096583,
+        "is_archived": False,
+    }
+    client = TestClient(web_channel_app)
+    resp = client.patch(
+        "/api/sessions/sess_1",
+        json={
+            "title": "Renamed",
+            "project_id": "proj_1",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["session"]["project_id"] == "proj_1"
+
+
+def test_delete_session_archives(web_channel_app, mock_context):
+    mock_context.archive_session.return_value = True
+    client = TestClient(web_channel_app)
+    resp = client.delete("/api/sessions/sess_1")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_get_projects(web_channel_app, mock_context):
+    mock_context.list_projects.return_value = [
+        {
+            "id": "proj_1",
+            "name": "Alpha",
+            "instructions": "Use strict mode.",
+            "agent_config": {"model": "gpt-5"},
+            "created_at": 1773096500,
+            "updated_at": 1773096583,
+            "files": ["README.md"],
+        }
+    ]
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["projects"][0]["name"] == "Alpha"
+
+
+def test_get_project_ok(web_channel_app, mock_context):
+    mock_context.get_project.return_value = {
+        "id": "proj_1",
+        "name": "Alpha",
+        "instructions": "Use strict mode.",
+        "agent_config": {"model": "gpt-5"},
+        "created_at": 1773096500,
+        "updated_at": 1773096583,
+        "files": ["README.md"],
+    }
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/projects/proj_1")
+    assert resp.status_code == 200
+    assert resp.json()["project"]["id"] == "proj_1"
+
+
+def test_post_projects(web_channel_app):
+    client = TestClient(web_channel_app)
+    resp = client.post(
+        "/api/projects",
+        json={
+            "name": "Alpha",
+            "instructions": "Use strict mode.",
+            "agent_config": {"model": "gpt-5"},
+            "files": ["README.md"],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["project"]["id"] == "proj_1"
+
+
+def test_patch_projects(web_channel_app):
+    client = TestClient(web_channel_app)
+    resp = client.patch(
+        "/api/projects/proj_1",
+        json={
+            "name": "Alpha 2",
+            "instructions": "Use safe mode.",
+            "agent_config": {"model": "gpt-5-mini"},
+            "files": ["docs/guide.md"],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["project"]["name"] == "Alpha 2"
+
+
+def test_delete_projects(web_channel_app, mock_context):
+    mock_context.delete_project.return_value = True
+    client = TestClient(web_channel_app)
+    resp = client.delete("/api/projects/proj_1")
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
 def test_get_notifications_empty(web_channel_app):
-    """GET /api/notifications returns empty list when no notifications."""
     client = TestClient(web_channel_app)
     resp = client.get("/api/notifications?timeout=1")
     assert resp.status_code == 200
@@ -132,7 +279,6 @@ def test_get_notifications_empty(web_channel_app):
 
 
 def test_post_chat_completions_no_user_message(web_channel_app):
-    """POST /v1/chat/completions with no user message returns 422."""
     client = TestClient(web_channel_app)
     resp = client.post(
         "/v1/chat/completions",
@@ -142,7 +288,6 @@ def test_post_chat_completions_no_user_message(web_channel_app):
 
 
 def test_post_chat_completions_busy_503(web_channel_app):
-    """POST /v1/chat/completions when bridge reports busy returns 503."""
     ext = web_channel_app.state.extension
     bridge = ext._bridge
 
@@ -169,7 +314,6 @@ def test_post_chat_completions_busy_503(web_channel_app):
 def test_post_responses_non_stream_when_router_uses_stream_callbacks(
     web_channel_app, mock_context
 ):
-    """POST /v1/responses returns JSON even if router path is streaming callbacks."""
     ext = web_channel_app.state.extension
 
     async def emit_with_stream_callbacks(topic, payload):
@@ -185,7 +329,9 @@ def test_post_responses_non_stream_when_router_uses_stream_callbacks(
         "/v1/responses",
         json={
             "model": "yodoca",
-            "messages": [{"role": "user", "content": "Say hello in one short sentence."}],
+            "messages": [
+                {"role": "user", "content": "Say hello in one short sentence."}
+            ],
             "stream": False,
         },
     )

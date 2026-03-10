@@ -1,14 +1,16 @@
-"""ExtensionContext: kernel API for extensions. Single entry point; no direct core imports in extensions."""
+"""ExtensionContext: kernel API for extensions."""
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from core.events.topics import SystemTopics
-from core.llm import ModelRouterProtocol
 from core.extensions.contract import TurnContext
 from core.extensions.router import MessageRouter
+from core.extensions.update_fields import UNSET
+from core.llm import ModelRouterProtocol
 from core.secrets import get_secret_async, set_secret_async
 
 if TYPE_CHECKING:
@@ -94,7 +96,7 @@ class ExtensionContext:
         )
 
     async def invoke_agent_background(self, prompt: str) -> str:
-        """Run the Orchestrator in background mode (separate lock, ephemeral session). Returns response."""
+        """Run the Orchestrator in background mode and return its response."""
         return await self._router.invoke_agent_background(prompt)
 
     async def enrich_prompt(
@@ -157,7 +159,7 @@ class ExtensionContext:
         return await get_secret_async(name)
 
     async def set_secret(self, name: str, value: str) -> None:
-        """Store a secret in the OS keyring. Used by channel interceptors for secure input."""
+        """Store a secret in the OS keyring for secure input flows."""
         await set_secret_async(name, value)
 
     def get_config(self, key: str, default: Any = None) -> Any:
@@ -168,27 +170,112 @@ class ExtensionContext:
         """Get an instance of another extension (only from depends_on)."""
         return self._get_extension(extension_id)
 
-    def list_sessions(self) -> list[str]:
-        """List session IDs in the session pool (for web channel /api/conversations)."""
-        return self._router.list_session_ids()
+    async def list_sessions(
+        self,
+        include_archived: bool = False,
+        project_id: str | None = None,
+        channel_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List persisted session metadata from session.db."""
+        return await self._router.list_sessions(
+            include_archived=include_archived,
+            project_id=project_id,
+            channel_id=channel_id,
+        )
 
-    async def list_session_summaries(self) -> list[dict[str, Any]]:
-        """List sessions with stable integer updated_at metadata."""
-        return await self._router.list_session_summaries()
+    async def create_session(
+        self,
+        *,
+        session_id: str,
+        channel_id: str,
+        project_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a persisted session row before any messages are sent."""
+        return await self._router.create_session(
+            session_id=session_id,
+            channel_id=channel_id,
+            project_id=project_id,
+            title=title,
+        )
 
-    def delete_session(self, session_id: str) -> bool:
-        """Remove a session from the pool. Returns True if it existed."""
-        return self._router.delete_session(session_id)
+    async def get_session(
+        self, session_id: str, include_archived: bool = False
+    ) -> dict[str, Any] | None:
+        """Read persisted session metadata."""
+        return await self._router.get_session(
+            session_id, include_archived=include_archived
+        )
 
-    async def get_session_history(
-        self, session_id: str
-    ) -> list[dict[str, Any]] | None:
+    async def update_session(
+        self,
+        session_id: str,
+        *,
+        title: str | None | object = UNSET,
+        project_id: str | None | object = UNSET,
+        is_archived: bool | object = UNSET,
+    ) -> dict[str, Any] | None:
+        """Update selected persisted session metadata fields."""
+        return await self._router.update_session(
+            session_id,
+            title=title,
+            project_id=project_id,
+            is_archived=is_archived,
+        )
+
+    async def archive_session(self, session_id: str) -> bool:
+        """Soft-archive a session without deleting its history."""
+        return await self._router.archive_session(session_id)
+
+    async def get_session_history(self, session_id: str) -> list[dict[str, Any]] | None:
         """Return stored messages/items for a session. None if session is unknown."""
         return await self._router.get_session_history(session_id)
 
-    async def get_session_updated_at(self, session_id: str) -> int | None:
-        """Return stable integer updated_at for a session."""
-        return await self._router.get_session_updated_at(session_id)
+    async def list_projects(self) -> list[dict[str, Any]]:
+        """List persisted projects."""
+        return await self._router.list_projects()
+
+    async def get_project(self, project_id: str) -> dict[str, Any] | None:
+        """Read one persisted project."""
+        return await self._router.get_project(project_id)
+
+    async def create_project(
+        self,
+        *,
+        name: str,
+        instructions: str | None = None,
+        agent_config: dict[str, Any] | None = None,
+        files: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a project in session.db."""
+        return await self._router.create_project(
+            name=name,
+            instructions=instructions,
+            agent_config=agent_config,
+            files=files or [],
+        )
+
+    async def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | object = UNSET,
+        instructions: str | None | object = UNSET,
+        agent_config: dict[str, Any] | None | object = UNSET,
+        files: list[str] | object = UNSET,
+    ) -> dict[str, Any] | None:
+        """Update selected project metadata fields."""
+        return await self._router.update_project(
+            project_id,
+            name=name,
+            instructions=instructions,
+            agent_config=agent_config,
+            files=files,
+        )
+
+    async def delete_project(self, project_id: str) -> bool:
+        """Delete a project and unlink bound sessions via foreign key rules."""
+        return await self._router.delete_project(project_id)
 
     @property
     def data_dir(self) -> Path:

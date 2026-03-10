@@ -1,6 +1,7 @@
 """Tests for session rotation in MessageRouter."""
 
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,15 +23,17 @@ class TestSessionRotation:
     """Session rotation on inactivity timeout."""
 
     @pytest.mark.asyncio
-    async def test_rotate_session_publishes_session_completed(self) -> None:
+    async def test_rotate_session_publishes_session_completed(
+        self, tmp_path: Path
+    ) -> None:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
-        # Use distinct time values so configure_session and _rotate_session get different session IDs
+        # Distinct values ensure configure_session and rotate_session use different IDs.
         with patch("core.extensions.session_manager.time") as mock_time:
             mock_time.time.side_effect = [1000.0, 1001.0]
             router.configure_session(
-                session_db_path=":memory:",
+                session_db_path=str(tmp_path / "session.db"),
                 session_timeout=1800,
                 event_bus=mock_event_bus,
             )
@@ -50,12 +53,14 @@ class TestSessionRotation:
         assert call_args[0][2]["reason"] == "inactivity_timeout"
 
     @pytest.mark.asyncio
-    async def test_handle_user_message_rotates_on_inactivity(self) -> None:
+    async def test_handle_user_message_rotates_on_inactivity(
+        self, tmp_path: Path
+    ) -> None:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
         router.configure_session(
-            session_db_path=":memory:",
+            session_db_path=str(tmp_path / "session.db"),
             session_timeout=1,
             event_bus=mock_event_bus,
         )
@@ -80,12 +85,12 @@ class TestSessionRotation:
         assert mock_event_bus.publish.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_no_rotation_when_within_timeout(self) -> None:
+    async def test_no_rotation_when_within_timeout(self, tmp_path: Path) -> None:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
         router.configure_session(
-            session_db_path=":memory:",
+            session_db_path=str(tmp_path / "session.db"),
             session_timeout=60,
             event_bus=mock_event_bus,
         )

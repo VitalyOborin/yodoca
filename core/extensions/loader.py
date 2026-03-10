@@ -1,4 +1,4 @@
-"""Loader: discover, load, initialize, wire, start extensions. Manages lifecycle and protocol detection."""
+"""Loader for discovery, lifecycle, and protocol wiring."""
 
 import asyncio
 import logging
@@ -32,6 +32,7 @@ from core.extensions.health_check import HealthCheckManager
 from core.extensions.lifecycle import ExtensionStateMachine, TaskSupervisor
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.manifest_repository import ManifestRepository
+from core.extensions.project_context import ProjectInstructionsContextProvider
 from core.extensions.router import MessageRouter
 from core.extensions.scheduler_manager import SchedulerManager
 from core.extensions.tool_resolver import ToolResolver
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class Loader:
-    """Extension lifecycle: discover -> load -> initialize -> detect -> wire -> start."""
+    """Extension lifecycle orchestration."""
 
     def __init__(
         self,
@@ -203,7 +204,7 @@ class Loader:
         return get_extension
 
     def _get_restart_file_path(self) -> Path:
-        """Restart flag file path from supervisor.restart_file setting (project-root-relative)."""
+        """Restart flag file path from `supervisor.restart_file`."""
         return self._data_dir.parent.parent / get_setting(
             self._settings, "supervisor.restart_file", "sandbox/.restart_requested"
         )
@@ -223,7 +224,7 @@ class Loader:
         ).resolve_tools(tool_ids, agent_id)
 
     def _register_agent_config_from_manifests(self) -> None:
-        """Register agent config from manifests with model_router (default + overrides)."""
+        """Register agent configs from manifests with model_router."""
         if not self._model_router:
             return
         default_provider = self._model_router.get_default_provider()
@@ -302,7 +303,7 @@ class Loader:
         await self._make_event_wiring_manager()._on_agent_task(event)
 
     def wire_event_subscriptions(self, event_bus: EventBus) -> None:
-        """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
+        """Wire manifest-driven notify_user and invoke_agent handlers."""
         if not self._router:
             return
         self._make_event_wiring_manager().wire(event_bus)
@@ -310,9 +311,10 @@ class Loader:
     def _collect_context_providers(
         self, router: MessageRouter
     ) -> list[ContextProvider]:
-        """Collect ContextProvider extensions (ACTIVE only) plus built-in ActiveChannelContextProvider, sorted by context_priority."""
+        """Collect active ContextProviders plus built-in providers."""
         providers: list[ContextProvider] = [
             ActiveChannelContextProvider(router),
+            ProjectInstructionsContextProvider(router),
         ]
         ext_providers = [
             ext
@@ -327,15 +329,14 @@ class Loader:
     def wire_context_providers(self, router: MessageRouter) -> None:
         """Wire ContextProvider chain into router's invoke middleware.
 
-        The middleware returns context to inject into the system role (empty string = no context),
-        not an enriched user message. The router uses this for system injection via agent.clone().
+        The middleware returns system-role context, not an enriched user prompt.
         """
         providers = self._collect_context_providers(router)
         if not providers:
             return
 
         async def _middleware(prompt: str, turn_context: TurnContext) -> str:
-            """Return context to inject into system role (empty string = no context). Not an enriched user message."""
+            """Return context to inject into the system role."""
             parts: list[str] = []
             for provider in providers:
                 ctx = await provider.get_context(prompt, turn_context)
@@ -399,7 +400,7 @@ class Loader:
         router.set_channel_descriptions(channel_descriptions)
 
     async def start_all(self) -> None:
-        """Call start() on all; wrap ServiceProvider; start cron. Cascade dep failure."""
+        """Call `start()` on all extensions and boot background services."""
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
                 continue
@@ -455,7 +456,7 @@ class Loader:
         self._health_manager.start()
 
     def get_mcp_servers(self) -> list[Any]:
-        """Collect MCP server instances from ACTIVE extensions that provide get_mcp_servers (duck-typed)."""
+        """Collect MCP server instances from ACTIVE extensions."""
         servers: list[Any] = []
         for ext_id, ext in self._extensions.items():
             if self._state.get(ext_id) != ExtensionState.ACTIVE:
@@ -534,7 +535,7 @@ class Loader:
         return mcp_aliases
 
     def get_capabilities_summary(self) -> str:
-        """Natural-language summary: tools, agents, and MCP servers for orchestrator prompt."""
+        """Build a natural-language capability summary for the orchestrator."""
         tool_parts = self._collect_tool_agent_parts()
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []

@@ -67,6 +67,13 @@ class MockStreamingChannel(MockChannel, StreamingChannelProvider):
         self.stream_ended.append((user_id, full_text))
 
 
+def _configure_router_session(router: MessageRouter, tmp_path: Path) -> None:
+    router.configure_session(
+        session_db_path=str(tmp_path / "session.db"),
+        session_timeout=1800,
+    )
+
+
 class TestMessageRouterRegisterAndNotify:
     """register_channel and notify_user."""
 
@@ -148,7 +155,7 @@ class TestInvokeAgent:
     async def test_invoke_agent_with_middleware_injects_context_into_system(
         self,
     ) -> None:
-        """When middleware returns context, agent is cloned with extended instructions and original prompt is used."""
+        """Middleware context should extend system instructions, not the user prompt."""
         router = MessageRouter()
         mock_agent = MagicMock()
         mock_agent.instructions = "You are helpful."
@@ -172,14 +179,13 @@ class TestInvokeAgent:
         mock_runner.run.assert_called_once_with(cloned_agent, "hello", session=None)
 
     @pytest.mark.asyncio
-    async def test_invoke_agent_middleware_receives_turn_context(self) -> None:
-        """Middleware receives TurnContext with channel_id, user_id, session_id when invoked from handle_user_message."""
+    async def test_invoke_agent_middleware_receives_turn_context(
+        self, tmp_path: Path
+    ) -> None:
+        """Middleware should receive channel, user, and session IDs."""
         router = MessageRouter()
         router.set_channel_descriptions({"cli": "CLI Channel"})
-        router.configure_session(
-            session_db_path=":memory:",
-            session_timeout=1800,
-        )
+        _configure_router_session(router, tmp_path)
         received_context: list[TurnContext] = []
 
         async def middleware(prompt: str, turn_context: TurnContext) -> str:
@@ -203,7 +209,7 @@ class TestInvokeAgent:
 
     @pytest.mark.asyncio
     async def test_invoke_agent_with_middleware_empty_context_no_clone(self) -> None:
-        """When middleware returns empty string, no clone; base agent and prompt used."""
+        """Empty middleware output should skip agent cloning."""
         router = MessageRouter()
         mock_agent = MagicMock()
         mock_agent.instructions = "Base."
@@ -224,7 +230,7 @@ class TestInvokeAgent:
 
     @pytest.mark.asyncio
     async def test_enrich_prompt_returns_context_plus_prompt(self) -> None:
-        """enrich_prompt returns context + separator + prompt when middleware returns context."""
+        """`enrich_prompt` should prepend middleware context when present."""
         router = MessageRouter()
 
         async def middleware(prompt: str, turn_context: TurnContext) -> str:
@@ -253,8 +259,11 @@ class TestSubscribeAndEmit:
     """subscribe, unsubscribe, and _emit via handle_user_message."""
 
     @pytest.mark.asyncio
-    async def test_handle_user_message_emits_and_sends_to_channel(self) -> None:
+    async def test_handle_user_message_emits_and_sends_to_channel(
+        self, tmp_path: Path
+    ) -> None:
         router = MessageRouter()
+        _configure_router_session(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         events_received: list[tuple[str, object]] = []
@@ -292,8 +301,9 @@ class TestStreamingInvocation:
     """invoke_agent_streamed and streaming channel handling."""
 
     @pytest.mark.asyncio
-    async def test_handle_user_message_streaming_channel(self) -> None:
+    async def test_handle_user_message_streaming_channel(self, tmp_path: Path) -> None:
         router = MessageRouter()
+        _configure_router_session(router, tmp_path)
         ch = MockStreamingChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
@@ -330,8 +340,11 @@ class TestStreamingInvocation:
         assert ch.stream_chunks and ch.sent == []
 
     @pytest.mark.asyncio
-    async def test_handle_user_message_non_streaming_unchanged(self) -> None:
+    async def test_handle_user_message_non_streaming_unchanged(
+        self, tmp_path: Path
+    ) -> None:
         router = MessageRouter()
+        _configure_router_session(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
@@ -444,12 +457,14 @@ class TestInvokeAgentBackgroundLockSplit:
     """invoke_agent_background does not block invoke_agent (user path)."""
 
     @pytest.mark.asyncio
-    async def test_background_and_user_invoke_run_in_parallel(self) -> None:
+    async def test_background_and_user_invoke_run_in_parallel(
+        self, tmp_path: Path
+    ) -> None:
         """Background and user invocations use separate locks; they run concurrently."""
         router = MessageRouter()
         router.set_agent(MagicMock())
         router.configure_session(
-            session_db_path=":memory:",
+            session_db_path=str(tmp_path / "session.db"),
             session_timeout=60,
         )
 
@@ -495,7 +510,7 @@ class TestUserMessageDeduplication:
     async def test_duplicate_event_id_skips_agent_and_channel(
         self, tmp_path: Path
     ) -> None:
-        """When handle_user_message is called twice with same event_id, second call skips."""
+        """A repeated event_id should skip agent execution and channel delivery."""
         db_path = tmp_path / "event_journal.db"
         event_bus = EventBus(db_path=db_path, poll_interval=60, batch_size=3)
         await event_bus.recover()
@@ -516,23 +531,17 @@ class TestUserMessageDeduplication:
             result.interruptions = None
             mock_runner.run = AsyncMock(return_value=result)
 
-            await router.handle_user_message(
-                "hi", "user1", ch, "cli", event_id=42
-            )
+            await router.handle_user_message("hi", "user1", ch, "cli", event_id=42)
             assert ch.sent == [("user1", "reply")]
 
             ch.sent.clear()
-            await router.handle_user_message(
-                "hi", "user1", ch, "cli", event_id=42
-            )
+            await router.handle_user_message("hi", "user1", ch, "cli", event_id=42)
             assert ch.sent == []
 
         await event_bus.stop()
 
     @pytest.mark.asyncio
-    async def test_duplicate_event_id_skips_router_emits(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_duplicate_event_id_skips_router_emits(self, tmp_path: Path) -> None:
         """Duplicate event_id does not emit user_message or agent_response."""
         db_path = tmp_path / "event_journal.db"
         event_bus = EventBus(db_path=db_path, poll_interval=60, batch_size=3)
@@ -565,23 +574,20 @@ class TestUserMessageDeduplication:
             result.interruptions = None
             mock_runner.run = AsyncMock(return_value=result)
 
-            await router.handle_user_message(
-                "hi", "user1", ch, "cli", event_id=99
-            )
+            await router.handle_user_message("hi", "user1", ch, "cli", event_id=99)
             assert len(events_received) == 2
 
             events_received.clear()
-            await router.handle_user_message(
-                "hi", "user1", ch, "cli", event_id=99
-            )
+            await router.handle_user_message("hi", "user1", ch, "cli", event_id=99)
             assert len(events_received) == 0
 
         await event_bus.stop()
 
     @pytest.mark.asyncio
-    async def test_no_event_id_processes_normally(self) -> None:
+    async def test_no_event_id_processes_normally(self, tmp_path: Path) -> None:
         """When event_id is None, processing runs normally (no dedup)."""
         router = MessageRouter()
+        _configure_router_session(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())

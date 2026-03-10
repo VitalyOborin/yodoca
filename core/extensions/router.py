@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -9,8 +10,11 @@ from typing import TYPE_CHECKING, Any
 from core.extensions.agent_invoker import AgentInvoker
 from core.extensions.approval_coordinator import ApprovalCoordinator
 from core.extensions.contract import ChannelProvider, TurnContext
+from core.extensions.project_repository import ProjectRepository
+from core.extensions.project_service import ProjectService
 from core.extensions.response_delivery_service import ResponseDeliveryService
 from core.extensions.session_manager import SessionManager
+from core.extensions.update_fields import UNSET
 
 if TYPE_CHECKING:
     from core.events.bus import EventBus
@@ -33,6 +37,7 @@ class MessageRouter:
             session_manager=self._sessions,
         )
         self._delivery = ResponseDeliveryService(invoker=self._invoker)
+        self._project_service: ProjectService | None = None
 
         # Compatibility mirrors for existing tests and integrations.
         self._event_bus: EventBus | None = None
@@ -69,7 +74,9 @@ class MessageRouter:
     def unsubscribe(self, event: str, handler: Callable[..., Any]) -> None:
         if event in self._subscribers:
             self._subscribers[event] = [
-                registered for registered in self._subscribers[event] if registered != handler
+                registered
+                for registered in self._subscribers[event]
+                if registered != handler
             ]
 
     def set_invoke_middleware(
@@ -81,27 +88,163 @@ class MessageRouter:
     def set_session(self, session: Any, session_id: str) -> None:
         self._sessions.set_session(session, session_id)
 
-    def list_session_ids(self) -> list[str]:
-        """List session IDs in the pool (for web channel /api/conversations)."""
-        return self._sessions.list_session_ids()
+    async def list_sessions(
+        self,
+        include_archived: bool = False,
+        project_id: str | None = None,
+        channel_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._sessions.list_sessions(
+            include_archived=include_archived,
+            project_id=project_id,
+            channel_id=channel_id,
+        )
 
-    async def list_session_summaries(self) -> list[dict[str, Any]]:
-        """List pooled sessions with stable integer updated_at."""
-        return await self._sessions.list_session_summaries()
+    async def get_session(
+        self, session_id: str, include_archived: bool = False
+    ) -> dict[str, Any] | None:
+        return await self._sessions.get_session(
+            session_id, include_archived=include_archived
+        )
 
-    def delete_session(self, session_id: str) -> bool:
-        """Remove a session from the pool. Returns True if it existed."""
-        return self._sessions.delete_session(session_id)
+    async def create_session(
+        self,
+        *,
+        session_id: str,
+        channel_id: str,
+        project_id: str | None = None,
+        title: str | None = None,
+        now_ts: int | None = None,
+    ) -> dict[str, Any]:
+        effective_now = now_ts if now_ts is not None else int(time.time())
+        if project_id is not None and self._project_service is not None:
+            project = await asyncio.to_thread(
+                self._project_service.get_project, project_id
+            )
+            if project is None:
+                raise ValueError(f"Project {project_id} not found")
+        return await asyncio.to_thread(
+            self._sessions.session_repository.create_session,
+            session_id,
+            channel_id,
+            project_id,
+            title,
+            effective_now,
+        )
 
-    async def get_session_history(
-        self, session_id: str
-    ) -> list[dict[str, Any]] | None:
-        """Read stored items for a pooled session."""
-        return await self._sessions.get_session_items(session_id)
+    async def archive_session(self, session_id: str) -> bool:
+        return await self._sessions.archive_session(session_id)
 
-    async def get_session_updated_at(self, session_id: str) -> int | None:
-        """Get stable integer updated_at for one pooled session."""
-        return await self._sessions.get_session_updated_at(session_id)
+    async def update_session(
+        self,
+        session_id: str,
+        *,
+        title: str | None | object = UNSET,
+        project_id: str | None | object = UNSET,
+        is_archived: bool | object = UNSET,
+        channel_id: str | object = UNSET,
+        last_active_at: int | object = UNSET,
+    ) -> dict[str, Any] | None:
+        if (
+            project_id is not UNSET
+            and project_id is not None
+            and self._project_service is not None
+        ):
+            project = await asyncio.to_thread(
+                self._project_service.get_project, project_id
+            )
+            if project is None:
+                raise ValueError(f"Project {project_id} not found")
+        return await self._sessions.update_session(
+            session_id,
+            title=title,
+            project_id=project_id,
+            is_archived=is_archived,
+            channel_id=channel_id,
+            last_active_at=last_active_at,
+        )
+
+    async def get_session_history(self, session_id: str) -> list[dict[str, Any]] | None:
+        return await self._sessions.get_session_history(session_id)
+
+    async def list_projects(self) -> list[dict[str, Any]]:
+        if self._project_service is None:
+            return []
+        return await asyncio.to_thread(self._project_service.list_projects)
+
+    async def get_project(self, project_id: str) -> dict[str, Any] | None:
+        if self._project_service is None:
+            return None
+        return await asyncio.to_thread(self._project_service.get_project, project_id)
+
+    async def create_project(
+        self,
+        *,
+        name: str,
+        instructions: str | None,
+        agent_config: dict[str, Any] | None,
+        files: list[str],
+        now_ts: int | None = None,
+    ) -> dict[str, Any]:
+        if self._project_service is None:
+            raise RuntimeError("Project service is not configured")
+        effective_now = now_ts if now_ts is not None else int(time.time())
+        return await asyncio.to_thread(
+            self._project_service.create_project,
+            name=name,
+            instructions=instructions,
+            agent_config=agent_config,
+            files=files,
+            now_ts=effective_now,
+        )
+
+    async def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | object = UNSET,
+        instructions: str | None | object = UNSET,
+        agent_config: dict[str, Any] | None | object = UNSET,
+        files: list[str] | object = UNSET,
+        now_ts: int | None = None,
+    ) -> dict[str, Any] | None:
+        if self._project_service is None:
+            raise RuntimeError("Project service is not configured")
+        effective_now = now_ts if now_ts is not None else int(time.time())
+        return await asyncio.to_thread(
+            self._project_service.update_project,
+            project_id,
+            name=name,
+            instructions=instructions,
+            agent_config=agent_config,
+            files=files,
+            now_ts=effective_now,
+        )
+
+    async def delete_project(self, project_id: str) -> bool:
+        if self._project_service is None:
+            return False
+        return await asyncio.to_thread(self._project_service.delete_project, project_id)
+
+    async def get_project_instructions(self, session_id: str) -> str | None:
+        session = await self.get_session(session_id, include_archived=True)
+        if (
+            session is None
+            or not session.get("project_id")
+            or self._project_service is None
+        ):
+            return None
+        project = await asyncio.to_thread(
+            self._project_service.get_project, session["project_id"]
+        )
+        if project is None:
+            return None
+        instructions = project.get("instructions")
+        return (
+            instructions
+            if isinstance(instructions, str) and instructions.strip()
+            else None
+        )
 
     def configure_session(
         self,
@@ -114,6 +257,10 @@ class MessageRouter:
             session_db_path=session_db_path,
             session_timeout=session_timeout,
             event_bus=event_bus,
+        )
+        self._project_service = ProjectService(
+            ProjectRepository(session_db_path),
+            self._sessions.session_repository,
         )
         if event_bus:
             self._approval.bind_event_bus(event_bus)
@@ -204,12 +351,21 @@ class MessageRouter:
                 return
 
         if session_id is not None:
-            session = self._sessions.get_or_create_session(session_id)
+            session = self._sessions.get_or_create_session(
+                session_id, channel_id=channel_id
+            )
             effective_session_id = session_id
         else:
             await self._maybe_rotate_session()
             session = self._sessions.session
             effective_session_id = self._sessions.session_id
+        if effective_session_id is None:
+            raise RuntimeError("Session ID was not initialized")
+        self._sessions.touch_session(
+            effective_session_id,
+            channel_id=channel_id,
+            now_ts=int(time.time()),
+        )
 
         turn_context = TurnContext(
             agent_id=self._invoker.agent_id,

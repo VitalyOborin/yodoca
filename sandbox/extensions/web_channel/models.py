@@ -115,12 +115,69 @@ class HealthResponse(BaseModel):
     uptime_seconds: float
 
 
-class Conversation(BaseModel):
-    """Conversation session metadata."""
+class Session(BaseModel):
+    """Persisted session metadata."""
 
     id: str
+    project_id: str | None = None
     title: str | None = None
+    channel_id: str
+    created_at: int
+    last_active_at: int
+    is_archived: bool = False
+
+
+class SessionDetailResponse(BaseModel):
+    """GET /api/sessions/{id} response."""
+
+    session: Session
+    history: list[dict[str, Any]]
+
+
+class CreateSessionRequest(BaseModel):
+    """POST /api/sessions request."""
+
+    id: str | None = None
+    project_id: str | None = None
+    title: str | None = None
+
+
+class UpdateSessionRequest(BaseModel):
+    """PATCH /api/sessions/{id} request."""
+
+    title: str | None = None
+    project_id: str | None = None
+    is_archived: bool | None = None
+
+
+class Project(BaseModel):
+    """Persisted project metadata."""
+
+    id: str
+    name: str
+    instructions: str | None = None
+    agent_config: dict[str, Any]
+    created_at: int
     updated_at: int
+    files: list[str]
+
+
+class CreateProjectRequest(BaseModel):
+    """POST /api/projects request."""
+
+    name: str
+    instructions: str | None = None
+    agent_config: dict[str, Any] | None = None
+    files: list[str] = []
+
+
+class UpdateProjectRequest(BaseModel):
+    """PATCH /api/projects/{id} request."""
+
+    name: str | None = None
+    instructions: str | None = None
+    agent_config: dict[str, Any] | None = None
+    files: list[str] | None = None
 
 
 class Notification(BaseModel):

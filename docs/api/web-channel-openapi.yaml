@@ -1,24 +1,19 @@
 openapi: 3.1.0
 info:
   title: Yodoca Web Channel API
-  version: 0.1.0
+  version: 0.3.0
   description: >
-    OpenAPI specification for ADR 026 Web Channel extension.
-    Includes OpenAI-compatible endpoints and custom application endpoints.
+    OpenAPI specification for the experimental web channel API with first-class
+    session and project resources.
 servers:
   - url: http://127.0.0.1:8080
     description: Local default
 tags:
   - name: openai-compatible
   - name: system
-  - name: conversations
+  - name: sessions
+  - name: projects
   - name: notifications
-  - name: inbox
-  - name: memory
-  - name: agents
-  - name: prompts
-  - name: extensions
-  - name: events
 paths:
   /v1/models:
     get:
@@ -39,9 +34,6 @@ paths:
     post:
       tags: [openai-compatible]
       summary: Create chat completion
-      description: >
-        OpenAI-compatible Chat Completions endpoint. If `stream=true`,
-        returns `text/event-stream`.
       security:
         - bearerAuth: []
       parameters:
@@ -62,16 +54,6 @@ paths:
             text/event-stream:
               schema:
                 type: string
-              examples:
-                stream:
-                  value: |
-                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
-
-                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
-
-                    data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-                    data: [DONE]
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "422":
@@ -81,10 +63,7 @@ paths:
   /v1/responses:
     post:
       tags: [openai-compatible]
-      summary: Create response (OpenAI Responses API)
-      description: >
-        OpenAI Responses API endpoint. Supports `input` as string or array.
-        If `stream=true`, returns `text/event-stream`.
+      summary: Create response
       security:
         - bearerAuth: []
       parameters:
@@ -105,29 +84,6 @@ paths:
             text/event-stream:
               schema:
                 type: string
-              examples:
-                stream:
-                  value: |
-                    event: response.created
-                    data: {"id":"resp_123","object":"response","status":"in_progress"}
-
-                    event: response.output_item.added
-                    data: {"item":{"type":"status_update","text":"Using: search_memory"}}
-
-                    event: response.output_item.added
-                    data: {"item":{"id":"msg_123","type":"message","role":"assistant","content":[]}}
-
-                    event: response.content_part.added
-                    data: {"item_id":"msg_123","content_index":0,"part":{"type":"output_text","text":""}}
-
-                    event: response.output_text.delta
-                    data: {"item_id":"msg_123","content_index":0,"delta":"Hello"}
-
-                    event: response.output_text.done
-                    data: {"item_id":"msg_123","content_index":0,"text":"Hello"}
-
-                    event: response.completed
-                    data: {"id":"resp_123","object":"response","status":"completed"}
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "422":
@@ -149,33 +105,57 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/conversations:
+  /api/sessions:
     get:
-      tags: [conversations]
-      summary: List conversation sessions
+      tags: [sessions]
+      summary: List sessions
       security:
         - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/XSessionId"
       responses:
         "200":
-          description: Conversation list
+          description: Session list
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  conversations:
+                  sessions:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Conversation"
-                required: [conversations]
+                      $ref: "#/components/schemas/Session"
+                required: [sessions]
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/conversations/{id}:
+    post:
+      tags: [sessions]
+      summary: Create session
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "200":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+                required: [session]
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/sessions/{id}:
     get:
-      tags: [conversations]
-      summary: Get one conversation session history
+      tags: [sessions]
+      summary: Get session metadata and history
       security:
         - bearerAuth: []
       parameters:
@@ -186,18 +166,58 @@ paths:
             type: string
       responses:
         "200":
-          description: Conversation metadata and history
+          description: Session metadata and history
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ConversationDetailResponse"
+                $ref: "#/components/schemas/SessionDetailResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    patch:
+      tags: [sessions]
+      summary: Update session metadata
+      description: >
+        `is_archived=true` hides the session from default listings without
+        deleting `agent_messages`. Restore with `is_archived=false`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionRequest"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+                required: [session]
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "404":
           $ref: "#/components/responses/NotFoundError"
     delete:
-      tags: [conversations]
-      summary: Delete conversation session
+      tags: [sessions]
+      summary: Archive session
+      description: >
+        Soft-archives the session. History is preserved and can be restored with
+        `PATCH /api/sessions/{id}` and `is_archived=false`.
       security:
         - bearerAuth: []
       parameters:
@@ -208,7 +228,139 @@ paths:
             type: string
       responses:
         "200":
-          description: Deletion result
+          description: Archive result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /api/projects:
+    get:
+      tags: [projects]
+      summary: List projects
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+                required: [projects]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+    post:
+      tags: [projects]
+      summary: Create project
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "200":
+          description: Created project
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: "#/components/schemas/Project"
+                required: [project]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+  /api/projects/{id}:
+    get:
+      tags: [projects]
+      summary: Get project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: "#/components/schemas/Project"
+                required: [project]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    patch:
+      tags: [projects]
+      summary: Update project
+      description: >
+        Replaces `files` when the field is provided. If no fields are supplied,
+        the project is returned unchanged and `updated_at` is not modified.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project:
+                    $ref: "#/components/schemas/Project"
+                required: [project]
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      tags: [projects]
+      summary: Delete project
+      description: >
+        Deletes the project and unlinks bound sessions via the
+        `sessions.project_id` foreign key.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delete result
           content:
             application/json:
               schema:
@@ -221,14 +373,11 @@ paths:
     get:
       tags: [notifications]
       summary: Long-poll proactive notifications
-      description: >
-        Long-poll endpoint backed by in-memory ring buffer. If empty, waits up to `timeout`.
       security:
         - bearerAuth: []
       parameters:
         - name: timeout
           in: query
-          description: Long-poll timeout in seconds (default 30, max 60)
           required: false
           schema:
             type: integer
@@ -244,322 +393,6 @@ paths:
                 $ref: "#/components/schemas/NotificationsResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-
-  # Phase 2 endpoints from ADR 026
-  /api/inbox:
-    get:
-      tags: [inbox]
-      summary: List inbox items
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: source_type
-          in: query
-          schema: { type: string }
-        - name: entity_type
-          in: query
-          schema: { type: string }
-        - name: status
-          in: query
-          schema: { type: string }
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
-        - name: offset
-          in: query
-          schema: { type: integer, minimum: 0, default: 0 }
-      responses:
-        "200":
-          description: Inbox items
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/InboxItem"
-                  total:
-                    type: integer
-                required: [items, total]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-  /api/inbox/{id}:
-    get:
-      tags: [inbox]
-      summary: Read inbox item
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            minimum: 1
-      responses:
-        "200":
-          description: Inbox item
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InboxItem"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-  /api/memory/search:
-    get:
-      tags: [memory]
-      summary: Search memory
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: q
-          in: query
-          required: true
-          schema:
-            type: string
-            minLength: 1
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-      responses:
-        "200":
-          description: Memory search results
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: true
-                required: [items]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-  /api/agents:
-    get:
-      tags: [agents]
-      summary: List agents
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Agents list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  agents:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: true
-                required: [agents]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-  /api/agents/{id}:
-    get:
-      tags: [agents]
-      summary: Get agent config
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Agent configuration
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-    put:
-      tags: [agents]
-      summary: Update agent config
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: true
-      responses:
-        "200":
-          description: Update result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationResult"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-  /api/prompts:
-    get:
-      tags: [prompts]
-      summary: List prompts
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Prompt list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  prompts:
-                    type: array
-                    items:
-                      type: string
-                required: [prompts]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-  /api/prompts/{name}:
-    get:
-      tags: [prompts]
-      summary: Get prompt content
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Prompt data
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name: { type: string }
-                  content: { type: string }
-                required: [name, content]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-    put:
-      tags: [prompts]
-      summary: Update prompt content
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                content:
-                  type: string
-              required: [content]
-      responses:
-        "200":
-          description: Update result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationResult"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-  /api/extensions:
-    get:
-      tags: [extensions]
-      summary: List loaded extensions
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Extensions list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  extensions:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: true
-                required: [extensions]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-  /api/events:
-    get:
-      tags: [events]
-      summary: List recent events
-      description: Phase 2 endpoint.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 1000
-            default: 100
-      responses:
-        "200":
-          description: Event list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  events:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: true
-                required: [events]
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-
 components:
   securitySchemes:
     bearerAuth:
@@ -571,7 +404,7 @@ components:
       name: X-Session-Id
       in: header
       required: false
-      description: Optional conversation session identifier for session pool routing.
+      description: Optional session identifier for routing into an existing chat session.
       schema:
         type: string
   responses:
@@ -668,16 +501,7 @@ components:
           type: array
           items:
             type: object
-            properties:
-              index: { type: integer }
-              message:
-                type: object
-                properties:
-                  role: { type: string, const: assistant }
-                  content: { type: string }
-                required: [role, content]
-              finish_reason: { type: string, nullable: true }
-            required: [index, message, finish_reason]
+            additionalProperties: true
         usage:
           $ref: "#/components/schemas/UsageChat"
       required: [id, object, created, model, choices, usage]
@@ -703,7 +527,7 @@ components:
       properties:
         id: { type: string }
         object: { type: string, const: response }
-        status: { type: string, enum: [completed, in_progress, failed] }
+        status: { type: string }
         output:
           type: array
           items:
@@ -714,7 +538,6 @@ components:
           $ref: "#/components/schemas/UsageResponses"
       required: [id, object, status, output, model, usage]
     UsageChat:
-      description: Token counts are approximate and may be zero in Phase 1.
       type: object
       properties:
         prompt_tokens: { type: integer, minimum: 0 }
@@ -722,7 +545,6 @@ components:
         total_tokens: { type: integer, minimum: 0 }
       required: [prompt_tokens, completion_tokens, total_tokens]
     UsageResponses:
-      description: Token counts are approximate and may be zero in Phase 1.
       type: object
       properties:
         input_tokens: { type: integer, minimum: 0 }
@@ -735,31 +557,81 @@ components:
         status: { type: string, enum: [ok] }
         uptime_seconds: { type: number, minimum: 0 }
       required: [status, uptime_seconds]
-    Conversation:
-      description: Conversation session metadata.
+    Session:
       type: object
       properties:
         id: { type: string }
-        title:
-          type: string
-          nullable: true
-          description: Optional generated title; may be null in Phase 1.
-        updated_at: { type: integer }
-      required: [id, updated_at]
-    ConversationHistoryItem:
-      description: Stored item from session history.
-      type: object
-      additionalProperties: true
-    ConversationDetailResponse:
+        project_id: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        channel_id: { type: string }
+        created_at: { type: integer }
+        last_active_at: { type: integer }
+        is_archived: { type: boolean }
+      required: [id, channel_id, created_at, last_active_at, is_archived]
+    SessionDetailResponse:
       type: object
       properties:
-        conversation:
-          $ref: "#/components/schemas/Conversation"
+        session:
+          $ref: "#/components/schemas/Session"
         history:
           type: array
           items:
-            $ref: "#/components/schemas/ConversationHistoryItem"
-      required: [conversation, history]
+            type: object
+            additionalProperties: true
+      required: [session, history]
+    CreateSessionRequest:
+      type: object
+      properties:
+        id: { type: string, nullable: true }
+        project_id: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+    UpdateSessionRequest:
+      type: object
+      properties:
+        title: { type: string, nullable: true }
+        project_id: { type: string, nullable: true }
+        is_archived: { type: boolean, nullable: true }
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        instructions: { type: string, nullable: true }
+        agent_config:
+          type: object
+          additionalProperties: true
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        files:
+          type: array
+          items: { type: string }
+      required: [id, name, agent_config, created_at, updated_at, files]
+    CreateProjectRequest:
+      type: object
+      properties:
+        name: { type: string }
+        instructions: { type: string, nullable: true }
+        agent_config:
+          type: object
+          additionalProperties: true
+          nullable: true
+        files:
+          type: array
+          items: { type: string }
+      required: [name]
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name: { type: string, nullable: true }
+        instructions: { type: string, nullable: true }
+        agent_config:
+          type: object
+          additionalProperties: true
+          nullable: true
+        files:
+          type: array
+          items: { type: string }
+          nullable: true
     Notification:
       type: object
       properties:
@@ -775,14 +647,11 @@ components:
           items:
             $ref: "#/components/schemas/Notification"
       required: [notifications]
-    InboxItem:
-      type: object
-      additionalProperties: true
     OperationResult:
       type: object
       properties:
         success: { type: boolean }
-        message: { type: string }
+        message: { type: string, nullable: true }
       required: [success]
     ErrorResponse:
       type: object

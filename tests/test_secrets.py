@@ -1,5 +1,7 @@
 """Tests for core.secrets module."""
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -55,3 +57,31 @@ def test_is_keyring_available_detects_fail_backend() -> None:
         assert secrets.is_keyring_available() is False
     with patch("core.secrets._is_fail_backend", return_value=False):
         assert secrets.is_keyring_available() is True
+
+
+def test_set_secret_registers_name(tmp_path: Path) -> None:
+    """Stored secrets are tracked so maintenance scripts can clear them later."""
+    registry_path = tmp_path / "registry.json"
+    with (
+        patch("core.secrets.SECRET_REGISTRY_PATH", registry_path),
+        patch("core.secrets.keyring") as mock_kr,
+    ):
+        secrets.set_secret("TEST_SECRET", "value")
+
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == ["TEST_SECRET"]
+    mock_kr.set_password.assert_called_once_with("yodoca", "TEST_SECRET", "value")
+
+
+def test_delete_secret_unregisters_name(tmp_path: Path) -> None:
+    """Deleted secrets are removed from the registry."""
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text('["TEST_SECRET"]\n', encoding="utf-8")
+
+    with (
+        patch("core.secrets.SECRET_REGISTRY_PATH", registry_path),
+        patch("core.secrets.keyring") as mock_kr,
+    ):
+        secrets.delete_secret("TEST_SECRET")
+
+    assert not registry_path.exists()
+    mock_kr.delete_password.assert_called_once_with("yodoca", "TEST_SECRET")
