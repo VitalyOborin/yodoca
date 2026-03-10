@@ -20,7 +20,7 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | Document | Description |
 |----------|-------------|
 | [memory.md](memory.md) | Memory system: layers, extensions, database, search, tools |
-| [channels.md](channels.md) | Channel providers: CLI, Telegram |
+| [channels.md](channels.md) | Channel providers: CLI, Telegram, Web |
 | [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml) | OpenAPI spec for Web Channel (ADR 026) |
 | [scheduler.md](scheduler.md) | Scheduler extension: one-shot and recurring events |
 | [task_engine.md](task_engine.md) | Task Engine: durable background tasks, checkpointing, HITL |
@@ -57,7 +57,10 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [022](adr/022-move-prompts-to-sandbox.md) | Move Prompts Directory to Sandbox |
 | [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
 | [025](adr/025-mail-extension.md) | Mail Extension (Source Extension for Email Ingestion) |
+| [026](adr/026-web-channel.md) | Web Channel: HTTP API Extension for Frontend Applications |
 | [027](adr/027-session-project-domain-model.md) | Session and Project Domain Model in `session.db` |
+| [028](adr/028-unified-sessions-table.md) | Unified Sessions Table |
+| [029](adr/029-refactor-core-extensions-boundaries.md) | Refactor `core.extensions` Boundaries |
 
 ---
 
@@ -66,4 +69,4 @@ Documentation for the Yodoca AI agent platform (assistant4).
 - **Entry point:** `python -m supervisor`
 - **Extensions:** `sandbox/extensions/<id>/`
 - **Config:** `config/settings.yaml`
-- **Core:** `core/` (runner, loader, events, llm, agents)
+- **Core:** `core/` (`runner`, `events`, `llm`, `agents`, `extensions/{loader,routing,persistence}`)

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Yodoca Web Channel API
-  version: 0.3.0
+  version: 0.4.0
   description: >
     OpenAPI specification for the experimental web channel API with first-class
     session and project resources.
@@ -60,6 +60,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "503":
           $ref: "#/components/responses/BusyError"
+        "504":
+          $ref: "#/components/responses/TimeoutError"
   /v1/responses:
     post:
       tags: [openai-compatible]
@@ -90,6 +92,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "503":
           $ref: "#/components/responses/BusyError"
+        "504":
+          $ref: "#/components/responses/TimeoutError"
   /api/health:
     get:
       tags: [system]
@@ -152,14 +156,14 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/sessions/{id}:
+  /api/sessions/{session_id}:
     get:
       tags: [sessions]
       summary: Get session metadata and history
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: session_id
           in: path
           required: true
           schema:
@@ -184,7 +188,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: session_id
           in: path
           required: true
           schema:
@@ -217,11 +221,11 @@ paths:
       summary: Archive session
       description: >
         Soft-archives the session. History is preserved and can be restored with
-        `PATCH /api/sessions/{id}` and `is_archived=false`.
+        `PATCH /api/sessions/{session_id}` and `is_archived=false`.
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: session_id
           in: path
           required: true
           schema:
@@ -282,14 +286,14 @@ paths:
                 required: [project]
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/projects/{id}:
+  /api/projects/{project_id}:
     get:
       tags: [projects]
       summary: Get project
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -318,7 +322,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -353,7 +357,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -433,6 +437,12 @@ components:
           description: Recommended retry delay in seconds
           schema:
             type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TimeoutError:
+      description: The request exceeded `request_timeout_seconds`
       content:
         application/json:
           schema:
@@ -518,10 +528,17 @@ components:
               items:
                 type: object
                 additionalProperties: true
+          nullable: true
+        messages:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties: true
         stream:
           type: boolean
           default: false
-      required: [model, input]
+      required: [model]
     ResponsesResponse:
       type: object
       properties:

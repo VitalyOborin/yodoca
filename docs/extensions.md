@@ -8,7 +8,7 @@ This document describes the extension architecture in the assistant4 system: how
 
 Extensions are **pluggable modules** that extend the system with tools, channels, agents, schedulers, and services. They live in `sandbox/extensions/<id>/` and are discovered, loaded, and wired by the **Loader** at startup. Capabilities are detected via **`@runtime_checkable` Protocol classes** (`core/extensions/contract.py`), not via manifest fields.
 
-**Key principle:** Extensions interact with the system **only** through `ExtensionContext` — no direct imports of core modules.
+**Key principle:** Extensions interact with the system **only** through `ExtensionContext` and protocol contracts — no direct imports of loader, routing, or persistence internals.
 
 ---
 
@@ -25,9 +25,10 @@ Extensions are **pluggable modules** that extend the system with tools, channels
 ┌──────────────────┐         ┌──────────────────┐         ┌─────────────────────┐
 │     Loader       │         │  MessageRouter   │         │    EventBus         │
 │  - manifests     │         │  - channels      │         │  - durable pub/sub  │
-│  - extensions    │         │  - agent ref     │         │  - system topics    │
-│  - protocol      │         │  - notify_user   │         │  - recovery         │
-│    detection     │         │  - invoke_agent  │         │                     │
+│  - extensions    │         │  - sessions      │         │  - system topics    │
+│  - lifecycle     │         │  - invoke_agent  │         │  - recovery         │
+│  - protocol      │         │  - notify_user   │         │                     │
+│    detection     │         │  - delivery      │         │                     │
 └────────┬─────────┘         └─────────┬────────┘         └──────────┬──────────┘
          │                             │                             │
          ▼                             ▼                             ▼
@@ -56,9 +57,9 @@ The startup sequence in `core/runner.py`:
 4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
 5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
 6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
-7. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
-8. **SQLiteSession** → `router.set_session()` (conversation history)
-9. **wire_context_providers** — Collect `ContextProvider` extensions, chain into router middleware
+7. **configure_session** — `router.configure_session()` creates persistent session/project services and the default runtime session
+8. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
+9. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
 
 Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: cancel service/cron/health tasks → `stop()` → `destroy()`).
 
@@ -222,6 +223,19 @@ Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cac
 
 **Approval flow**: When `require_approval` is set, the Router detects SDK interruptions and emits `system.mcp.tool_approval_request`; channels (e.g. CLI) subscribe, show a prompt to the user, and emit `system.mcp.tool_approval_response` with approve/reject. The run resumes accordingly.
 
+### Web Channel (`web_channel` extension)
+
+The Web Channel extension ([ADR 026](adr/026-web-channel.md)) implements `ChannelProvider`, `StreamingChannelProvider`, and `ServiceProvider` to expose the system over HTTP. It provides:
+
+- OpenAI-compatible endpoints: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`
+- custom REST endpoints under `/api/` for health, sessions, projects, and proactive notification polling
+- SSE streaming mapped from `StreamingChannelProvider`
+- request/response bridging via `RequestBridge` (single active request guard, future/queue correlation, long-poll notifications)
+
+Unlike CLI and Telegram, `web_channel` can pass `session_id` from the `X-Session-Id` header into `router.handle_user_message(...)`, which activates named session pooling in `SessionManager`.
+
+See [channels.md](channels.md#web-channel) and [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml).
+
 ### Web Search (`web_search` extension)
 
 The Web Search extension ([ADR 013](adr/013-web-search.md)) implements `ToolProvider` and exposes two tools: **`web_search`** (query → ranked results with snippets) and **`open_page`** (fetch full page content from URLs). It uses configurable search and read providers (DuckDuckGo, Jina, Tavily, Perplexity, SearXNG, etc.). Add `web_search` to the Orchestrator's tool set (e.g. via `uses_tools` or by having the extension in the default capabilities) so the agent can search the web and read pages regardless of LLM provider.
@@ -358,6 +372,8 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
 | `get_secret(name)` | Read secret by name (keyring first, then `.env`). Async; use `await ctx.get_secret(name)`. |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
+| `list_sessions()` / `get_session()` / `create_session()` / `update_session()` / `archive_session()` / `get_session_history()` | Persistent session metadata and history access |
+| `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
 
 ### Event Bus
 
@@ -376,7 +392,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
 | `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents. For invoke_agent, context is injected into system role instead. |
-| `on_user_message` | Alias for `router.handle_user_message` (full message cycle) |
+| `on_user_message` | Alias for `router.handle_user_message` (full message cycle, including optional `session_id`) |
 
 ### System Control
 
@@ -406,6 +422,8 @@ See [event_bus.md](event_bus.md) for full details.
 1. **Channel** (e.g. `cli_channel`) emits `user.message` with `{text, user_id, channel_id}`
 2. **Kernel** subscribes to `user.message`; calls `router.handle_user_message()`
 3. **MessageRouter** invokes Orchestrator; sends response via `channel.send_to_user()`
+
+`web_channel` may also include `session_id` in the event payload; the router then selects or creates a named runtime session instead of using the default rotated session.
 
 ### Flow: Proactive Agent (e.g. Reminders)
 
@@ -607,8 +625,8 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 
 - [architecture.md](architecture.md) — System overview and bootstrap
 - [event_bus.md](event_bus.md) — Event Bus architecture and topics
-- [channels.md](channels.md) — Channel providers (CLI, Telegram)
+- [channels.md](channels.md) — Channel providers (CLI, Telegram, Web)
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
-- `core/extensions/` — Contract, loader, manifest, context, router
-- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `inbox`, `builder_agent`, `simple_agent`
+- `core/extensions/` — Contract, manifest, context, `loader/`, `routing/`, `persistence/`
+- `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `web_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `inbox`, `builder_agent`, `simple_agent`

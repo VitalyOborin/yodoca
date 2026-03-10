@@ -6,7 +6,7 @@ High-level overview of the assistant4 system: entry points, bootstrap flow, and 
 
 ## Overview
 
-assistant4 is an **AI agent platform** built around an extensible kernel. The system processes user messages through channels, invokes the Orchestrator agent with context from memory, and delivers responses back to the user. Extensions provide tools, channels, agents, schedulers, and services.
+assistant4 is an **AI agent platform** built around an extensible kernel. The system processes user messages through channels, invokes the Orchestrator agent with context from memory plus persistent session/project state, and delivers responses back to the user. Extensions provide tools, channels, agents, schedulers, and services.
 
 **Key principles:**
 
@@ -48,11 +48,11 @@ The agent process bootstrap in `core/runner.py`:
 12. AgentRegistry + ModelCatalog
 13. create_orchestrator_agent()            — core + extension + delegation tools
     └─ router.set_agent()
-13. event_bus.start()
-14. loader.start_all()
-15. SQLiteSession → router.set_session()   — conversation history
-16. loader.wire_context_providers(router)
-17. shutdown_event.wait()
+14. router.configure_session(...)          — default runtime session + persistence services
+15. loader.wire_context_providers(router)
+16. event_bus.start()
+17. loader.start_all()
+18. shutdown_event.wait()
 ```
 
 Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: `stop()` → `destroy()`).
@@ -79,7 +79,8 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
 │  Loader   │ │  EventBus  │ │ MessageRouter │ │ ModelRouter │ │ Orchestrator │
 │ -discover │ │ -journal   │ │ -channels     │ │ -providers  │ │ -core tools  │
 │ -load     │ │ -dispatch  │ │ -invoke_agent │ │ -get_model  │ │ -ext tools   │
-│ -wire     │ │ -recovery  │ │ -middleware   │ │ -caching    │ │ -deleg tools │
+│ -wire     │ │ -recovery  │ │ -sessions     │ │ -caching    │ │ -deleg tools │
+│ -lifecycle│ │            │ │ -delivery     │ │             │ │              │
 └───────────┘ └────────────┘ └───────────────┘ └─────────────┘ └──────────────┘
                                                       │
                                         ┌─────────────┴──────────────┐
@@ -94,7 +95,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
                                          ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                      Extensions (sandbox/extensions/<id>/)                       │
-│  cli_channel │ telegram_channel │ memory │ scheduler │ kv │ embedding │ task_engine │
+│ cli_channel │ telegram_channel │ web_channel │ memory │ scheduler │ kv │ embedding │ task_engine │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,9 +124,10 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 
 ### Loader
 
-- **Location:** `core/extensions/loader.py`
+- **Location:** `core/extensions/loader/loader.py`
 - **Role:** Discovers extensions, loads them in dependency order, initializes, wires protocols, manages lifecycle.
 - **Wiring:** Detects all Protocol implementors above and registers them with the MessageRouter or internal registries.
+- **Internal split:** `core/extensions/loader/` now separates manifest discovery, dependency resolution, extension instantiation, lifecycle supervision, health checks, and context building into focused modules.
 - **Import model:** Programmatic extensions are loaded via `importlib.util.spec_from_file_location(...)` using `manifest.entrypoint` (for example `main:MyExtension`). In this mode extension modules are not loaded as package modules, so `from .x import ...` may fail without a fallback.
 - **Hard dependency contracts:** `depends_on` is a hard contract. If a dependency fails to load, initialize, or start, all dependents are cascaded to ERROR and never run. `get_extension()` raises `RuntimeError` (never returns `None`) when a declared dependency is unavailable. See [ADR 021](adr/021-hard-dependency-contracts.md) and [extensions.md](extensions.md#dependency-order).
 
@@ -145,10 +147,18 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 
 ### MessageRouter
 
-- **Location:** `core/extensions/router.py`
+- **Location:** `core/extensions/routing/router.py`
 - **Role:** Routes user messages to the Orchestrator; delivers responses to channels. In-memory pub/sub for `user_message` and `agent_response`. ContextProvider middleware enriches prompts before agent invocation.
-- **Key details:** `asyncio.Lock` serializes concurrent agent invocations; `SQLiteSession` stores conversation history; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
+- **Internal split:** `core/extensions/routing/` isolates agent invocation, approval coordination, response delivery, event wiring, scheduler wiring, and built-in context providers.
+- **Key details:** `AgentInvoker` serializes concurrent agent invocations; `SessionManager` owns runtime and named session pools; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
 - **Streaming:** If the channel implements `StreamingChannelProvider`, `handle_user_message()` uses `invoke_agent_streamed()` and calls the channel's stream lifecycle (`on_stream_start` → `on_stream_chunk` / `on_stream_status` → `on_stream_end`). Otherwise it uses `invoke_agent()` and `send_to_user()` as before. See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
+
+### Persistence Services
+
+- **Location:** `core/extensions/persistence/`
+- **Role:** Owns persistent session and project metadata outside hot-path routing logic.
+- **Key modules:** `SessionManager` manages runtime `SQLiteSession` objects plus persisted session rows; `ProjectService` coordinates project CRUD and session binding; `schema.py` centralizes SQLite DDL; `models.py` defines typed `SessionInfo` and `ProjectInfo`.
+- **Context access:** `ExtensionContext` now exposes session/project APIs directly (`list_sessions`, `create_session`, `list_projects`, `create_project`, etc.) instead of proxying them through `MessageRouter`. See [ADR 029](adr/029-refactor-core-extensions-boundaries.md).
 
 ### Core Tools
 
@@ -196,7 +206,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 ## Data Flow: User Message → Response
 
 ```
-Channel (cli_channel / telegram_channel)
+Channel (cli_channel / telegram_channel / web_channel)
   │  ctx.emit("user.message", {text, user_id, channel_id})
   ▼
 EventBus  (journal → dispatch)
@@ -205,6 +215,8 @@ EventBus  (journal → dispatch)
   ▼
 router.handle_user_message(text, user_id, channel, event_id=event.id)
   ├─ if event_id and already in user_message_processing → skip (idempotency)
+  ├─ if session_id passed by channel → SessionManager.get_or_create_session(session_id)
+  ├─ else → inactivity-based default session rotation
   ├─ _emit("user_message")                → Memory.save_episode (subscriber)
   ├─ if channel is StreamingChannelProvider:
   │    ├─ channel.on_stream_start(user_id)
@@ -230,7 +242,7 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 
 | Category | Extensions | Protocols | Purpose |
 |----------|-----------|-----------|---------|
-| **Channels** | cli_channel, telegram_channel | ChannelProvider, ServiceProvider | Receive user input; deliver agent responses |
+| **Channels** | cli_channel, telegram_channel, web_channel | ChannelProvider, StreamingChannelProvider, ServiceProvider | Receive user input; deliver agent responses over terminal, Telegram, or HTTP/SSE |
 | **Tools** | kv, scheduler, web_search, shell_exec, inbox | ToolProvider | Tools for Orchestrator (kv_set/kv_get, schedule_once, web_search/open_page, shell execution, inbox_list/inbox_read) |
 | **Agents** | builder_agent, simple_agent | AgentProvider | Specialized agents invoked as tools (`integration_mode: tool`) |
 | **Memory** | memory | ToolProvider, ContextProvider, SchedulerProvider | Graph-based cognitive memory: episodes, facts, procedures, opinions. Intent-aware hybrid retrieval, LLM-powered consolidation, Ebbinghaus decay |
@@ -254,3 +266,5 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 - [ADR 020](adr/020-consolidate-openai-compatible-provider.md) — Consolidate OpenAI-Compatible Provider
 - [ADR 021](adr/021-hard-dependency-contracts.md) — Hard Dependency Contracts
 - [ADR 024](adr/024-unified-inbox.md) — Unified Inbox Extension
+- [ADR 026](adr/026-web-channel.md) — Web Channel HTTP API
+- [ADR 029](adr/029-refactor-core-extensions-boundaries.md) — `core.extensions` Boundaries Refactor

@@ -10,6 +10,7 @@ Channels are **ChannelProvider** extensions that receive user input and deliver 
 |---------|--------------|-----------|----------|
 | **CLI** | `cli_channel` | stdin/stdout REPL | Local development, debugging |
 | **Telegram** | `telegram_channel` | Telegram Bot API (aiogram) | Remote access, mobile |
+| **Web** | `web_channel` | HTTP + SSE (FastAPI/uvicorn) | Browser frontends, OpenAI-compatible clients, app integrations |
 
 Channels are mutually compatible: multiple can be enabled. Each emits `user.message` with its `channel_id`; responses are routed to the channel that originated the message (or the default channel for proactive notifications).
 
@@ -102,7 +103,6 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 | `config.streaming_enabled` | true | Use streaming (edit message + typing) when true |
 | `config.stream_edit_interval_ms` | 500 | Min interval between message edits (ms) |
 | `config.stream_min_chunk_chars` | 20 | Min characters before an edit |
-| `config.web_channel_log_file` | `sandbox/logs/web.log` | Dedicated log file path used by `web_channel` request/response audit logger |
 
 **Setup:**
 
@@ -110,6 +110,44 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 2. Start a chat with the bot; get your chat_id (e.g. via @userinfobot or bot logs).
 3. Set KV keys: `kv_set telegram_channel.token <token>`, `kv_set telegram_channel.chat_id <chat_id>`
 4. Restart the agent.
+
+---
+
+## Web Channel
+
+**Location:** `sandbox/extensions/web_channel/`
+
+**Roles:** ChannelProvider + StreamingChannelProvider + ServiceProvider
+
+**Behaviour:**
+
+- Runs FastAPI on uvicorn inside `run_background()`
+- Accepts OpenAI-compatible requests on `/v1/models`, `/v1/chat/completions`, `/v1/responses`
+- Exposes custom REST endpoints on `/api/health`, `/api/sessions`, `/api/projects`, `/api/notifications`
+- Uses `RequestBridge` to translate HTTP request/response flow into channel callbacks
+- Returns SSE for streaming requests and long-polls proactive notifications on `/api/notifications`
+- Enforces a single active request with a busy guard; concurrent requests receive `503` with `Retry-After: 5`
+- Supports `X-Session-Id` so web frontends can bind requests to named runtime sessions
+- Uses a stable logical user identity (`default_user_id`, default `web_user`) for memory/context continuity
+
+**Configuration:**
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `config.host` | `127.0.0.1` | Bind address for uvicorn |
+| `config.port` | `8080` | HTTP port |
+| `config.api_key` | `""` | Bearer token; when empty, auth is disabled |
+| `config.cors_origins` | `["*"]` | Allowed CORS origins |
+| `config.request_timeout_seconds` | `120` | Timeout while waiting on the agent |
+| `config.model_name` | `yodoca` | Virtual model id returned by `/v1/models` |
+| `config.default_user_id` | `web_user` | Stable user id emitted in `user.message` |
+
+**Authentication and transport:**
+
+- Bearer token auth via `Authorization: Bearer <key>`
+- If `config.api_key` is empty, the extension also tries secret `web_channel.api_key`
+- CORS allows `Authorization`, `Content-Type`, and `X-Session-Id`
+- Streaming uses `text/event-stream`
 
 ---
 
@@ -162,14 +200,14 @@ Important: if a ToolProvider extension fails to load, its tools are excluded fro
 ## Message Flow
 
 ```
-User types in CLI or sends Telegram message
+User types in CLI, sends Telegram message, or POSTs to web_channel
   → Channel receives input
   → ctx.emit("user.message", {text, user_id, channel_id})
   → EventBus → kernel handler
   → router.handle_user_message()
   → Orchestrator runs
   → router calls channel.send_to_user(user_id, response)
-  → User sees response in CLI or Telegram
+  → User sees response in CLI, Telegram, or the HTTP client
 ```
 
 ---
@@ -199,3 +237,4 @@ User types in CLI or sends Telegram message
 - [event_bus.md](event_bus.md) — Event Bus and `user.message` topic
 - [ADR 007](adr/007-user-channel-selector.md) — Agent-driven channel selection
 - [ADR 010](adr/010-streaming.md) — Streaming response delivery (protocol, router, channels)
+- [ADR 026](adr/026-web-channel.md) — Web channel HTTP API
