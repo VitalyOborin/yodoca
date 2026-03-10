@@ -555,7 +555,7 @@ components:
       type: object
       properties:
         status: { type: string, enum: [ok] }
-        uptime_seconds: { type: number, minimum: 0 }
+        uptime_seconds: { type: integer, minimum: 0 }
       required: [status, uptime_seconds]
     Session:
       type: object

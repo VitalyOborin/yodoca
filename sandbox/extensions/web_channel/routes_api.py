@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse
 
+from core.extensions.persistence.models import ProjectInfo, SessionInfo
 from core.extensions.update_fields import UNSET
 from sandbox.extensions.web_channel.models import (
     CreateProjectRequest,
@@ -28,8 +29,12 @@ def _get_extension(request: Request):
     return request.app.state.extension
 
 
-def _session_model(data: dict) -> Session:
-    return Session.model_validate(data)
+def _session_model(data: SessionInfo | dict) -> Session:
+    return Session.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
+
+
+def _project_model(data: ProjectInfo | dict) -> Project:
+    return Project.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
 
 
 @router.get("/health")
@@ -39,7 +44,7 @@ async def get_health(request: Request) -> HealthResponse:
     if _start_time is None:
         _start_time = time.monotonic()
     uptime = time.monotonic() - _start_time
-    return HealthResponse(status="ok", uptime_seconds=uptime)
+    return HealthResponse(status="ok", uptime_seconds=int(uptime))
 
 
 @router.get("/sessions")
@@ -180,11 +185,7 @@ async def get_projects(request: Request) -> JSONResponse:
     ext = _get_extension(request)
     ctx = ext._context
     projects = await ctx.list_projects()
-    data = {
-        "projects": [
-            Project.model_validate(project).model_dump() for project in projects
-        ]
-    }
+    data = {"projects": [_project_model(project).model_dump() for project in projects]}
     return JSONResponse(content=data)
 
 
@@ -205,9 +206,7 @@ async def get_project(request: Request, project_id: str) -> JSONResponse:
                 }
             },
         )
-    return JSONResponse(
-        content={"project": Project.model_validate(project).model_dump()}
-    )
+    return JSONResponse(content={"project": _project_model(project).model_dump()})
 
 
 @router.post("/projects")
@@ -222,9 +221,7 @@ async def create_project(request: Request) -> JSONResponse:
         agent_config=payload.agent_config,
         files=payload.files,
     )
-    return JSONResponse(
-        content={"project": Project.model_validate(project).model_dump()}
-    )
+    return JSONResponse(content={"project": _project_model(project).model_dump()})
 
 
 @router.patch("/projects/{project_id}")
@@ -255,9 +252,7 @@ async def patch_project(request: Request, project_id: str) -> JSONResponse:
                 }
             },
         )
-    return JSONResponse(
-        content={"project": Project.model_validate(project).model_dump()}
-    )
+    return JSONResponse(content={"project": _project_model(project).model_dump()})
 
 
 @router.delete("/projects/{project_id}")

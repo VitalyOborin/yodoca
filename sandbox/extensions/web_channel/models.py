@@ -112,7 +112,7 @@ class HealthResponse(BaseModel):
     """GET /api/health response."""
 
     status: str = "ok"
-    uptime_seconds: float
+    uptime_seconds: int
 
 
 class Session(BaseModel):
