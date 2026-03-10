@@ -10,6 +10,7 @@ servers:
     description: Local default
 tags:
   - name: openai-compatible
+  - name: ag-ui
   - name: system
   - name: sessions
   - name: projects
@@ -86,6 +87,40 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/BusyError"
+        "504":
+          $ref: "#/components/responses/TimeoutError"
+  /agent:
+    post:
+      tags: [ag-ui]
+      summary: Run agent (AG-UI protocol)
+      description: >
+        AG-UI (Agent-User Interaction) protocol endpoint. Accepts RunAgentInput
+        and streams AG-UI events over Server-Sent Events. See
+        https://docs.ag-ui.com/introduction for protocol details.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgUIRunRequest"
+      responses:
+        "200":
+          description: AG-UI event stream (SSE)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events with AG-UI event types
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "422":
@@ -681,3 +716,59 @@ components:
             code: { type: string, nullable: true }
           required: [message, type]
       required: [error]
+    AgUIRunRequest:
+      type: object
+      description: AG-UI RunAgentInput request body (camelCase)
+      properties:
+        threadId:
+          type: string
+          description: Conversation thread identifier (maps to session_id)
+        runId:
+          type: string
+          description: Unique ID for this agent run
+        parentRunId:
+          type: string
+          nullable: true
+          description: Parent run ID for branching
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              role:
+                type: string
+                enum: [user, assistant, system, tool, activity, reasoning, developer]
+              content:
+                oneOf:
+                  - type: string
+                  - type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        text: { type: string }
+            additionalProperties: true
+          default: []
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              description: { type: string }
+              parameters: {}
+            additionalProperties: true
+          default: []
+        context:
+          type: array
+          items:
+            type: object
+            properties:
+              description: { type: string }
+              value: { type: string }
+            additionalProperties: true
+          default: []
+        state: {}
+        forwardedProps: {}
+      required: [threadId, runId]

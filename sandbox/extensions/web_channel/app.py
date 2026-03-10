@@ -110,10 +110,12 @@ def create_app(extension: Any) -> FastAPI:
             )
         return await call_next(request)
 
+    from sandbox.extensions.web_channel.routes_agui import router as agui_router
     from sandbox.extensions.web_channel.routes_api import router as api_router
     from sandbox.extensions.web_channel.routes_openai import router as openai_router
 
     app.include_router(openai_router, tags=["openai"])
     app.include_router(api_router, prefix="/api", tags=["api"])
+    app.include_router(agui_router)
 
     return app

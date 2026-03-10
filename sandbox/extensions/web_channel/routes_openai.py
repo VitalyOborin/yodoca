@@ -383,9 +383,7 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
                             "id": msg_id,
                             "type": "message",
                             "role": "assistant",
-                            "content": [
-                                {"type": "output_text", "text": response_text}
-                            ],
+                            "content": [{"type": "output_text", "text": response_text}],
                         }
                     ],
                     model=model_name,

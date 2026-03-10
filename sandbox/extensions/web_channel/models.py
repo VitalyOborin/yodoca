@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 # --- OpenAI Chat Completions ---
 
@@ -199,6 +199,27 @@ class OperationResult(BaseModel):
 
     success: bool
     message: str | None = None
+
+
+# --- AG-UI (Agent-User Interaction Protocol) ---
+
+
+class AgUIRunRequest(BaseModel):
+    """POST /agent request (AG-UI RunAgentInput shape).
+
+    Accepts camelCase over the wire for AG-UI client compatibility.
+    """
+
+    thread_id: str = Field(..., alias="threadId")
+    run_id: str = Field(..., alias="runId")
+    parent_run_id: str | None = Field(None, alias="parentRunId")
+    messages: list[dict[str, Any]] = Field(default_factory=list, alias="messages")
+    tools: list[dict[str, Any]] = Field(default_factory=list, alias="tools")
+    context: list[dict[str, Any]] = Field(default_factory=list, alias="context")
+    state: Any = Field(default=None, alias="state")
+    forwarded_props: Any = Field(default=None, alias="forwardedProps")
+
+    model_config = {"populate_by_name": True}
 
 
 class ErrorResponse(BaseModel):
