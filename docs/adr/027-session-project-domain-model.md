@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented
+Implemented. Superseded by [ADR 028](028-unified-sessions-table.md) for the unified sessions table.
 
 ## Context
 

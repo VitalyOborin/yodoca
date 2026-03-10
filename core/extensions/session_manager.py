@@ -49,12 +49,14 @@ class SessionManager:
                 "Session not configured: call configure_session before invoke"
             )
         if session_id not in self._session_pool:
-            from agents import SQLiteSession
+            self._persist_session(session_id, channel_id=channel_id)
+            from core.extensions.session_sqlite import UnicodeSQLiteSession
 
-            self._session_pool[session_id] = SQLiteSession(
-                session_id, self._session_db_path
+            self._session_pool[session_id] = UnicodeSQLiteSession(
+                session_id, self._session_db_path, sessions_table="sessions"
             )
-        self._persist_session(session_id, channel_id=channel_id)
+        else:
+            self._persist_session(session_id, channel_id=channel_id)
         return self._session_pool[session_id]
 
     def configure_session(
@@ -70,25 +72,29 @@ class SessionManager:
         self._repository = SessionRepository(session_db_path)
         ts = now_ts if now_ts is not None else time.time()
         self._session_id = f"orchestrator_{int(ts)}"
-        from agents import SQLiteSession
-
-        self._session = SQLiteSession(self._session_id, session_db_path)
-        self._session_pool[self._session_id] = self._session
         self._persist_session(self._session_id, channel_id="unknown", now_ts=int(ts))
+        from core.extensions.session_sqlite import UnicodeSQLiteSession
+
+        self._session = UnicodeSQLiteSession(
+            self._session_id, session_db_path, sessions_table="sessions"
+        )
+        self._session_pool[self._session_id] = self._session
 
     async def rotate_session(self, now_ts: float | None = None) -> None:
         old_id = self._session_id
         ts = now_ts if now_ts is not None else time.time()
         self._session_id = f"orchestrator_{int(ts)}"
-        from agents import SQLiteSession
-
         if self._session_db_path is None:
             raise RuntimeError(
                 "Session not configured: call configure_session before invoke"
             )
-        self._session = SQLiteSession(self._session_id, self._session_db_path)
-        self._session_pool[self._session_id] = self._session
         self._persist_session(self._session_id, channel_id="unknown", now_ts=int(ts))
+        from core.extensions.session_sqlite import UnicodeSQLiteSession
+
+        self._session = UnicodeSQLiteSession(
+            self._session_id, self._session_db_path, sessions_table="sessions"
+        )
+        self._session_pool[self._session_id] = self._session
         if self._event_bus and old_id:
             await self._event_bus.publish(
                 SystemTopics.SESSION_COMPLETED,
@@ -192,11 +198,14 @@ class SessionManager:
     def get_background_session(self, now_ts: float | None = None) -> Any:
         if self._session_db_path is None:
             return None
-        from agents import SQLiteSession
-
         ts = now_ts if now_ts is not None else time.time()
         session_id = f"background_{int(ts)}"
-        return SQLiteSession(session_id, self._session_db_path)
+        self._persist_session(session_id, channel_id="unknown", now_ts=int(ts))
+        from core.extensions.session_sqlite import UnicodeSQLiteSession
+
+        return UnicodeSQLiteSession(
+            session_id, self._session_db_path, sessions_table="sessions"
+        )
 
     def _persist_session(
         self,

@@ -14,56 +14,92 @@ from core.extensions.router import MessageRouter
 from core.extensions.session_repository import SessionRepository
 
 
-def _seed_legacy_session_db(db_path: Path) -> None:
+def _seed_agent_messages(db_path: Path, session_id: str, message_data: str) -> None:
+    """Create agent_messages table and insert a message (SDK-owned table)."""
     conn = sqlite3.connect(db_path)
     conn.executescript(
         """
-        CREATE TABLE agent_sessions (
-            session_id TEXT PRIMARY KEY,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE agent_messages (
+        CREATE TABLE IF NOT EXISTS agent_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
             message_data TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE yodoca_session_meta (
-            session_id TEXT PRIMARY KEY,
-            updated_at INTEGER NOT NULL
-        );
-        INSERT INTO agent_sessions (session_id, created_at, updated_at)
-        VALUES ('sess_legacy', '2026-03-09 10:00:00', '2026-03-09 10:10:00');
-        INSERT INTO agent_messages (session_id, message_data, created_at)
-        VALUES (
-            'sess_legacy',
-            '{"role":"user","content":"hello"}',
-            '2026-03-09 10:20:00'
-        );
-        INSERT INTO yodoca_session_meta (session_id, updated_at)
-        VALUES ('sess_legacy', 1773000000);
         """
+    )
+    conn.execute(
+        "INSERT INTO agent_messages (session_id, message_data, created_at) "
+        "VALUES (?, ?, ?)",
+        (session_id, message_data, "2026-03-09 10:20:00"),
     )
     conn.commit()
     conn.close()
 
 
-def test_session_repository_migrates_legacy_schema(tmp_path: Path) -> None:
+def test_session_repository_creates_and_retrieves_session(tmp_path: Path) -> None:
     db_path = tmp_path / "session.db"
-    _seed_legacy_session_db(db_path)
-
     repo = SessionRepository(str(db_path))
 
-    session = repo.get_session("sess_legacy", include_archived=True)
+    session = repo.create_session(
+        session_id="sess_1",
+        channel_id="web_channel",
+        project_id=None,
+        title="Draft",
+        now_ts=1773096500,
+    )
     assert session is not None
-    assert session["id"] == "sess_legacy"
-    assert session["channel_id"] == "unknown"
-    assert session["created_at"] == 1773050400
-    assert session["last_active_at"] == 1773051600
-    assert repo.get_session_history("sess_legacy") == [
-        {"role": "user", "content": "hello"}
-    ]
+    assert session["id"] == "sess_1"
+    assert session["channel_id"] == "web_channel"
+    assert session["created_at"] == 1773096500
+    assert session["last_active_at"] == 1773096500
+
+    retrieved = repo.get_session("sess_1", include_archived=True)
+    assert retrieved is not None
+    assert retrieved["id"] == "sess_1"
+    assert retrieved["channel_id"] == "web_channel"
+
+
+def test_session_repository_get_session_history(tmp_path: Path) -> None:
+    db_path = tmp_path / "session.db"
+    repo = SessionRepository(str(db_path))
+    repo.create_session(
+        session_id="sess_1",
+        channel_id="web_channel",
+        project_id=None,
+        title=None,
+        now_ts=1773096500,
+    )
+    _seed_agent_messages(db_path, "sess_1", '{"role":"user","content":"hello"}')
+
+    history = repo.get_session_history("sess_1")
+    assert history == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_unicode_stored_without_escaping_in_message_data(tmp_path: Path) -> None:
+    """Unicode in message_data is stored as-is, not escaped (ensure_ascii=False)."""
+    from core.extensions.session_manager import SessionManager
+
+    manager = SessionManager()
+    db_path = tmp_path / "session.db"
+    manager.configure_session(
+        session_db_path=str(db_path),
+        session_timeout=1800,
+        event_bus=None,
+        now_ts=1000.0,
+    )
+    session = manager.get_or_create_session("sess_unicode", "cli")
+    cyrillic_content = "Привет, мир!"
+    await session.add_items([{"role": "user", "content": cyrillic_content}])
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT message_data FROM agent_messages WHERE session_id = ?",
+            ("sess_unicode",),
+        ).fetchone()
+    assert row is not None
+    assert cyrillic_content in row[0]
+    assert "\\u041f" not in row[0]
 
 
 def test_project_service_binds_and_unbinds_sessions(tmp_path: Path) -> None:

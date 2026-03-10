@@ -1,7 +1,8 @@
-"""Persistent session metadata and history stored alongside agent session tables."""
+"""Persistent session metadata and history stored alongside agent_messages."""
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,82 +51,15 @@ class SessionRepository:
                     session_id TEXT PRIMARY KEY,
                     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
                     title TEXT,
-                    channel_id TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    last_active_at INTEGER NOT NULL,
+                    channel_id TEXT NOT NULL DEFAULT 'unknown',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active_at INTEGER NOT NULL DEFAULT 0,
                     is_archived INTEGER NOT NULL DEFAULT 0
                 );
                 """
             )
-            self._backfill_sessions(conn)
             conn.commit()
-
-    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table_name,),
-        ).fetchone()
-        return row is not None
-
-    def _backfill_sessions(self, conn: sqlite3.Connection) -> None:
-        if not self._table_exists(conn, "agent_sessions"):
-            return
-        meta_expr = "NULL"
-        if self._table_exists(conn, "yodoca_session_meta"):
-            meta_expr = """
-                    (
-                        SELECT updated_at
-                        FROM yodoca_session_meta
-                        WHERE yodoca_session_meta.session_id = agent_sessions.session_id
-                    )
-            """
-        messages_expr = "NULL"
-        if self._table_exists(conn, "agent_messages"):
-            messages_expr = """
-                    (
-                        SELECT CAST(
-                            strftime('%s', MAX(agent_messages.created_at)) AS INTEGER
-                        )
-                        FROM agent_messages
-                        WHERE agent_messages.session_id = agent_sessions.session_id
-                    )
-            """
-        conn.execute(
-            f"""
-            INSERT INTO sessions (
-                session_id,
-                project_id,
-                title,
-                channel_id,
-                created_at,
-                last_active_at,
-                is_archived
-            )
-            SELECT
-                agent_sessions.session_id,
-                NULL,
-                NULL,
-                'unknown',
-                COALESCE(
-                    CAST(strftime('%s', agent_sessions.created_at) AS INTEGER),
-                    CAST(strftime('%s', 'now') AS INTEGER)
-                ),
-                COALESCE(
-                    {messages_expr},
-                    CAST(strftime('%s', agent_sessions.updated_at) AS INTEGER),
-                    {meta_expr},
-                    CAST(strftime('%s', agent_sessions.created_at) AS INTEGER),
-                    CAST(strftime('%s', 'now') AS INTEGER)
-                ),
-                0
-            FROM agent_sessions
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM sessions
-                WHERE sessions.session_id = agent_sessions.session_id
-            )
-            """
-        )
 
     def create_session(
         self,
@@ -312,7 +246,7 @@ class SessionRepository:
                     ),
                     (
                         SELECT CAST(strftime('%s', updated_at) AS INTEGER)
-                        FROM agent_sessions
+                        FROM sessions
                         WHERE session_id = ?
                     )
                 ) AS last_active_at
@@ -329,6 +263,16 @@ class SessionRepository:
             conn.commit()
         return last_active_at
 
+    def _parse_created_at(self, value: Any) -> int:
+        """Parse created_at from epoch int or ISO timestamp string."""
+        if isinstance(value, (int, float)):
+            return int(value)
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+            return int(dt.replace(tzinfo=datetime.UTC).timestamp())
+
     def _row_to_session(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -337,7 +281,7 @@ class SessionRepository:
             "project_id": row["project_id"],
             "title": row["title"],
             "channel_id": row["channel_id"],
-            "created_at": int(row["created_at"]),
+            "created_at": self._parse_created_at(row["created_at"]),
             "last_active_at": int(row["last_active_at"]),
             "is_archived": bool(row["is_archived"]),
         }
