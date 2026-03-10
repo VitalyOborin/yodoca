@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from core.extensions.loader import Loader
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 
 def _make_tool_ctx(tool_name: str, tool_arguments: str):

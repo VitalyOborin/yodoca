@@ -2,12 +2,12 @@
 
 from typing import Any
 
-from core.extensions.agent_invoker import AgentInvoker
 from core.extensions.contract import (
     ChannelProvider,
     StreamingChannelProvider,
     TurnContext,
 )
+from core.extensions.routing.agent_invoker import AgentInvoker
 
 
 class ResponseDeliveryService:
@@ -25,6 +25,7 @@ class ResponseDeliveryService:
         session: Any = None,
     ) -> str:
         if isinstance(channel, StreamingChannelProvider):
+
             async def _on_chunk(chunk: str) -> None:
                 await channel.on_stream_chunk(user_id, chunk)
 

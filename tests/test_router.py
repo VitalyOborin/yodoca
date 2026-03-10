@@ -15,7 +15,7 @@ from core.extensions.contract import (
     StreamingChannelProvider,
     TurnContext,
 )
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 
 class MockChannel(ChannelProvider):

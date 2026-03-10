@@ -5,7 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from core.extensions.contract import ExtensionState
-from core.extensions.lifecycle import ExtensionStateMachine, TaskSupervisor
+from core.extensions.loader.lifecycle import ExtensionStateMachine, TaskSupervisor
 
 if TYPE_CHECKING:
     from core.extensions.contract import Extension

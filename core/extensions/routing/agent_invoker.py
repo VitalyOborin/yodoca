@@ -5,9 +5,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from core.extensions.approval_coordinator import ApprovalCoordinator
 from core.extensions.contract import TurnContext
-from core.extensions.session_manager import SessionManager
+from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def _get_response_delta_type() -> type | None:
     try:
         from openai.types.responses import ResponseTextDeltaEvent
+
         return ResponseTextDeltaEvent
     except Exception:
         return None
@@ -72,7 +73,9 @@ class AgentInvoker:
         prompt: str,
         turn_context: TurnContext | None = None,
     ) -> tuple[Any, str]:
-        stripped, _ctx, context = await self._get_context_for_prompt(prompt, turn_context)
+        stripped, _ctx, context = await self._get_context_for_prompt(
+            prompt, turn_context
+        )
         agent = self._agent
         if context and isinstance(getattr(self._agent, "instructions", None), str):
             agent = self._agent.clone(
@@ -85,7 +88,9 @@ class AgentInvoker:
         prompt: str,
         turn_context: TurnContext | None = None,
     ) -> str:
-        stripped, _ctx, context = await self._get_context_for_prompt(prompt, turn_context)
+        stripped, _ctx, context = await self._get_context_for_prompt(
+            prompt, turn_context
+        )
         if not context:
             return stripped
         return context + "\n\n---\n\n" + stripped
@@ -145,7 +150,9 @@ class AgentInvoker:
         if event.type != "raw_response_event":
             return None
         event_data = getattr(event, "data", None)
-        if response_delta_type is not None and isinstance(event_data, response_delta_type):
+        if response_delta_type is not None and isinstance(
+            event_data, response_delta_type
+        ):
             return getattr(event_data, "delta", None)
         if hasattr(event_data, "delta"):
             return event_data.delta

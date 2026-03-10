@@ -2,14 +2,18 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.events.topics import SystemTopics
 from core.extensions.contract import TurnContext
-from core.extensions.router import MessageRouter
-from core.extensions.update_fields import UNSET
+from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.project_service import ProjectService
+from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.routing.router import MessageRouter
+from core.extensions.update_fields import UNSET, UnsetType
 from core.llm import ModelRouterProtocol
 from core.secrets import get_secret_async, set_secret_async
 
@@ -28,6 +32,8 @@ class ExtensionContext:
         config: dict[str, Any],
         logger: logging.Logger,
         router: MessageRouter,
+        session_manager: SessionManager,
+        project_service: ProjectService | None,
         get_extension: Callable[[str], Any],
         data_dir_path: Path,
         shutdown_event: asyncio.Event | None,
@@ -44,6 +50,8 @@ class ExtensionContext:
         self.config = config
         self.logger = logger
         self._router = router
+        self._sessions = session_manager
+        self._projects = project_service
         self._get_extension = get_extension
         self._data_dir_path = data_dir_path
         self._shutdown_event = shutdown_event
@@ -118,7 +126,7 @@ class ExtensionContext:
     async def emit(
         self,
         topic: str,
-        payload: dict,
+        payload: dict[str, Any],
         correlation_id: str | None = None,
     ) -> None:
         """Publish event to the Event Bus. Fire-and-forget."""
@@ -175,9 +183,9 @@ class ExtensionContext:
         include_archived: bool = False,
         project_id: str | None = None,
         channel_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[SessionInfo]:
         """List persisted session metadata from session.db."""
-        return await self._router.list_sessions(
+        return await self._sessions.list_sessions(
             include_archived=include_archived,
             project_id=project_id,
             channel_id=channel_id,
@@ -190,20 +198,26 @@ class ExtensionContext:
         channel_id: str,
         project_id: str | None = None,
         title: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> SessionInfo:
         """Create a persisted session row before any messages are sent."""
-        return await self._router.create_session(
-            session_id=session_id,
-            channel_id=channel_id,
-            project_id=project_id,
-            title=title,
+        if project_id is not None and self._projects is not None:
+            project = await asyncio.to_thread(self._projects.get_project, project_id)
+            if project is None:
+                raise ValueError(f"Project {project_id} not found")
+        return await asyncio.to_thread(
+            self._sessions.session_repository.create_session,
+            session_id,
+            channel_id,
+            project_id,
+            title,
+            int(time.time()),
         )
 
     async def get_session(
         self, session_id: str, include_archived: bool = False
-    ) -> dict[str, Any] | None:
+    ) -> SessionInfo | None:
         """Read persisted session metadata."""
-        return await self._router.get_session(
+        return await self._sessions.get_session(
             session_id, include_archived=include_archived
         )
 
@@ -211,12 +225,20 @@ class ExtensionContext:
         self,
         session_id: str,
         *,
-        title: str | None | object = UNSET,
-        project_id: str | None | object = UNSET,
-        is_archived: bool | object = UNSET,
-    ) -> dict[str, Any] | None:
+        title: str | None | UnsetType = UNSET,
+        project_id: str | None | UnsetType = UNSET,
+        is_archived: bool | UnsetType = UNSET,
+    ) -> SessionInfo | None:
         """Update selected persisted session metadata fields."""
-        return await self._router.update_session(
+        if (
+            project_id is not UNSET
+            and project_id is not None
+            and self._projects is not None
+        ):
+            project = await asyncio.to_thread(self._projects.get_project, project_id)
+            if project is None:
+                raise ValueError(f"Project {project_id} not found")
+        return await self._sessions.update_session(
             session_id,
             title=title,
             project_id=project_id,
@@ -225,19 +247,23 @@ class ExtensionContext:
 
     async def archive_session(self, session_id: str) -> bool:
         """Soft-archive a session without deleting its history."""
-        return await self._router.archive_session(session_id)
+        return await self._sessions.archive_session(session_id)
 
     async def get_session_history(self, session_id: str) -> list[dict[str, Any]] | None:
         """Return stored messages/items for a session. None if session is unknown."""
-        return await self._router.get_session_history(session_id)
+        return await self._sessions.get_session_history(session_id)
 
-    async def list_projects(self) -> list[dict[str, Any]]:
+    async def list_projects(self) -> list[ProjectInfo]:
         """List persisted projects."""
-        return await self._router.list_projects()
+        if self._projects is None:
+            return []
+        return await asyncio.to_thread(self._projects.list_projects)
 
-    async def get_project(self, project_id: str) -> dict[str, Any] | None:
+    async def get_project(self, project_id: str) -> ProjectInfo | None:
         """Read one persisted project."""
-        return await self._router.get_project(project_id)
+        if self._projects is None:
+            return None
+        return await asyncio.to_thread(self._projects.get_project, project_id)
 
     async def create_project(
         self,
@@ -246,36 +272,46 @@ class ExtensionContext:
         instructions: str | None = None,
         agent_config: dict[str, Any] | None = None,
         files: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ProjectInfo:
         """Create a project in session.db."""
-        return await self._router.create_project(
+        if self._projects is None:
+            raise RuntimeError("Project service is not configured")
+        return await asyncio.to_thread(
+            self._projects.create_project,
             name=name,
             instructions=instructions,
             agent_config=agent_config,
             files=files or [],
+            now_ts=int(time.time()),
         )
 
     async def update_project(
         self,
         project_id: str,
         *,
-        name: str | object = UNSET,
-        instructions: str | None | object = UNSET,
-        agent_config: dict[str, Any] | None | object = UNSET,
-        files: list[str] | object = UNSET,
-    ) -> dict[str, Any] | None:
+        name: str | UnsetType = UNSET,
+        instructions: str | None | UnsetType = UNSET,
+        agent_config: dict[str, Any] | None | UnsetType = UNSET,
+        files: list[str] | UnsetType = UNSET,
+    ) -> ProjectInfo | None:
         """Update selected project metadata fields."""
-        return await self._router.update_project(
+        if self._projects is None:
+            raise RuntimeError("Project service is not configured")
+        return await asyncio.to_thread(
+            self._projects.update_project,
             project_id,
             name=name,
             instructions=instructions,
             agent_config=agent_config,
             files=files,
+            now_ts=int(time.time()),
         )
 
     async def delete_project(self, project_id: str) -> bool:
         """Delete a project and unlink bound sessions via foreign key rules."""
-        return await self._router.delete_project(project_id)
+        if self._projects is None:
+            return False
+        return await asyncio.to_thread(self._projects.delete_project, project_id)
 
     @property
     def data_dir(self) -> Path:

@@ -8,10 +8,10 @@ import pytest
 
 from core.extensions.contract import ExtensionState, TurnContext
 from core.extensions.loader import Loader
-from core.extensions.project_repository import ProjectRepository
-from core.extensions.project_service import ProjectService
-from core.extensions.router import MessageRouter
-from core.extensions.session_repository import SessionRepository
+from core.extensions.persistence.project_repository import ProjectRepository
+from core.extensions.persistence.project_service import ProjectService
+from core.extensions.persistence.session_repository import SessionRepository
+from core.extensions.routing.router import MessageRouter
 
 
 def _seed_agent_messages(db_path: Path, session_id: str, message_data: str) -> None:
@@ -48,15 +48,15 @@ def test_session_repository_creates_and_retrieves_session(tmp_path: Path) -> Non
         now_ts=1773096500,
     )
     assert session is not None
-    assert session["id"] == "sess_1"
-    assert session["channel_id"] == "web_channel"
-    assert session["created_at"] == 1773096500
-    assert session["last_active_at"] == 1773096500
+    assert session.id == "sess_1"
+    assert session.channel_id == "web_channel"
+    assert session.created_at == 1773096500
+    assert session.last_active_at == 1773096500
 
     retrieved = repo.get_session("sess_1", include_archived=True)
     assert retrieved is not None
-    assert retrieved["id"] == "sess_1"
-    assert retrieved["channel_id"] == "web_channel"
+    assert retrieved.id == "sess_1"
+    assert retrieved.channel_id == "web_channel"
 
 
 def test_session_repository_get_session_history(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ def test_session_repository_get_session_history(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_unicode_stored_without_escaping_in_message_data(tmp_path: Path) -> None:
     """Unicode in message_data is stored as-is, not escaped (ensure_ascii=False)."""
-    from core.extensions.session_manager import SessionManager
+    from core.extensions.persistence.session_manager import SessionManager
 
     manager = SessionManager()
     db_path = tmp_path / "session.db"
@@ -123,11 +123,11 @@ def test_project_service_binds_and_unbinds_sessions(tmp_path: Path) -> None:
         now_ts=1773096500,
         project_id="proj_1",
     )
-    assert project["id"] == "proj_1"
+    assert project.id == "proj_1"
 
     updated = service.bind_session("sess_1", "proj_1")
     assert updated is not None
-    assert updated["project_id"] == "proj_1"
+    assert updated.project_id == "proj_1"
 
     project_updated = service.update_project(
         "proj_1",
@@ -138,15 +138,15 @@ def test_project_service_binds_and_unbinds_sessions(tmp_path: Path) -> None:
         now_ts=1773096600,
     )
     assert project_updated is not None
-    assert project_updated["files"] == ["docs/guide.md"]
+    assert project_updated.files == ["docs/guide.md"]
     unchanged = service.update_project("proj_1", now_ts=1773096700)
     assert unchanged is not None
-    assert unchanged["updated_at"] == 1773096600
+    assert unchanged.updated_at == 1773096600
 
-    assert service.list_projects()[0]["name"] == "Alpha 2"
-    assert service.get_project("proj_1")["name"] == "Alpha 2"
+    assert service.list_projects()[0].name == "Alpha 2"
+    assert service.get_project("proj_1").name == "Alpha 2"
     assert service.delete_project("proj_1") is True
-    assert sessions.get_session("sess_1", include_archived=True)["project_id"] is None
+    assert sessions.get_session("sess_1", include_archived=True).project_id is None
 
 
 @pytest.mark.asyncio
@@ -172,10 +172,13 @@ async def test_router_persists_explicit_web_session(tmp_path: Path) -> None:
             session_id="sess_web",
         )
 
-    session = await router.get_session("sess_web", include_archived=True)
+    session = await router.session_manager.get_session(
+        "sess_web",
+        include_archived=True,
+    )
     assert session is not None
-    assert session["channel_id"] == "web_channel"
-    assert session["id"] == "sess_web"
+    assert session.channel_id == "web_channel"
+    assert session.id == "sess_web"
 
 
 @pytest.mark.asyncio
@@ -195,17 +198,19 @@ async def test_loader_injects_project_context_before_memory(tmp_path: Path) -> N
         session_db_path=str(tmp_path / "session.db"),
         session_timeout=1800,
     )
-    project = await router.create_project(
+    project_service = router.project_service
+    assert project_service is not None
+    project = project_service.create_project(
         name="Alpha",
         instructions="Project rule.",
         agent_config={"model": "gpt-5"},
         files=[],
         now_ts=1773096500,
     )
-    await router.create_session(
+    router.session_manager.session_repository.create_session(
         session_id="sess_ctx",
         channel_id="cli_channel",
-        project_id=project["id"],
+        project_id=project.id,
         title=None,
         now_ts=1773096501,
     )

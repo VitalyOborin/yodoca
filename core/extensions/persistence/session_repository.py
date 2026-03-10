@@ -2,19 +2,21 @@
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from core.extensions.update_fields import UNSET
+from core.extensions.persistence.models import SessionInfo
+from core.extensions.persistence.schema import ensure_session_schema
+from core.extensions.update_fields import UNSET, UnsetType
 
 
 class SessionRepository:
-    """Owns schema bootstrap, migration, and CRUD for session metadata."""
+    """CRUD for session metadata and history."""
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
-        self._ensure_schema()
+        ensure_session_schema(db_path)
 
     @property
     def db_path(self) -> str:
@@ -26,41 +28,6 @@ class SessionRepository:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def _ensure_schema(self) -> None:
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS projects (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    instructions TEXT,
-                    agent_config TEXT,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS project_files (
-                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    file_path TEXT NOT NULL,
-                    added_at INTEGER NOT NULL,
-                    PRIMARY KEY (project_id, file_path)
-                );
-
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-                    title TEXT,
-                    channel_id TEXT NOT NULL DEFAULT 'unknown',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_active_at INTEGER NOT NULL DEFAULT 0,
-                    is_archived INTEGER NOT NULL DEFAULT 0
-                );
-                """
-            )
-            conn.commit()
-
     def create_session(
         self,
         session_id: str,
@@ -68,7 +35,7 @@ class SessionRepository:
         project_id: str | None,
         title: str | None,
         now_ts: int,
-    ) -> dict[str, Any]:
+    ) -> SessionInfo:
         with self._connect() as conn:
             conn.execute(
                 """
@@ -104,7 +71,7 @@ class SessionRepository:
 
     def get_session(
         self, session_id: str, include_archived: bool = False
-    ) -> dict[str, Any] | None:
+    ) -> SessionInfo | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -129,7 +96,7 @@ class SessionRepository:
         include_archived: bool = False,
         project_id: str | None = None,
         channel_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[SessionInfo]:
         clauses = ["(? = 1 OR is_archived = 0)"]
         params: list[Any] = [int(include_archived)]
         if project_id is not None:
@@ -156,18 +123,23 @@ class SessionRepository:
                 """,
                 params,
             ).fetchall()
-        return [self._row_to_session(row) for row in rows if row is not None]
+        sessions: list[SessionInfo] = []
+        for row in rows:
+            session = self._row_to_session(row)
+            if session is not None:
+                sessions.append(session)
+        return sessions
 
     def update_session(
         self,
         session_id: str,
         *,
-        title: str | None | object = UNSET,
-        project_id: str | None | object = UNSET,
-        is_archived: bool | object = UNSET,
-        last_active_at: int | object = UNSET,
-        channel_id: str | object = UNSET,
-    ) -> dict[str, Any] | None:
+        title: str | None | UnsetType = UNSET,
+        project_id: str | None | UnsetType = UNSET,
+        is_archived: bool | UnsetType = UNSET,
+        last_active_at: int | UnsetType = UNSET,
+        channel_id: str | UnsetType = UNSET,
+    ) -> SessionInfo | None:
         assignments: list[str] = []
         params: list[Any] = []
         if title is not UNSET:
@@ -271,17 +243,17 @@ class SessionRepository:
             return int(value)
         except (ValueError, TypeError):
             dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
-            return int(dt.replace(tzinfo=datetime.UTC).timestamp())
+            return int(dt.replace(tzinfo=UTC).timestamp())
 
-    def _row_to_session(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _row_to_session(self, row: sqlite3.Row | None) -> SessionInfo | None:
         if row is None:
             return None
-        return {
-            "id": row["session_id"],
-            "project_id": row["project_id"],
-            "title": row["title"],
-            "channel_id": row["channel_id"],
-            "created_at": self._parse_created_at(row["created_at"]),
-            "last_active_at": int(row["last_active_at"]),
-            "is_archived": bool(row["is_archived"]),
-        }
+        return SessionInfo(
+            id=row["session_id"],
+            project_id=row["project_id"],
+            title=row["title"],
+            channel_id=row["channel_id"],
+            created_at=self._parse_created_at(row["created_at"]),
+            last_active_at=int(row["last_active_at"]),
+            is_archived=bool(row["is_archived"]),
+        )

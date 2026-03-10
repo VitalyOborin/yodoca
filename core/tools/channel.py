@@ -5,7 +5,7 @@ from typing import Any
 from agents import function_tool
 from pydantic import BaseModel, Field
 
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 
 class ChannelInfo(BaseModel):

@@ -2,13 +2,12 @@
 
 from agents import Agent, Runner
 
+from core.extensions.context import ExtensionContext
 from core.extensions.contract import (
     AgentDescriptor,
     AgentInvocationContext,
-    AgentProvider,
     AgentResponse,
 )
-from core.extensions.context import ExtensionContext
 from core.extensions.manifest import ExtensionManifest
 
 

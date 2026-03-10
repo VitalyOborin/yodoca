@@ -1,8 +1,8 @@
-"""EventWiringManager: wire kernel event handlers to EventBus (system topics, notify_user, proactive agents)."""
+"""Event wiring between EventBus topics and kernel handlers."""
 
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from core.events import EventBus
@@ -16,7 +16,8 @@ from core.extensions.contract import (
     TurnContext,
 )
 from core.extensions.manifest import ExtensionManifest
-from core.extensions.router import MessageRouter
+from core.extensions.manifest_utils import iter_active_manifests
+from core.extensions.routing.router import MessageRouter
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class EventWiringManager:
-    """Wire manifest-driven event handlers to EventBus. Receives shared state by reference."""
+    """Wire manifest-driven event handlers to EventBus."""
 
     def __init__(
         self,
@@ -41,18 +42,10 @@ class EventWiringManager:
         self._extensions = extensions
         self._agent_registry = agent_registry
 
-    def _iter_active_manifests(self) -> Iterator[tuple[str, ExtensionManifest]]:
-        """Yield (ext_id, manifest) for non-ERROR manifests, in manifest order."""
-        for manifest in self._manifests:
-            ext_id = manifest.id
-            if self._state.get(ext_id) == ExtensionState.ERROR:
-                continue
-            yield ext_id, manifest
-
     def _collect_proactive_subscriptions(self) -> dict[str, str]:
-        """Return {topic: ext_id} for invoke_agent subscriptions. First in manifest order wins."""
+        """Return {topic: ext_id} for invoke_agent subscriptions."""
         result: dict[str, str] = {}
-        for ext_id, manifest in self._iter_active_manifests():
+        for ext_id, manifest in iter_active_manifests(self._manifests, self._state):
             if not manifest.events or not manifest.events.subscribes:
                 continue
             if not self._agent_registry or self._agent_registry.get(ext_id) is None:
@@ -129,7 +122,7 @@ class EventWiringManager:
         )
 
     def _wire_notify_user_handlers(self, event_bus: EventBus) -> None:
-        for ext_id, manifest in self._iter_active_manifests():
+        for ext_id, manifest in iter_active_manifests(self._manifests, self._state):
             if not manifest.events or not manifest.events.subscribes:
                 continue
             for sub in manifest.events.subscribes:
@@ -161,9 +154,7 @@ class EventWiringManager:
         channel_id = event.payload.get("channel_id")
         session_id = event.payload.get("session_id")
         if not text or not channel_id:
-            logger.warning(
-                "user.message missing text or channel_id: %s", event.payload
-            )
+            logger.warning("user.message missing text or channel_id: %s", event.payload)
             return
         channel = router.get_channel(channel_id)
         if not channel:
@@ -209,11 +200,7 @@ class EventWiringManager:
     def _wire_proactive_handlers(self, event_bus: EventBus) -> None:
         proactive_map = self._collect_proactive_subscriptions()
         for topic, ext_id in proactive_map.items():
-            pair = (
-                self._agent_registry.get(ext_id)
-                if self._agent_registry
-                else None
-            )
+            pair = self._agent_registry.get(ext_id) if self._agent_registry else None
             agent = pair[1] if pair else None
             if not agent:
                 logger.debug(
@@ -226,10 +213,8 @@ class EventWiringManager:
             event_bus.subscribe(topic, handler, "kernel.proactive")
 
     def wire(self, event_bus: EventBus) -> None:
-        """Wire manifest-driven notify_user and invoke_agent handlers. Call after detect_and_wire_all."""
+        """Wire manifest-driven notify_user and invoke_agent handlers."""
         self._wire_system_topics(event_bus)
         self._wire_notify_user_handlers(event_bus)
-        event_bus.subscribe(
-            "user.message", self._on_kernel_user_message, "kernel"
-        )
+        event_bus.subscribe("user.message", self._on_kernel_user_message, "kernel")
         self._wire_proactive_handlers(event_bus)

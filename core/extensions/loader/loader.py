@@ -2,18 +2,16 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.events import EventBus
 from core.events.models import Event
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
-from core.extensions.builtin_context import ActiveChannelContextProvider
 from core.extensions.context import ExtensionContext
-from core.extensions.context_builder import ExtensionContextBuilder
 from core.extensions.contract import (
     AgentProvider,
     ChannelProvider,
@@ -25,16 +23,19 @@ from core.extensions.contract import (
     ToolProvider,
     TurnContext,
 )
-from core.extensions.dependency_resolver import DependencyResolver
-from core.extensions.event_wiring import EventWiringManager
-from core.extensions.extension_factory import ExtensionFactory
-from core.extensions.health_check import HealthCheckManager
-from core.extensions.lifecycle import ExtensionStateMachine, TaskSupervisor
+from core.extensions.loader.context_builder import ExtensionContextBuilder
+from core.extensions.loader.dependency_resolver import DependencyResolver
+from core.extensions.loader.extension_factory import ExtensionFactory
+from core.extensions.loader.health_check import HealthCheckManager
+from core.extensions.loader.lifecycle import ExtensionStateMachine, TaskSupervisor
+from core.extensions.loader.manifest_repository import ManifestRepository
 from core.extensions.manifest import ExtensionManifest
-from core.extensions.manifest_repository import ManifestRepository
-from core.extensions.project_context import ProjectInstructionsContextProvider
-from core.extensions.router import MessageRouter
-from core.extensions.scheduler_manager import SchedulerManager
+from core.extensions.manifest_utils import iter_active_manifests
+from core.extensions.routing.builtin_context import ActiveChannelContextProvider
+from core.extensions.routing.event_wiring import EventWiringManager
+from core.extensions.routing.project_context import ProjectInstructionsContextProvider
+from core.extensions.routing.router import MessageRouter
+from core.extensions.routing.scheduler_manager import SchedulerManager
 from core.extensions.tool_resolver import ToolResolver
 from core.llm import ModelRouterProtocol
 from core.settings import get_setting
@@ -99,27 +100,6 @@ class Loader:
         except Exception as e:
             logger.exception("Manifest discovery failed: %s", e)
 
-    def _visit_manifest(
-        self,
-        m: ExtensionManifest,
-        order: list[ExtensionManifest],
-        seen: set[str],
-        visiting: set[str],
-    ) -> None:
-        """Visit manifest for topological sort. Raises on cycle."""
-        if m.id in seen:
-            return
-        if m.id in visiting:
-            raise ValueError(f"Cycle in depends_on involving {m.id}")
-        visiting.add(m.id)
-        for dep in m.depends_on:
-            dep_m = self._get_manifest(dep)
-            if dep_m:
-                self._visit_manifest(dep_m, order, seen, visiting)
-        visiting.remove(m.id)
-        seen.add(m.id)
-        order.append(m)
-
     def _resolve_dependency_order(self) -> list[ExtensionManifest]:
         """Topological sort by depends_on. Raises on cycle or missing dep."""
         return self._dependency_resolver.resolve(self._manifests)
@@ -169,14 +149,6 @@ class Loader:
             if self._state.get(dep) == ExtensionState.ERROR
         ]
 
-    def _iter_active_manifests(self) -> Iterator[tuple[str, ExtensionManifest]]:
-        """Yield (ext_id, manifest) for non-ERROR manifests, in manifest order."""
-        for manifest in self._manifests:
-            ext_id = manifest.id
-            if self._state.get(ext_id) == ExtensionState.ERROR:
-                continue
-            yield ext_id, manifest
-
     def _make_get_extension(self, caller_ext_id: str) -> Callable[[str], Any]:
         """Return a get_extension callable that enforces depends_on for the caller."""
         caller_manifest = self._get_manifest(caller_ext_id)
@@ -205,9 +177,15 @@ class Loader:
 
     def _get_restart_file_path(self) -> Path:
         """Restart flag file path from `supervisor.restart_file`."""
-        return self._data_dir.parent.parent / get_setting(
-            self._settings, "supervisor.restart_file", "sandbox/.restart_requested"
+        restart_file = cast(
+            str,
+            get_setting(
+                self._settings,
+                "supervisor.restart_file",
+                "sandbox/.restart_requested",
+            ),
         )
+        return self._data_dir.parent.parent / restart_file
 
     def resolve_tools(
         self, tool_ids: list[str], agent_id: str | None = None
@@ -258,7 +236,13 @@ class Loader:
             restart_file_path=self._get_restart_file_path(),
             resolve_tools=self.resolve_tools,
             get_extension_for=self._make_get_extension,
-        ).build(ext_id, manifest, router)
+        ).build(
+            ext_id,
+            manifest,
+            router,
+            router.session_manager,
+            router.project_service,
+        )
 
     async def initialize_all(self, router: MessageRouter) -> None:
         """Create context per extension, call initialize(ctx). Cascade dep failure."""
@@ -314,8 +298,9 @@ class Loader:
         """Collect active ContextProviders plus built-in providers."""
         providers: list[ContextProvider] = [
             ActiveChannelContextProvider(router),
-            ProjectInstructionsContextProvider(router),
         ]
+        if router.project_service is not None:
+            providers.append(ProjectInstructionsContextProvider(router.project_service))
         ext_providers = [
             ext
             for ext_id, ext in self._extensions.items()
@@ -497,21 +482,18 @@ class Loader:
     def _collect_tool_agent_parts(self) -> list[str]:
         """Return tool descriptions for capabilities summary. Agents excluded."""
         tool_parts: list[str] = []
-        for m in self._manifests:
-            if (
-                m.id not in self._extensions
-                or self._state.get(m.id) == ExtensionState.ERROR
-            ):
+        for ext_id, manifest in iter_active_manifests(self._manifests, self._state):
+            if ext_id not in self._extensions:
                 continue
-            if not m.description:
+            if not manifest.description:
                 continue
             is_agent = (
                 self._agent_registry is not None
-                and self._agent_registry.get(m.id) is not None
+                and self._agent_registry.get(ext_id) is not None
             )
             if is_agent:
                 continue
-            tool_parts.append(f"- {m.id}: {m.description.strip()}")
+            tool_parts.append(f"- {ext_id}: {manifest.description.strip()}")
         return tool_parts
 
     def _collect_mcp_aliases(self) -> list[str]:

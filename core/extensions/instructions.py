@@ -9,9 +9,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
-def _load_instructions_file(
-    path: Path, template_vars: dict[str, Any] | None
-) -> str:
+def _load_instructions_file(path: Path, template_vars: dict[str, Any] | None) -> str:
     """Load and optionally render template. Returns stripped content or empty string."""
     if path.suffix == ".jinja2" or path.name.endswith(".jinja2"):
         env = Environment(

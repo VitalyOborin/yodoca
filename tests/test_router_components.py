@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.extensions.approval_coordinator import ApprovalCoordinator
+from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 from core.extensions.contract import TurnContext
-from core.extensions.response_delivery_service import ResponseDeliveryService
-from core.extensions.session_manager import SessionManager
+from core.extensions.routing.response_delivery import ResponseDeliveryService
 
 
 class _StreamingChannel:

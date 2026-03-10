@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING, Any
 from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
-from core.extensions.router import MessageRouter
+from core.extensions.persistence.project_service import ProjectService
+from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.routing.router import MessageRouter
 from core.llm import ModelRouterProtocol
 
 if TYPE_CHECKING:
@@ -48,6 +50,8 @@ class ExtensionContextBuilder:
         ext_id: str,
         manifest: ExtensionManifest,
         router: MessageRouter,
+        session_manager: SessionManager,
+        project_service: ProjectService | None,
     ) -> ExtensionContext:
         """Create ExtensionContext for ext_id and manifest."""
         data_dir_path = self._data_dir / ext_id
@@ -64,6 +68,8 @@ class ExtensionContextBuilder:
             config=config,
             logger=logging.getLogger(f"ext.{ext_id}"),
             router=router,
+            session_manager=session_manager,
+            project_service=project_service,
             get_extension=self._get_extension_for(ext_id),
             data_dir_path=data_dir_path,
             shutdown_event=self._shutdown_event,

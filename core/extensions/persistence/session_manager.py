@@ -5,8 +5,10 @@ import time
 from typing import Any
 
 from core.events.topics import SystemTopics
-from core.extensions.session_repository import SessionRepository
-from core.extensions.update_fields import UNSET
+from core.extensions.persistence.models import SessionInfo
+from core.extensions.persistence.session_repository import SessionRepository
+from core.extensions.persistence.session_sqlite import UnicodeSQLiteSession
+from core.extensions.update_fields import UNSET, UnsetType
 
 
 class SessionManager:
@@ -50,7 +52,6 @@ class SessionManager:
             )
         if session_id not in self._session_pool:
             self._persist_session(session_id, channel_id=channel_id)
-            from core.extensions.session_sqlite import UnicodeSQLiteSession
 
             self._session_pool[session_id] = UnicodeSQLiteSession(
                 session_id, self._session_db_path, sessions_table="sessions"
@@ -73,7 +74,6 @@ class SessionManager:
         ts = now_ts if now_ts is not None else time.time()
         self._session_id = f"orchestrator_{int(ts)}"
         self._persist_session(self._session_id, channel_id="unknown", now_ts=int(ts))
-        from core.extensions.session_sqlite import UnicodeSQLiteSession
 
         self._session = UnicodeSQLiteSession(
             self._session_id, session_db_path, sessions_table="sessions"
@@ -89,7 +89,6 @@ class SessionManager:
                 "Session not configured: call configure_session before invoke"
             )
         self._persist_session(self._session_id, channel_id="unknown", now_ts=int(ts))
-        from core.extensions.session_sqlite import UnicodeSQLiteSession
 
         self._session = UnicodeSQLiteSession(
             self._session_id, self._session_db_path, sessions_table="sessions"
@@ -117,7 +116,7 @@ class SessionManager:
         *,
         channel_id: str,
         now_ts: int | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> SessionInfo | None:
         repo = self.session_repository
         effective_now = now_ts if now_ts is not None else int(time.time())
         session = repo.get_session(session_id, include_archived=True)
@@ -141,7 +140,7 @@ class SessionManager:
         include_archived: bool = False,
         project_id: str | None = None,
         channel_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[SessionInfo]:
         return await asyncio.to_thread(
             self.session_repository.list_sessions,
             include_archived,
@@ -151,7 +150,7 @@ class SessionManager:
 
     async def get_session(
         self, session_id: str, include_archived: bool = False
-    ) -> dict[str, Any] | None:
+    ) -> SessionInfo | None:
         return await asyncio.to_thread(
             self.session_repository.get_session,
             session_id,
@@ -167,12 +166,12 @@ class SessionManager:
         self,
         session_id: str,
         *,
-        title: str | None | object = UNSET,
-        project_id: str | None | object = UNSET,
-        is_archived: bool | object = UNSET,
-        channel_id: str | object = UNSET,
-        last_active_at: int | object = UNSET,
-    ) -> dict[str, Any] | None:
+        title: str | None | UnsetType = UNSET,
+        project_id: str | None | UnsetType = UNSET,
+        is_archived: bool | UnsetType = UNSET,
+        channel_id: str | UnsetType = UNSET,
+        last_active_at: int | UnsetType = UNSET,
+    ) -> SessionInfo | None:
         return await asyncio.to_thread(
             self.session_repository.update_session,
             session_id,
@@ -201,7 +200,6 @@ class SessionManager:
         ts = now_ts if now_ts is not None else time.time()
         session_id = f"background_{int(ts)}"
         self._persist_session(session_id, channel_id="unknown", now_ts=int(ts))
-        from core.extensions.session_sqlite import UnicodeSQLiteSession
 
         return UnicodeSQLiteSession(
             session_id, self._session_db_path, sessions_table="sessions"

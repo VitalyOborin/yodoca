@@ -5,7 +5,7 @@ import json
 import pytest
 
 from core.extensions.contract import ChannelProvider
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 from core.tools.channel import make_channel_tools
 
 

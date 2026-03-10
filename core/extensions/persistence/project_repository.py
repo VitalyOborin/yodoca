@@ -4,7 +4,9 @@ import json
 import sqlite3
 from typing import Any
 
-from core.extensions.update_fields import UNSET
+from core.extensions.persistence.models import ProjectInfo
+from core.extensions.persistence.schema import ensure_session_schema
+from core.extensions.update_fields import UNSET, UnsetType
 
 
 class ProjectRepository:
@@ -12,6 +14,7 @@ class ProjectRepository:
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
+        ensure_session_schema(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -28,7 +31,7 @@ class ProjectRepository:
         agent_config: dict[str, Any] | None,
         files: list[str],
         now_ts: int,
-    ) -> dict[str, Any]:
+    ) -> ProjectInfo:
         payload = json.dumps(agent_config or {}, ensure_ascii=False)
         with self._connect() as conn:
             conn.execute(
@@ -47,7 +50,7 @@ class ProjectRepository:
             raise RuntimeError(f"Failed to persist project {project_id}")
         return project
 
-    def get_project(self, project_id: str) -> dict[str, Any] | None:
+    def get_project(self, project_id: str) -> ProjectInfo | None:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -70,7 +73,7 @@ class ProjectRepository:
         projects = self._rows_to_projects(rows)
         return projects[0] if projects else None
 
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(self) -> list[ProjectInfo]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -94,12 +97,12 @@ class ProjectRepository:
         self,
         project_id: str,
         *,
-        name: str | object = UNSET,
-        instructions: str | None | object = UNSET,
-        agent_config: dict[str, Any] | None | object = UNSET,
-        files: list[str] | object = UNSET,
+        name: str | UnsetType = UNSET,
+        instructions: str | None | UnsetType = UNSET,
+        agent_config: dict[str, Any] | None | UnsetType = UNSET,
+        files: list[str] | UnsetType = UNSET,
         now_ts: int,
-    ) -> dict[str, Any] | None:
+    ) -> ProjectInfo | None:
         if (
             name is UNSET
             and instructions is UNSET
@@ -162,7 +165,7 @@ class ProjectRepository:
                 (project_id, file_path, now_ts),
             )
 
-    def _rows_to_projects(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    def _rows_to_projects(self, rows: list[sqlite3.Row]) -> list[ProjectInfo]:
         projects: dict[str, dict[str, Any]] = {}
         order: list[str] = []
         for row in rows:
@@ -181,4 +184,15 @@ class ProjectRepository:
             file_path = row["file_path"]
             if isinstance(file_path, str):
                 projects[project_id]["files"].append(file_path)
-        return [projects[project_id] for project_id in order]
+        return [
+            ProjectInfo(
+                id=projects[project_id]["id"],
+                name=projects[project_id]["name"],
+                instructions=projects[project_id]["instructions"],
+                agent_config=projects[project_id]["agent_config"],
+                created_at=projects[project_id]["created_at"],
+                updated_at=projects[project_id]["updated_at"],
+                files=projects[project_id]["files"],
+            )
+            for project_id in order
+        ]

@@ -1,3 +1,12 @@
-"""Shared sentinel for partial update operations."""
+"""Shared typed sentinel for partial update operations."""
 
-UNSET = object()
+from enum import Enum
+
+
+class UnsetType(Enum):
+    """Sentinel used to distinguish omitted fields from explicit None."""
+
+    TOKEN = "UNSET"
+
+
+UNSET = UnsetType.TOKEN

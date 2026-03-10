@@ -1,14 +1,14 @@
 """Built-in ContextProvider for project-level instructions."""
 
 from core.extensions.contract import TurnContext
-from core.extensions.router import MessageRouter
+from core.extensions.persistence.project_service import ProjectService
 
 
 class ProjectInstructionsContextProvider:
     """Inject project instructions for the current session before memory context."""
 
-    def __init__(self, router: MessageRouter) -> None:
-        self._router = router
+    def __init__(self, project_service: ProjectService) -> None:
+        self._project_service = project_service
 
     @property
     def context_priority(self) -> int:
@@ -18,7 +18,7 @@ class ProjectInstructionsContextProvider:
         session_id = turn_context.session_id
         if not session_id:
             return None
-        instructions = await self._router.get_project_instructions(session_id)
+        instructions = self._project_service.get_project_instructions(session_id)
         if not instructions:
             return None
         return "[Project Instructions]\n" + instructions.strip()

@@ -3,9 +3,10 @@
 import uuid
 from typing import Any
 
-from core.extensions.project_repository import ProjectRepository
-from core.extensions.session_repository import SessionRepository
-from core.extensions.update_fields import UNSET
+from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.project_repository import ProjectRepository
+from core.extensions.persistence.session_repository import SessionRepository
+from core.extensions.update_fields import UNSET, UnsetType
 
 
 class ProjectService:
@@ -28,7 +29,7 @@ class ProjectService:
         files: list[str] | None,
         now_ts: int,
         project_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ProjectInfo:
         return self._projects.create_project(
             project_id=project_id or f"proj_{uuid.uuid4().hex}",
             name=name,
@@ -38,22 +39,22 @@ class ProjectService:
             now_ts=now_ts,
         )
 
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(self) -> list[ProjectInfo]:
         return self._projects.list_projects()
 
-    def get_project(self, project_id: str) -> dict[str, Any] | None:
+    def get_project(self, project_id: str) -> ProjectInfo | None:
         return self._projects.get_project(project_id)
 
     def update_project(
         self,
         project_id: str,
         *,
-        name: str | object = UNSET,
-        instructions: str | None | object = UNSET,
-        agent_config: dict[str, Any] | None | object = UNSET,
-        files: list[str] | object = UNSET,
+        name: str | UnsetType = UNSET,
+        instructions: str | None | UnsetType = UNSET,
+        agent_config: dict[str, Any] | None | UnsetType = UNSET,
+        files: list[str] | UnsetType = UNSET,
         now_ts: int,
-    ) -> dict[str, Any] | None:
+    ) -> ProjectInfo | None:
         return self._projects.update_project(
             project_id,
             name=name,
@@ -68,7 +69,19 @@ class ProjectService:
 
     def bind_session(
         self, session_id: str, project_id: str | None
-    ) -> dict[str, Any] | None:
+    ) -> SessionInfo | None:
         if project_id is not None and self._projects.get_project(project_id) is None:
             raise ValueError(f"Project {project_id} not found")
         return self._sessions.update_session(session_id, project_id=project_id)
+
+    def get_project_instructions(self, session_id: str) -> str | None:
+        session = self._sessions.get_session(session_id, include_archived=True)
+        if session is None or not session.project_id:
+            return None
+        project = self._projects.get_project(session.project_id)
+        if project is None:
+            return None
+        instructions = project.instructions
+        if isinstance(instructions, str) and instructions.strip():
+            return instructions
+        return None

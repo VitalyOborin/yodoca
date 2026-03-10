@@ -1,7 +1,7 @@
-"""Built-in ContextProvider: injects current channel identity and available channels into the system prompt."""
+"""Built-in ContextProvider: inject current channel identity and channels."""
 
 from core.extensions.contract import TurnContext
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 
 class ActiveChannelContextProvider:
@@ -30,7 +30,7 @@ class ActiveChannelContextProvider:
         return (
             "[Available Channels]\n"
             + "\n".join(lines)
-            + "\n\nUse send_to_channel(channel_id=\"...\", text=\"...\") directly. "
+            + '\n\nUse send_to_channel(channel_id="...", text="...") directly. '
             "Do not call list_channels — use channel IDs from this list."
         )
 

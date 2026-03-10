@@ -7,9 +7,9 @@ import time
 from croniter import croniter
 
 from core.extensions.contract import ExtensionState, SchedulerProvider
-from core.extensions.lifecycle import TaskSupervisor
+from core.extensions.loader.lifecycle import TaskSupervisor
 from core.extensions.manifest import ExtensionManifest
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 logger = logging.getLogger(__name__)
 

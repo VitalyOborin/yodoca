@@ -19,10 +19,10 @@ from core.extensions.contract import (
     ServiceProvider,
     ToolProvider,
 )
-from core.extensions.event_wiring import EventWiringManager
+from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.loader import Loader, ExtensionState
 from core.extensions.manifest import ExtensionManifest
-from core.extensions.router import MessageRouter
+from core.extensions.routing.router import MessageRouter
 
 
 _EMPTY_SETTINGS: dict = {"extensions": {}}
