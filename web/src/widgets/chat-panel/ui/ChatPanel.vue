@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { AlertCircle, CheckCircle2, LoaderCircle, PauseCircle } from 'lucide-vue-next';
+import { onClickOutside } from '@vueuse/core';
+import { AlertCircle, CheckCircle2, Ellipsis, LoaderCircle, PauseCircle } from 'lucide-vue-next';
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
 import { useAgentStore } from '@/entities/agent';
 import { SendMessageForm } from '@/features/send-message';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Button } from '@/components/ui/button';
 
 const threadStore = useThreadStore();
 const messageStore = useMessageStore();
@@ -14,6 +14,8 @@ const agentStore = useAgentStore();
 
 const scrollContainer = ref<HTMLElement | null>(null);
 const composerFooter = ref<HTMLElement | null>(null);
+const menuRef = ref<HTMLElement | null>(null);
+const menuOpen = ref(false);
 const messagesBottomInset = ref(176);
 const pendingTimers = new Set<number>();
 let footerResizeObserver: ResizeObserver | null = null;
@@ -22,30 +24,6 @@ const currentMessages = computed(() => {
   if (!threadStore.activeThreadId) return [];
   return messageStore.getThreadMessages(threadStore.activeThreadId);
 });
-
-const phaseBadgeClass = computed(() => {
-  const map = {
-    idle: 'text-muted-foreground border-border bg-secondary/50',
-    thinking: 'text-primary border-primary/35 bg-primary/10',
-    acting: 'text-cyan-300 border-cyan-400/30 bg-cyan-500/10',
-    waiting_input: 'text-amber-300 border-amber-400/30 bg-amber-500/10',
-    error: 'text-destructive border-destructive/35 bg-destructive/10',
-    complete: 'text-emerald-300 border-emerald-400/30 bg-emerald-500/10',
-  } as const;
-  return map[agentStore.phase];
-});
-
-function phaseLabel() {
-  const map = {
-    idle: 'Idle',
-    thinking: 'Thinking',
-    acting: 'Executing',
-    waiting_input: 'Needs input',
-    error: 'Error',
-    complete: 'Complete',
-  } as const;
-  return map[agentStore.phase];
-}
 
 function queueTimeout(callback: () => void, delay: number): Promise<void> {
   return new Promise((resolve) => {
@@ -69,6 +47,26 @@ function updateMessagesInset() {
   const footerHeight = composerFooter.value?.offsetHeight ?? 0;
   messagesBottomInset.value = Math.max(176, footerHeight + 16);
 }
+
+function archiveCurrentThread() {
+  const activeThread = threadStore.activeThread;
+  if (!activeThread) return;
+
+  if (!activeThread.title.startsWith('Archived: ')) {
+    threadStore.renameThread(activeThread.id, `Archived: ${activeThread.title}`);
+  }
+  menuOpen.value = false;
+}
+
+function deleteCurrentThread() {
+  if (!threadStore.activeThreadId) return;
+  threadStore.deleteThread(threadStore.activeThreadId);
+  menuOpen.value = false;
+}
+
+onClickOutside(menuRef, () => {
+  menuOpen.value = false;
+});
 
 watch(
   () => currentMessages.value.length,
@@ -157,18 +155,35 @@ onMounted(() => {
           </h1>
         </div>
 
-        <div class="flex items-center gap-2">
-          <span class="rounded-full border px-2.5 py-1 text-xs" :class="phaseBadgeClass">{{ phaseLabel() }}</span>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            class="focus-ring"
-            :disabled="agentStore.phase !== 'waiting_input'"
-            @click="agentStore.setPhase('idle')"
+        <div ref="menuRef" class="relative">
+          <button
+            type="button"
+            class="focus-ring inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground/80 transition-colors hover:bg-white/10 hover:text-white"
+            aria-label="Thread actions"
+            @click="menuOpen = !menuOpen"
           >
-            Resume
-          </Button>
+            <Ellipsis class="h-4 w-4" />
+          </button>
+
+          <div
+            v-if="menuOpen"
+            class="glass-panel absolute top-10 right-0 z-20 min-w-40 rounded-lg border border-border bg-card/95 p-1.5"
+          >
+            <button
+              type="button"
+              class="focus-ring block w-full rounded-md px-3 py-2 text-left text-sm text-foreground/85 transition-colors hover:bg-white/10 hover:text-white"
+              @click="archiveCurrentThread"
+            >
+              Архивировать
+            </button>
+            <button
+              type="button"
+              class="focus-ring block w-full rounded-md px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/15"
+              @click="deleteCurrentThread"
+            >
+              Удалить
+            </button>
+          </div>
         </div>
       </div>
     </header>

@@ -94,10 +94,6 @@ function saveTitle() {
       </div>
 
       <div class="flex items-start gap-1">
-        <span class="rounded-full border border-border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          {{ thread.messageCount }}
-        </span>
-
         <div
           :class="
             cn(
