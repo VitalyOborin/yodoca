@@ -55,8 +55,8 @@ function saveTitle() {
       cn(
         'group rounded-lg border px-3 py-2 transition-colors',
         props.active
-          ? 'border-primary/50 bg-primary/12 text-foreground'
-          : 'border-border bg-secondary/35 text-foreground hover:border-primary/35 hover:bg-secondary/70',
+          ? 'border-primary/40 bg-primary/10 text-foreground'
+          : 'border-transparent text-foreground hover:bg-secondary/50',
       )
     "
   >

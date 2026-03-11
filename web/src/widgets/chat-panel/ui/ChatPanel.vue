@@ -149,7 +149,6 @@ onMounted(() => {
     <header class="border-b border-border px-4 py-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="min-w-0">
-          <p class="text-xs uppercase tracking-[0.2em] text-muted-foreground">Thread</p>
           <h1 class="truncate text-lg font-semibold text-foreground">
             {{ threadStore.activeThread?.title ?? 'Select a conversation' }}
           </h1>

@@ -40,10 +40,7 @@ const groupedThreads = computed(() => {
   <aside class="surface-panel hidden h-full w-[320px] shrink-0 flex-col border-r border-border lg:flex">
     <div class="border-b border-border px-4 py-4">
       <div class="flex items-center justify-between gap-2">
-        <div>
-          <p class="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Threads</p>
-          <h2 class="mt-1 text-base font-semibold text-foreground">Conversation inbox</h2>
-        </div>
+        <h2 class="text-base font-semibold text-foreground">Threads</h2>
 
         <Button
           variant="secondary"
