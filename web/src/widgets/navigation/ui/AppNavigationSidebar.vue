@@ -12,7 +12,6 @@ const navItems = [
   { id: 'projects', label: 'Projects', icon: FolderKanban },
   { id: 'schedule', label: 'Schedule', icon: CalendarClock },
   { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'settings', label: 'Settings', icon: Settings },
 ] as const;
 </script>
 
@@ -59,9 +58,24 @@ const navItems = [
       </nav>
     </TooltipProvider>
 
-    <div class="mt-auto rounded-lg border border-border bg-secondary/60 p-3">
-      <p class="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Trust level</p>
-      <p class="mt-1 text-sm text-foreground">Progressive authorization</p>
-    </div>
+    <TooltipProvider :delay-duration="80">
+      <div class="mt-auto">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <button
+              type="button"
+              :class="[
+                'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-white/8 hover:text-foreground',
+                expanded ? 'w-full justify-start' : 'w-full justify-center',
+              ]"
+            >
+              <Settings class="h-4 w-4 shrink-0" />
+              <span v-if="expanded" class="truncate">Settings</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent v-if="!expanded" side="right">Settings</TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
   </aside>
 </template>
