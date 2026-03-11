@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { AlertCircle, CheckCircle2, LoaderCircle, PauseCircle } from 'lucide-vue-next';
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
@@ -13,7 +13,10 @@ const messageStore = useMessageStore();
 const agentStore = useAgentStore();
 
 const scrollContainer = ref<HTMLElement | null>(null);
+const composerFooter = ref<HTMLElement | null>(null);
+const messagesBottomInset = ref(176);
 const pendingTimers = new Set<number>();
+let footerResizeObserver: ResizeObserver | null = null;
 
 const currentMessages = computed(() => {
   if (!threadStore.activeThreadId) return [];
@@ -60,6 +63,11 @@ function scrollToBottom() {
     const el = scrollContainer.value;
     if (el) el.scrollTop = el.scrollHeight;
   });
+}
+
+function updateMessagesInset() {
+  const footerHeight = composerFooter.value?.offsetHeight ?? 0;
+  messagesBottomInset.value = Math.max(176, footerHeight + 16);
 }
 
 watch(
@@ -121,6 +129,20 @@ onBeforeUnmount(() => {
     clearTimeout(timer);
   }
   pendingTimers.clear();
+  footerResizeObserver?.disconnect();
+  footerResizeObserver = null;
+});
+
+onMounted(() => {
+  nextTick(() => {
+    updateMessagesInset();
+    if (!composerFooter.value) return;
+
+    footerResizeObserver = new ResizeObserver(() => {
+      updateMessagesInset();
+    });
+    footerResizeObserver.observe(composerFooter.value);
+  });
 });
 </script>
 
@@ -152,7 +174,11 @@ onBeforeUnmount(() => {
     </header>
 
     <ScrollArea class="min-h-0 flex-1">
-      <div ref="scrollContainer" class="mx-auto w-full max-w-[760px] space-y-1 px-4 pt-4 pb-44">
+      <div
+        ref="scrollContainer"
+        class="mx-auto w-full max-w-[760px] space-y-1 px-4 pt-4"
+        :style="{ paddingBottom: `${messagesBottomInset}px` }"
+      >
         <div
           v-if="currentMessages.length === 0"
           class="rounded-xl border border-border bg-secondary/40 px-4 py-6 text-center"
@@ -166,7 +192,7 @@ onBeforeUnmount(() => {
       </div>
     </ScrollArea>
 
-    <footer class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
+    <footer ref="composerFooter" class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
       <div class="pointer-events-auto mx-auto w-full max-w-[760px]">
         <div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
           <LoaderCircle v-if="agentStore.phase === 'thinking' || agentStore.phase === 'acting'" class="h-3.5 w-3.5 animate-spin" />
