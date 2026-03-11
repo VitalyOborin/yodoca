@@ -55,7 +55,7 @@ function handleSend(content: string) {
 </script>
 
 <template>
-  <main class="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
+  <main class="relative flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
     <header class="shrink-0 border-b border-white/10 px-4 py-4 sm:px-6 lg:px-8">
       <div class="mb-4 flex flex-wrap gap-2">
         <span
@@ -91,7 +91,7 @@ function handleSend(content: string) {
 
     <div
       ref="scrollContainer"
-      class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 lg:px-8"
+      class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-56 sm:px-6 sm:pt-6 lg:px-8"
     >
       <div
         class="mesh-card mb-6 rounded-[1.8rem] border border-white/10 p-5 text-foreground sm:p-6"
@@ -192,8 +192,10 @@ function handleSend(content: string) {
       </div>
     </div>
 
-    <div class="shrink-0 border-t border-white/10 px-4 py-4 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-4xl">
+    <div class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4 pt-12 sm:px-6 lg:px-8"
+      style="background: linear-gradient(to bottom, transparent, rgb(16 20 32 / 0.85) 40%, rgb(16 20 32 / 0.95))"
+    >
+      <div class="pointer-events-auto mx-auto max-w-4xl">
         <SendMessageForm @send="handleSend" />
       </div>
     </div>

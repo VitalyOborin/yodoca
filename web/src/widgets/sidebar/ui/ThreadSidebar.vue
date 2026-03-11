@@ -39,7 +39,7 @@ const groupedThreads = computed(() => {
 
 <template>
   <aside
-    class="mesh-card flex shrink-0 flex-col border-b border-white/10 lg:sticky lg:top-0 lg:h-full lg:w-[340px] lg:min-w-[340px] lg:self-start lg:border-r lg:border-b-0"
+    class="mesh-card flex shrink-0 flex-col border-b border-white/10 lg:h-full lg:w-[340px] lg:min-w-[340px] lg:shrink lg:overflow-hidden lg:border-r lg:border-b-0"
   >
     <div class="px-4 pt-4 pb-3 sm:px-5 lg:px-6 lg:pt-6">
       <div class="mb-5 flex items-start justify-between gap-4">
@@ -117,7 +117,7 @@ const groupedThreads = computed(() => {
       </TooltipProvider>
     </div>
 
-    <ScrollArea class="flex-1 px-3 pb-4 sm:px-4 lg:px-5">
+    <ScrollArea class="min-h-0 flex-1 px-3 pb-4 sm:px-4 lg:px-5">
       <nav class="flex flex-col gap-4">
         <section v-for="group in groupedThreads" :key="group.label" class="flex flex-col gap-2">
           <div class="px-1">
