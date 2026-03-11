@@ -1,19 +1,29 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { Bot, CalendarClock, FolderKanban, Inbox, MessageSquareText, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const STORAGE_KEY = 'yodoca.nav.expanded';
 const expanded = ref(false);
+const route = useRoute();
+const router = useRouter();
 
 const navItems = [
-  { id: 'chat', label: 'Chat', icon: MessageSquareText },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
-  { id: 'projects', label: 'Projects', icon: FolderKanban },
-  { id: 'schedule', label: 'Schedule', icon: CalendarClock },
-  { id: 'agents', label: 'Agents', icon: Bot },
+  { id: 'chat', label: 'Chat', icon: MessageSquareText, path: '/chat' },
+  { id: 'inbox', label: 'Inbox', icon: Inbox, path: '/inbox' },
+  { id: 'projects', label: 'Projects', icon: FolderKanban, path: '/projects' },
+  { id: 'schedule', label: 'Schedule', icon: CalendarClock, path: '/schedule' },
+  { id: 'agents', label: 'Agents', icon: Bot, path: '/agents' },
 ] as const;
+
+const currentPath = computed(() => route.path);
+
+function navigateTo(path: string) {
+  if (route.path === path) return;
+  void router.push(path);
+}
 
 onMounted(() => {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -54,11 +64,12 @@ watch(expanded, (value) => {
               type="button"
               :class="[
                 'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm transition-colors',
-                item.id === 'chat'
+                currentPath === item.path
                   ? 'bg-black/45 text-white'
                   : 'text-foreground/80 hover:bg-white/10 hover:text-white',
                 expanded ? 'justify-start' : 'justify-center',
               ]"
+              @click="navigateTo(item.path)"
             >
               <component :is="item.icon" class="h-4 w-4 shrink-0" />
               <span v-if="expanded" class="truncate">{{ item.label }}</span>

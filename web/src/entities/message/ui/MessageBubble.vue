@@ -14,7 +14,7 @@ const renderedMarkdown = computed(() => renderMarkdown(props.message.content));
   <div :class="['animate-enter py-2', message.role === 'user' ? 'flex justify-end' : '']">
     <article
       v-if="message.role === 'user'"
-      class="max-w-[88%] rounded-2xl rounded-br-sm border border-primary/30 bg-[rgb(124_106_255_/_0.1)] px-4 py-3 text-sm text-foreground sm:max-w-[78%]"
+      class="max-w-[88%] rounded-xl border border-[rgb(124_106_255_/_0.2)] bg-[rgb(124_106_255_/_0.1)] px-4 py-3 text-sm text-foreground sm:max-w-[78%]"
     >
       <p class="whitespace-pre-wrap leading-6">{{ message.content }}</p>
     </article>
