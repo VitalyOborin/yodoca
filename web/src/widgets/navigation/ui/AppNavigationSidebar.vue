@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { Bot, CalendarClock, FolderKanban, Inbox, MessageSquareText, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
+const STORAGE_KEY = 'yodoca.nav.expanded';
 const expanded = ref(false);
 
 const navItems = [
@@ -13,6 +14,16 @@ const navItems = [
   { id: 'schedule', label: 'Schedule', icon: CalendarClock },
   { id: 'agents', label: 'Agents', icon: Bot },
 ] as const;
+
+onMounted(() => {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved === '1') expanded.value = true;
+  if (saved === '0') expanded.value = false;
+});
+
+watch(expanded, (value) => {
+  localStorage.setItem(STORAGE_KEY, value ? '1' : '0');
+});
 </script>
 
 <template>
@@ -23,11 +34,11 @@ const navItems = [
     ]"
   >
     <div class="mb-4 flex items-center" :class="expanded ? 'justify-between' : 'justify-center'">
-      <span v-if="expanded" class="text-sm font-semibold tracking-wide text-foreground">Yodoca</span>
+      <span v-if="expanded" class="text-sm font-semibold tracking-wide text-white">Yodoca</span>
       <Button
         variant="ghost"
         size="icon"
-        class="focus-ring h-9 w-9 rounded-xl text-muted-foreground hover:bg-white/8 hover:text-foreground"
+        class="focus-ring h-9 w-9 rounded-xl text-foreground/80 hover:bg-white/10 hover:text-white"
         @click="expanded = !expanded"
       >
         <PanelLeftClose v-if="expanded" class="h-4 w-4" />
@@ -44,8 +55,8 @@ const navItems = [
               :class="[
                 'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm transition-colors',
                 item.id === 'chat'
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-muted-foreground hover:bg-white/8 hover:text-foreground',
+                  ? 'bg-black/45 text-white'
+                  : 'text-foreground/80 hover:bg-white/10 hover:text-white',
                 expanded ? 'justify-start' : 'justify-center',
               ]"
             >
@@ -65,7 +76,7 @@ const navItems = [
             <button
               type="button"
               :class="[
-                'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-white/8 hover:text-foreground',
+                'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm text-foreground/80 transition-colors hover:bg-white/10 hover:text-white',
                 expanded ? 'w-full justify-start' : 'w-full justify-center',
               ]"
             >
