@@ -4,7 +4,6 @@ import asyncio
 import logging
 
 from ddgs import DDGS
-
 from interfaces import SearchResult, domain_matches
 
 logger = logging.getLogger(__name__)

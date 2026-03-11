@@ -1,10 +1,11 @@
 """Tests for ExtensionManifest and load_manifest."""
 
-import pytest
 from pathlib import Path
 
-from core.extensions.manifest import ExtensionManifest, load_manifest
+import pytest
 from pydantic import ValidationError
+
+from core.extensions.manifest import ExtensionManifest, load_manifest
 
 
 class TestExtensionManifest:

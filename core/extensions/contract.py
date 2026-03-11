@@ -92,7 +92,7 @@ class TurnContext:
     agent_id: str | None = None
     channel_id: str | None = None
     user_id: str | None = None
-    session_id: str | None = None
+    thread_id: str | None = None
 
 
 @runtime_checkable
@@ -171,3 +171,4 @@ class AgentProvider(Protocol):
         self, task: str, context: AgentInvocationContext | None = None
     ) -> AgentResponse:
         """Execute a task and return structured result."""
+

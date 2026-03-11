@@ -2,9 +2,8 @@
 
 import logging
 
-from tavily import AsyncTavilyClient
-
 from interfaces import ReadResult, SearchResult
+from tavily import AsyncTavilyClient
 
 logger = logging.getLogger(__name__)
 

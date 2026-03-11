@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Provenance
     source_type      TEXT,     -- conversation | tool_result | extraction | consolidation
     source_role      TEXT,     -- user | orchestrator | <agent_id>
-    session_id       TEXT,     -- links episodic nodes to their conversation session
+    thread_id       TEXT,     -- links episodic nodes to their conversation thread
 
     -- Extensible metadata
     attributes       TEXT DEFAULT '{}'
@@ -88,10 +88,10 @@ CREATE TABLE IF NOT EXISTS maintenance_metadata (
 );
 
 -- ==========================================================================
--- Session consolidation tracking
+-- Thread consolidation tracking
 -- ==========================================================================
-CREATE TABLE IF NOT EXISTS sessions_consolidations (
-    session_id       TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS thread_consolidations (
+    thread_id       TEXT PRIMARY KEY,
     first_seen_at    INTEGER NOT NULL,
     consolidated_at  INTEGER
 );
@@ -103,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
 CREATE INDEX IF NOT EXISTS idx_nodes_event_time ON nodes(event_time);
 CREATE INDEX IF NOT EXISTS idx_nodes_valid ON nodes(valid_from, valid_until);
 CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
-CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_thread ON nodes(thread_id);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation_type);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
@@ -148,3 +148,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
     entity_id TEXT PRIMARY KEY,
     embedding float[256]
 );
+

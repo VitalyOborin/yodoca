@@ -4,7 +4,7 @@ info:
   version: 0.4.0
   description: >
     OpenAPI specification for the experimental web channel API with first-class
-    session and project resources.
+    thread and project resources.
 servers:
   - url: http://127.0.0.1:8080
     description: Local default
@@ -12,7 +12,7 @@ tags:
   - name: openai-compatible
   - name: ag-ui
   - name: system
-  - name: sessions
+  - name: threads
   - name: projects
   - name: notifications
 paths:
@@ -38,7 +38,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - $ref: "#/components/parameters/XSessionId"
+        - $ref: "#/components/parameters/XThreadId"
       requestBody:
         required: true
         content:
@@ -70,7 +70,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - $ref: "#/components/parameters/XSessionId"
+        - $ref: "#/components/parameters/XThreadId"
       requestBody:
         required: true
         content:
@@ -106,7 +106,7 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - $ref: "#/components/parameters/XSessionId"
+        - $ref: "#/components/parameters/XThreadId"
       requestBody:
         required: true
         content:
@@ -144,30 +144,30 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/sessions:
+  /api/threads:
     get:
-      tags: [sessions]
-      summary: List sessions
+      tags: [threads]
+      summary: List threads
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Session list
+          description: Thread list
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  sessions:
+                  threads:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Session"
-                required: [sessions]
+                      $ref: "#/components/schemas/Thread"
+                required: [threads]
         "401":
           $ref: "#/components/responses/UnauthorizedError"
     post:
-      tags: [sessions]
-      summary: Create session
+      tags: [threads]
+      summary: Create thread
       security:
         - bearerAuth: []
       requestBody:
@@ -175,55 +175,55 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateSessionRequest"
+              $ref: "#/components/schemas/CreateThreadRequest"
       responses:
         "200":
-          description: Created session
+          description: Created thread
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  session:
-                    $ref: "#/components/schemas/Session"
-                required: [session]
+                  thread:
+                    $ref: "#/components/schemas/Thread"
+                required: [thread]
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-  /api/sessions/{session_id}:
+  /api/threads/{thread_id}:
     get:
-      tags: [sessions]
-      summary: Get session metadata and history
+      tags: [threads]
+      summary: Get thread metadata and history
       security:
         - bearerAuth: []
       parameters:
-        - name: session_id
+        - name: thread_id
           in: path
           required: true
           schema:
             type: string
       responses:
         "200":
-          description: Session metadata and history
+          description: Thread metadata and history
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SessionDetailResponse"
+                $ref: "#/components/schemas/ThreadDetailResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
         "404":
           $ref: "#/components/responses/NotFoundError"
     patch:
-      tags: [sessions]
-      summary: Update session metadata
+      tags: [threads]
+      summary: Update thread metadata
       description: >
-        `is_archived=true` hides the session from default listings without
+        `is_archived=true` hides the thread from default listings without
         deleting `agent_messages`. Restore with `is_archived=false`.
       security:
         - bearerAuth: []
       parameters:
-        - name: session_id
+        - name: thread_id
           in: path
           required: true
           schema:
@@ -233,18 +233,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpdateSessionRequest"
+              $ref: "#/components/schemas/UpdateThreadRequest"
       responses:
         "200":
-          description: Updated session
+          description: Updated thread
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  session:
-                    $ref: "#/components/schemas/Session"
-                required: [session]
+                  thread:
+                    $ref: "#/components/schemas/Thread"
+                required: [thread]
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
@@ -252,15 +252,15 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
     delete:
-      tags: [sessions]
-      summary: Archive session
+      tags: [threads]
+      summary: Archive thread
       description: >
-        Soft-archives the session. History is preserved and can be restored with
-        `PATCH /api/sessions/{session_id}` and `is_archived=false`.
+        Soft-archives the thread. History is preserved and can be restored with
+        `PATCH /api/threads/{thread_id}` and `is_archived=false`.
       security:
         - bearerAuth: []
       parameters:
-        - name: session_id
+        - name: thread_id
           in: path
           required: true
           schema:
@@ -387,8 +387,8 @@ paths:
       tags: [projects]
       summary: Delete project
       description: >
-        Deletes the project and unlinks bound sessions via the
-        `sessions.project_id` foreign key.
+        Deletes the project and unlinks bound threads via the
+        `threads.project_id` foreign key.
       security:
         - bearerAuth: []
       parameters:
@@ -439,11 +439,11 @@ components:
       scheme: bearer
       bearerFormat: APIKey
   parameters:
-    XSessionId:
-      name: X-Session-Id
+    XThreadId:
+      name: X-Thread-Id
       in: header
       required: false
-      description: Optional session identifier for routing into an existing chat session.
+      description: Optional thread identifier for routing into an existing conversation thread.
       schema:
         type: string
   responses:
@@ -609,7 +609,7 @@ components:
         status: { type: string, enum: [ok] }
         uptime_seconds: { type: integer, minimum: 0 }
       required: [status, uptime_seconds]
-    Session:
+    Thread:
       type: object
       properties:
         id: { type: string }
@@ -620,24 +620,24 @@ components:
         last_active_at: { type: integer }
         is_archived: { type: boolean }
       required: [id, channel_id, created_at, last_active_at, is_archived]
-    SessionDetailResponse:
+    ThreadDetailResponse:
       type: object
       properties:
-        session:
-          $ref: "#/components/schemas/Session"
+        thread:
+          $ref: "#/components/schemas/Thread"
         history:
           type: array
           items:
             type: object
             additionalProperties: true
-      required: [session, history]
-    CreateSessionRequest:
+      required: [thread, history]
+    CreateThreadRequest:
       type: object
       properties:
         id: { type: string, nullable: true }
         project_id: { type: string, nullable: true }
         title: { type: string, nullable: true }
-    UpdateSessionRequest:
+    UpdateThreadRequest:
       type: object
       properties:
         title: { type: string, nullable: true }
@@ -722,7 +722,7 @@ components:
       properties:
         threadId:
           type: string
-          description: Conversation thread identifier (maps to session_id)
+          description: Conversation thread identifier (maps to thread_id)
         runId:
           type: string
           description: Unique ID for this agent run
@@ -772,3 +772,4 @@ components:
         state: {}
         forwardedProps: {}
       required: [threadId, runId]
+

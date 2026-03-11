@@ -36,7 +36,7 @@ Add a new endpoint `POST /agent` that implements the AG-UI protocol over SSE. Th
 - Accepts `RunAgentInput`-shaped JSON (threadId, runId, messages, tools, context, state, forwardedProps)
 - Returns `text/event-stream` with AG-UI event types
 - Uses the same busy guard and RequestBridge as existing streaming endpoints
-- Maps AG-UI `threadId` to Yodoca `session_id` for session continuity
+- Maps AG-UI `threadId` to Yodoca `thread_id` for session continuity
 
 ### 2) Event mapping
 
@@ -83,3 +83,4 @@ Update `docs/api/web-channel-openapi.yaml` with the new path, request/response s
 - Route handler: `sandbox/extensions/web_channel/routes_agui.py`
 - Models: `AgUIRunRequest` and related types in `models.py`
 - OpenAPI: `POST /agent` path and schemas in `docs/api/web-channel-openapi.yaml`
+

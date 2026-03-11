@@ -11,7 +11,7 @@ The predecessor project (assistant3) implemented a cognitive memory system, that
 
 | Aspect in 003-memory                              | Why it was excessive                                                                                                                                                                                                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 5 cognitive layers                                | **Session memory** (conversation context within one discussion) is handled by [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) (SQLAlchemySession). Procedural and Opinion are `fact` with different tags. |
+| 5 cognitive layers                                | **Thread memory** (conversation context within one discussion) is handled by [OpenAI Agents SDK Threads](https://openai.github.io/openai-agents-python/threads/sqlalchemy_session/) (SQLAlchemyThread). Procedural and Opinion are `fact` with different tags. |
 | Edges table (6 relation types)                    | Graph traversal is needed at thousands of entities with multi-dimensional links. A personal agent never reaches that scale.                                                                                                                                        |
 | Bi-temporal model (4 time fields)                 | Enterprise data warehouse pattern, not a personal assistant.                                                                                                                                                                                                       |
 | Causal inference + Event Segmentation in hot path | LLM on every event = expensive, slow, unstable.                                                                                                                                                                                                                    |
@@ -23,18 +23,18 @@ Expert feedback and code analysis converged on a simpler, pragmatic design that 
 
 ## Decision
 
-### 1. Memory Architecture: Session vs Long-term
+### 1. Memory Architecture: Thread vs Long-term
 
-The memory system is split into two distinct layers. **This ADR covers only long-term memory.** Session memory is out of scope.
+The memory system is split into two distinct layers. **This ADR covers only long-term memory.** Thread memory is out of scope.
 
 
 | Layer                | Responsibility                                                                                                                                                                                   | Implementation                                                                                                                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Session memory**   | Conversation context within a single user–agent discussion. Retrieves history before each turn, stores new messages after. Enables multi-turn coherence ("What state is it in?" → "California"). | [OpenAI Agents SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) — `SQLAlchemySession` or `SQLiteSession`. Passed to `Runner.run(agent, prompt, session=session)`. |
+| **Thread memory**   | Conversation context within a single user–agent discussion. Retrieves history before each turn, stores new messages after. Enables multi-turn coherence ("What state is it in?" → "California"). | [OpenAI Agents SDK Threads](https://openai.github.io/openai-agents-python/threads/sqlalchemy_session/) — `SQLAlchemyThread` or `SQLiteThread`. Passed to `Runner.run(agent, prompt, session=session)`. |
 | **Long-term memory** | Cross-session persistence: episodes, facts, preferences, entities. Survives restarts. Enables "What did we discuss about Project Alpha last week?"                                               | Memory extension (this ADR) — `memories` + `entities` tables, EventBus subscriptions, hybrid search.                                                                                                       |
 
 
-**Integration:** The Orchestrator uses SDK Sessions for in-conversation context. The Memory extension injects retrieved long-term context into the system prompt before each agent invocation. The two layers are complementary: Sessions = working context; Memory = durable knowledge.
+**Integration:** The Orchestrator uses SDK Threads for in-conversation context. The Memory extension injects retrieved long-term context into the system prompt before each agent invocation. The two layers are complementary: Threads = working context; Memory = durable knowledge.
 
 ### 2. Design Principles
 
@@ -177,7 +177,7 @@ extract_entities_regex() → resolve_or_create_entity() → update entity_ids
 
 ### 8. Night Consolidation (Memory owns logic; memory_maintenance triggers)
 
-**Consolidation logic lives inside the Memory extension.** Memory exposes consolidation tools (e.g. `get_consolidator_tools()`). The `memory_maintenance` extension implements `SchedulerProvider` with manifest schedules (e.g. `0 3 * * *`); it calls `execute_task("execute_consolidation")` which emits `memory.session_completed` for pending sessions. The consolidator agent (invoked via EventBus) uses Memory tools. Memory is **fully autonomous** — it contains all logic; memory_maintenance only triggers it on schedule.
+**Consolidation logic lives inside the Memory extension.** Memory exposes consolidation tools (e.g. `get_consolidator_tools()`). The `memory_maintenance` extension implements `SchedulerProvider` with manifest schedules (e.g. `0 3 * * *`); it calls `execute_task("execute_consolidation")` which emits `memory.session_completed` for pending threads. The consolidator agent (invoked via EventBus) uses Memory tools. Memory is **fully autonomous** — it contains all logic; memory_maintenance only triggers it on schedule.
 
 ```
 03:00 (memory_maintenance.execute_task) →
@@ -240,7 +240,7 @@ Both handlers call `save_episode(content)` in the hot path.
 
 | Phase            | Scope                                                                                                                                   | Outcome                                                             |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| **1 (1 day)**    | Schema, EventBus/MessageRouter subscriptions, FTS5 search                                                                               | Agent remembers conversations across sessions                       |
+| **1 (1 day)**    | Schema, EventBus/MessageRouter subscriptions, FTS5 search                                                                               | Agent remembers conversations across threads                       |
 | **2 (2–3 days)** | sqlite-vec embeddings, hybrid search with RRF, regex entity extraction; add `memory_entities` junction table when `memories` > 10k rows | Semantic search; entities not duplicated; fast entity-based queries |
 | **3 (1–2 days)** | Decay formula, soft-delete, consolidate() (self_reflection triggers)                                                                    | Memory self-organizes; night reflection works                       |
 | **4 (optional)** | LLM entity resolution when confidence < 0.7                                                                                             | Higher-quality entity anchors                                       |
@@ -257,7 +257,7 @@ Both handlers call `save_episode(content)` in the hot path.
 
 | Aspect              | 003-memory                             | 005-memory                                                                                                     |
 | ------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Session memory      | Part of 5-layer model                  | Delegated to [OpenAI SDK Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) |
+| Thread memory      | Part of 5-layer model                  | Delegated to [OpenAI SDK Threads](https://openai.github.io/openai-agents-python/threads/sqlalchemy_session/) |
 | Tables              | 6 (nodes, edges, entities, FTS, vec×2) | 3 (memories, entities, FTS/vec virtual)                                                                        |
 | Memory layers       | 5                                      | 1 (kind field) for long-term only                                                                              |
 | LLM in hot path     | Yes (slow path per event)              | No                                                                                                             |
@@ -269,7 +269,7 @@ Both handlers call `save_episode(content)` in the hot path.
 
 ### Benefits
 
-- **Clear session vs long-term split** — SDK Sessions handle in-conversation context; Memory extension handles cross-session knowledge. No overlap, no confusion.
+- **Clear session vs long-term split** — SDK Threads handle in-conversation context; Memory extension handles cross-session knowledge. No overlap, no confusion.
 - **Lower complexity** — fewer tables, fewer tools, no LLM in the hot path.
 - **Faster ingestion** — hot path <50ms; no blocking on embeddings or extraction.
 - **Clear separation of concerns** — Memory stores, retrieves, and owns consolidation logic; self_reflection only triggers it on schedule.
@@ -288,14 +288,15 @@ Both handlers call `save_episode(content)` in the hot path.
 ## Relation to Other ADRs
 
 - **ADR 002** — Memory implements `ServiceProvider` + `ToolProvider`; no `SchedulerProvider`. Memory owns consolidation tools; memory_maintenance (SchedulerProvider with manifest schedules) triggers it.
-- **ADR 003** — Orchestrator uses SDK Sessions for session memory; Memory extension enriches context via long-term retrieval.
+- **ADR 003** — Orchestrator uses SDK Threads for session memory; Memory extension enriches context via long-term retrieval.
 - **ADR 004** — Memory subscribes to EventBus `user.message` and MessageRouter `agent_response`. Uses existing pub/sub; no new EventBus topics.
 - **assistant3 003-memory** — Superseded by this simplified design for assistant4.
 
 ## References
 
-- [OpenAI Agents SDK — SQLAlchemy Sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/) — session memory (in-conversation context)
+- [OpenAI Agents SDK — SQLAlchemy Threads](https://openai.github.io/openai-agents-python/threads/sqlalchemy_session/) — session memory (in-conversation context)
 - [event_bus.md](../event_bus.md) — EventBus topics and API
 - [extensions.md](../extensions.md) — Extension protocols and context
 - Minimalist SOTA / Incremental Knowledge Graph — schema-first, JSON for graph links, LLM off hot path
+
 

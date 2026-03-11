@@ -1,36 +1,36 @@
-# ADR 027: Session and Project Domain Model in `session.db`
+# ADR 027: Thread and Project Domain Model in `session.db`
 
 ## Status
 
-Implemented. Superseded by [ADR 028](028-unified-sessions-table.md) for the unified sessions table.
+Implemented. Superseded by [ADR 028](028-unified-threads-table.md) for the unified threads table.
 
 ## Context
 
-Session state was previously split across:
+Thread state was previously split across:
 
-- runtime-only `SessionManager` fields
-- OpenAI Agents SDK `agent_sessions` / `agent_messages`
+- runtime-only `ThreadManager` fields
+- OpenAI Agents SDK `agent_threads` / `agent_messages`
 - `yodoca_session_meta`
-- memory and event-journal payloads that only carried `session_id`
+- memory and event-journal payloads that only carried `thread_id`
 
-This made sessions a technical identifier instead of a first-class domain entity. The web API also exposed session state through conversation-oriented endpoints backed by the in-memory pool instead of durable metadata.
+This made threads a technical identifier instead of a first-class domain entity. The web API also exposed session state through conversation-oriented endpoints backed by the in-memory pool instead of durable metadata.
 
 ## Decision
 
 Introduce two persistent domain entities in `session.db`:
 
-- `sessions` as the canonical metadata index for chat threads
-- `projects` and `project_files` as an aggregate root over sessions
+- `threads` as the canonical metadata index for chat threads
+- `projects` and `project_files` as an aggregate root over threads
 
 Key decisions:
 
 - `session.db` remains the single metadata store colocated with `agent_messages`
-- `SessionRepository` owns schema bootstrap, migration, and CRUD for sessions
+- `ThreadRepository` owns schema bootstrap, migration, and CRUD for threads
 - `ProjectRepository` and `ProjectService` own project persistence and session binding
-- `SessionManager` keeps only runtime `SQLiteSession` lifecycle plus repository synchronization
-- `TurnContext` stays unchanged and continues to carry only `session_id`
+- `ThreadManager` keeps only runtime `SQLiteThread` lifecycle plus repository synchronization
+- `TurnContext` stays unchanged and continues to carry only `thread_id`
 - project instructions are injected through a built-in core `ContextProvider` at priority `10`, between channel context and memory
-- web API uses `/api/sessions` and `/api/projects`; the old conversation terminology is removed instead of preserved
+- web API uses `/api/threads` and `/api/projects`; the old conversation terminology is removed instead of preserved
 
 ## Consequences
 
@@ -44,5 +44,6 @@ Positive:
 Negative:
 
 - this is a clean break for the web API and any conversation-oriented clients
-- startup migration must backfill historical sessions and normalize timestamps
-- `channel_id` for old sessions is only best-effort and defaults to `unknown`
+- startup migration must backfill historical threads and normalize timestamps
+- `channel_id` for old threads is only best-effort and defaults to `unknown`
+

@@ -1,7 +1,6 @@
 """Task Engine extension: ServiceProvider + ToolProvider for multi-step background agent work."""
 
 import asyncio
-import json
 import logging
 import sys
 import time
@@ -14,31 +13,31 @@ if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
 from chains import get_chain_tasks, unblock_successors
+from cleanup import cleanup_old_tasks
+from hitl import request_human_review as hitl_request_human_review
+from hitl import respond_to_review as hitl_respond_to_review
 from models import (
     ActiveTasksResult,
     CancelTaskResult,
+    ChainStatusResult,
     ChainStep,
     ChainTaskInfo,
-    ChainStatusResult,
     SubmitChainResult,
     SubmitTaskResult,
     TaskStatusResult,
 )
 from schema import TaskEngineDb
 from state import json_dumps_unicode
-from cleanup import cleanup_old_tasks
-from hitl import request_human_review as hitl_request_human_review
-from hitl import respond_to_review as hitl_respond_to_review
 from subtasks import (
     MAX_SUBTASK_DEPTH,
     get_subtask_depth,
     try_resume_parent,
     update_parent_checkpoint,
 )
+from task_engine_tools import build_tools
 from task_queries import cancel_task as query_cancel_task
 from task_queries import get_task_status as query_get_task_status
 from task_queries import list_active_tasks as query_list_active_tasks
-from task_engine_tools import build_tools
 from worker import (
     claim_next_task,
     execute_task,
@@ -46,8 +45,8 @@ from worker import (
 )
 
 if TYPE_CHECKING:
-    from core.extensions.contract import AgentProvider
     from core.extensions.context import ExtensionContext
+    from core.extensions.contract import AgentProvider
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ class TaskEngineExtension:
     """ServiceProvider + ToolProvider: task queue, worker loop, tools for Orchestrator."""
 
     def __init__(self) -> None:
-        self._ctx: "ExtensionContext | None" = None
+        self._ctx: ExtensionContext | None = None
         self._db: TaskEngineDb | None = None
         self._registry: Any = None
         self._tick_sec: float = 1.0

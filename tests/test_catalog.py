@@ -3,9 +3,9 @@
 import pytest
 
 from core.llm.catalog import (
-    ModelCatalog,
     VALID_CAPABILITY_TIERS,
     VALID_COST_TIERS,
+    ModelCatalog,
 )
 
 

@@ -152,7 +152,7 @@ class EventWiringManager:
         text = event.payload.get("text", "").strip()
         user_id = event.payload.get("user_id", "default")
         channel_id = event.payload.get("channel_id")
-        session_id = event.payload.get("session_id")
+        thread_id = event.payload.get("thread_id")
         if not text or not channel_id:
             logger.warning("user.message missing text or channel_id: %s", event.payload)
             return
@@ -166,7 +166,7 @@ class EventWiringManager:
             channel,
             channel_id,
             event_id=event.id,
-            session_id=session_id,
+            thread_id=thread_id,
         )
 
     def _make_proactive_handler(
@@ -218,3 +218,4 @@ class EventWiringManager:
         self._wire_notify_user_handlers(event_bus)
         event_bus.subscribe("user.message", self._on_kernel_user_message, "kernel")
         self._wire_proactive_handlers(event_bus)
+

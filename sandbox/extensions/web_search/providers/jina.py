@@ -3,7 +3,6 @@
 import logging
 
 import httpx
-
 from interfaces import ReadResult
 
 logger = logging.getLogger(__name__)

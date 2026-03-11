@@ -36,7 +36,7 @@ def create_app(extension: Any) -> FastAPI:
         allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["Authorization", "Content-Type", "X-Session-Id"],
+        allow_headers=["Authorization", "Content-Type", "X-Thread-Id"],
     )
 
     api_key = extension._config.get("api_key") or ""
@@ -119,3 +119,4 @@ def create_app(extension: Any) -> FastAPI:
     app.include_router(agui_router)
 
     return app
+

@@ -25,7 +25,7 @@ Extensions are **pluggable modules** that extend the system with tools, channels
 ┌──────────────────┐         ┌──────────────────┐         ┌─────────────────────┐
 │     Loader       │         │  MessageRouter   │         │    EventBus         │
 │  - manifests     │         │  - channels      │         │  - durable pub/sub  │
-│  - extensions    │         │  - sessions      │         │  - system topics    │
+│  - extensions    │         │  - threads      │         │  - system topics    │
 │  - lifecycle     │         │  - invoke_agent  │         │  - recovery         │
 │  - protocol      │         │  - notify_user   │         │                     │
 │    detection     │         │  - delivery      │         │                     │
@@ -57,7 +57,7 @@ The startup sequence in `core/runner.py`:
 4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
 5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
 6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
-7. **configure_session** — `router.configure_session()` creates persistent session/project services and the default runtime session
+7. **configure_thread** — `router.configure_thread()` creates persistent thread/project services and the default runtime thread
 8. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
 9. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
 
@@ -228,11 +228,11 @@ Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cac
 The Web Channel extension ([ADR 026](adr/026-web-channel.md)) implements `ChannelProvider`, `StreamingChannelProvider`, and `ServiceProvider` to expose the system over HTTP. It provides:
 
 - OpenAI-compatible endpoints: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`
-- custom REST endpoints under `/api/` for health, sessions, projects, and proactive notification polling
+- custom REST endpoints under `/api/` for health, threads, projects, and proactive notification polling
 - SSE streaming mapped from `StreamingChannelProvider`
 - request/response bridging via `RequestBridge` (single active request guard, future/queue correlation, long-poll notifications)
 
-Unlike CLI and Telegram, `web_channel` can pass `session_id` from the `X-Session-Id` header into `router.handle_user_message(...)`, which activates named session pooling in `SessionManager`.
+Unlike CLI and Telegram, `web_channel` can pass `thread_id` from the `X-Thread-Id` header into `router.handle_user_message(...)`, which activates named session pooling in `ThreadManager`.
 
 See [channels.md](channels.md#web-channel) and [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml).
 
@@ -259,11 +259,11 @@ async def get_context(self, prompt: str, turn_context: TurnContext) -> str | Non
     """Return context string to inject, or None to skip."""
 ```
 
-`TurnContext` is a frozen dataclass with: `agent_id`, `channel_id`, `user_id`, `session_id`. The kernel passes it on every invocation so providers can tailor context (e.g. filter by channel).
+`TurnContext` is a frozen dataclass with: `agent_id`, `channel_id`, `user_id`, `thread_id`. The kernel passes it on every invocation so providers can tailor context (e.g. filter by channel).
 
 Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and returns a **context string** (not an enriched user message).
 
-**Built-in provider:** `_ActiveChannelContextProvider` (priority 0) injects `[Current Session Context]` with channel identity and narrative instructions so the agent knows which channel the user is on.
+**Built-in provider:** `_ActiveChannelContextProvider` (priority 0) injects `[Current Thread Context]` with channel identity and narrative instructions so the agent knows which channel the user is on.
 
 **Two public behaviors:**
 
@@ -372,7 +372,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
 | `get_secret(name)` | Read secret by name (keyring first, then `.env`). Async; use `await ctx.get_secret(name)`. |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
-| `list_sessions()` / `get_session()` / `create_session()` / `update_session()` / `archive_session()` / `get_session_history()` | Persistent session metadata and history access |
+| `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent session metadata and history access |
 | `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
 
 ### Event Bus
@@ -392,7 +392,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
 | `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents. For invoke_agent, context is injected into system role instead. |
-| `on_user_message` | Alias for `router.handle_user_message` (full message cycle, including optional `session_id`) |
+| `on_user_message` | Alias for `router.handle_user_message` (full message cycle, including optional `thread_id`) |
 
 ### System Control
 
@@ -423,7 +423,7 @@ See [event_bus.md](event_bus.md) for full details.
 2. **Kernel** subscribes to `user.message`; calls `router.handle_user_message()`
 3. **MessageRouter** invokes Orchestrator; sends response via `channel.send_to_user()`
 
-`web_channel` may also include `session_id` in the event payload; the router then selects or creates a named runtime session instead of using the default rotated session.
+`web_channel` may also include `thread_id` in the event payload; the router then selects or creates a named runtime session instead of using the default rotated session.
 
 ### Flow: Proactive Agent (e.g. Reminders)
 
@@ -630,3 +630,4 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, manifest, context, `loader/`, `routing/`, `persistence/`
 - `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `web_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `inbox`, `builder_agent`, `simple_agent`
+

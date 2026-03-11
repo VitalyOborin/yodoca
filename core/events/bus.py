@@ -4,8 +4,8 @@ No scheduling, no deferred logic. Use the scheduler extension for time-based eve
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from core.events.journal import EventJournal
 from core.events.models import Event
@@ -152,7 +152,7 @@ class EventBus:
                     self._wake.wait(),
                     timeout=self._poll_interval,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             self._wake.clear()
             if self._stopped:

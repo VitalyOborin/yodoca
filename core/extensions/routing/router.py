@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from core.extensions.contract import ChannelProvider, TurnContext
 from core.extensions.persistence.project_repository import ProjectRepository
 from core.extensions.persistence.project_service import ProjectService
-from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.agent_invoker import AgentInvoker
 from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 from core.extensions.routing.response_delivery import ResponseDeliveryService
@@ -27,7 +27,7 @@ class MessageRouter:
     def __init__(
         self,
         *,
-        session_manager: SessionManager | None = None,
+        thread_manager: ThreadManager | None = None,
         approval_coordinator: ApprovalCoordinator | None = None,
         agent_invoker: AgentInvoker | None = None,
         response_delivery: ResponseDeliveryService | None = None,
@@ -37,13 +37,13 @@ class MessageRouter:
         self._channel_descriptions: dict[str, str] = {}
         self._subscribers: dict[str, list[Callable[..., Any]]] = defaultdict(list)
 
-        self._sessions = session_manager or SessionManager()
+        self._threads = thread_manager or ThreadManager()
         self._approval = approval_coordinator or ApprovalCoordinator(
             approval_timeout=60.0
         )
         self._invoker = agent_invoker or AgentInvoker(
             approval_coordinator=self._approval,
-            session_manager=self._sessions,
+            thread_manager=self._threads,
         )
         self._delivery = response_delivery or ResponseDeliveryService(
             invoker=self._invoker
@@ -55,15 +55,15 @@ class MessageRouter:
 
     @property
     def _session(self) -> Any:
-        return self._sessions.session
+        return self._threads.thread
 
     @property
-    def _session_id(self) -> str | None:
-        return self._sessions.session_id
+    def _thread_id(self) -> str | None:
+        return self._threads.thread_id
 
     @property
-    def session_manager(self) -> SessionManager:
-        return self._sessions
+    def thread_manager(self) -> ThreadManager:
+        return self._threads
 
     @property
     def project_service(self) -> ProjectService | None:
@@ -104,24 +104,24 @@ class MessageRouter:
     ) -> None:
         self._invoker.middleware = middleware
 
-    def set_session(self, session: Any, session_id: str) -> None:
-        self._sessions.set_session(session, session_id)
+    def set_thread(self, thread: Any, thread_id: str) -> None:
+        self._threads.set_thread(thread, thread_id)
 
-    def configure_session(
+    def configure_thread(
         self,
-        session_db_path: str,
-        session_timeout: int,
+        thread_db_path: str,
+        thread_timeout: int,
         event_bus: "EventBus | None" = None,
     ) -> None:
         self._event_bus = event_bus
-        self._sessions.configure_session(
-            session_db_path=session_db_path,
-            session_timeout=session_timeout,
+        self._threads.configure_thread(
+            thread_db_path=thread_db_path,
+            thread_timeout=thread_timeout,
             event_bus=event_bus,
         )
         self._project_service = ProjectService(
-            ProjectRepository(session_db_path),
-            self._sessions.session_repository,
+            ProjectRepository(thread_db_path),
+            self._threads.thread_repository,
         )
         if event_bus:
             self._approval.bind_event_bus(event_bus)
@@ -188,11 +188,11 @@ class MessageRouter:
     ) -> str:
         return await self._invoker.enrich_prompt(prompt, turn_context=turn_context)
 
-    async def _rotate_session(self) -> None:
-        await self._sessions.rotate_session()
+    async def _rotate_thread(self) -> None:
+        await self._threads.rotate_thread()
 
-    async def _maybe_rotate_session(self) -> None:
-        await self._sessions.maybe_rotate()
+    async def _maybe_rotate_thread(self) -> None:
+        await self._threads.maybe_rotate()
 
     async def handle_user_message(
         self,
@@ -201,7 +201,7 @@ class MessageRouter:
         channel: ChannelProvider,
         channel_id: str,
         event_id: int | None = None,
-        session_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         if event_id is not None and self._event_bus:
             if await self._event_bus.is_user_message_completed(event_id):
@@ -211,20 +211,20 @@ class MessageRouter:
                 )
                 return
 
-        effective_session_id: str | None
-        if session_id is not None:
-            session = self._sessions.get_or_create_session(
-                session_id, channel_id=channel_id
+        effective_thread_id: str | None
+        if thread_id is not None:
+            thread = self._threads.get_or_create_thread(
+                thread_id, channel_id=channel_id
             )
-            effective_session_id = session_id
+            effective_thread_id = thread_id
         else:
-            await self._maybe_rotate_session()
-            session = self._sessions.session
-            effective_session_id = self._sessions.session_id
-        if effective_session_id is None:
-            raise RuntimeError("Session ID was not initialized")
-        self._sessions.touch_session(
-            effective_session_id,
+            await self._maybe_rotate_thread()
+            thread = self._threads.thread
+            effective_thread_id = self._threads.thread_id
+        if effective_thread_id is None:
+            raise RuntimeError("Thread ID was not initialized")
+        self._threads.touch_thread(
+            effective_thread_id,
             channel_id=channel_id,
             now_ts=int(time.time()),
         )
@@ -233,7 +233,7 @@ class MessageRouter:
             agent_id=self._invoker.agent_id,
             channel_id=channel_id,
             user_id=user_id,
-            session_id=effective_session_id,
+            thread_id=effective_thread_id,
         )
         await self._emit(
             "user_message",
@@ -241,7 +241,7 @@ class MessageRouter:
                 "text": text,
                 "user_id": user_id,
                 "channel": channel,
-                "session_id": effective_session_id,
+                "thread_id": effective_thread_id,
             },
         )
         response = await self._delivery.deliver(
@@ -249,7 +249,7 @@ class MessageRouter:
             user_id=user_id,
             text=text,
             turn_context=turn_context,
-            session=session,
+            session=thread,
         )
         await self._emit(
             "agent_response",
@@ -257,7 +257,7 @@ class MessageRouter:
                 "user_id": user_id,
                 "text": response,
                 "channel": channel,
-                "session_id": effective_session_id,
+                "thread_id": effective_thread_id,
                 "agent_id": self._invoker.agent_id,
             },
         )
@@ -272,3 +272,4 @@ class MessageRouter:
         if channel is None:
             channel = next(iter(self._channels.values()))
         await channel.send_message(text)
+

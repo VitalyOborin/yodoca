@@ -81,11 +81,11 @@ Durable event journal and polling.
 | `max_bytes` | `10485760` | Max size per log file (bytes). |
 | `backup_count` | `3` | Number of rotated backup files. |
 
-### `session`
+### `thread`
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `timeout_sec` | `1800` | Session timeout in seconds. |
+| `timeout_sec` | `1800` | Thread timeout in seconds. |
 
 ### `supervisor`
 
@@ -184,7 +184,7 @@ logging:
   level: DEBUG
   log_to_console: true
 
-session:
+thread:
   timeout_sec: 3600
 ```
 
@@ -195,3 +195,4 @@ session:
 - [Extensions](extensions.md) — extension contract and `get_config` usage.
 - [Secrets](secrets.md) — API keys and keyring.
 - Onboarding flow — creates initial `config/settings.yaml` and `.env`.
+

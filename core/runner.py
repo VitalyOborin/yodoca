@@ -83,7 +83,7 @@ def _create_agent(
     )
 
 
-def _configure_session_and_context(
+def _configure_thread_and_context(
     router: MessageRouter,
     loader: Loader,
     agent: Any,
@@ -95,12 +95,12 @@ def _configure_session_and_context(
     if mcp_servers:
         agent.mcp_servers = mcp_servers
         agent.mcp_config = {"convert_schemas_to_strict": True}
-    session_timeout = get_setting(settings, "session.timeout_sec", 1800)
-    session_dir = data_dir / "memory"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    router.configure_session(
-        session_db_path=str(session_dir / "session.db"),
-        session_timeout=session_timeout,
+    thread_timeout = get_setting(settings, "thread.timeout_sec", 1800)
+    thread_dir = data_dir / "memory"
+    thread_dir.mkdir(parents=True, exist_ok=True)
+    router.configure_thread(
+        thread_db_path=str(thread_dir / "thread.db"),
+        thread_timeout=thread_timeout,
         event_bus=event_bus,
     )
     loader.wire_context_providers(router)
@@ -121,7 +121,7 @@ async def main_async() -> None:
     await _wire_extensions(loader, router, event_bus)
     agent = _create_agent(loader, router, event_bus, settings, model_router, registry)
     router.set_agent(agent)
-    _configure_session_and_context(router, loader, agent, settings, data_dir, event_bus)
+    _configure_thread_and_context(router, loader, agent, settings, data_dir, event_bus)
     await event_bus.start()
     await loader.start_all()
     lifecycle_task = start_lifecycle_loop(registry, interval_seconds=60.0)

@@ -115,8 +115,8 @@ class HealthResponse(BaseModel):
     uptime_seconds: int
 
 
-class Session(BaseModel):
-    """Persisted session metadata."""
+class Thread(BaseModel):
+    """Persisted thread metadata."""
 
     id: str
     project_id: str | None = None
@@ -127,23 +127,23 @@ class Session(BaseModel):
     is_archived: bool = False
 
 
-class SessionDetailResponse(BaseModel):
-    """GET /api/sessions/{id} response."""
+class ThreadDetailResponse(BaseModel):
+    """GET /api/threads/{id} response."""
 
-    session: Session
+    thread: Thread
     history: list[dict[str, Any]]
 
 
-class CreateSessionRequest(BaseModel):
-    """POST /api/sessions request."""
+class CreateThreadRequest(BaseModel):
+    """POST /api/threads request."""
 
     id: str | None = None
     project_id: str | None = None
     title: str | None = None
 
 
-class UpdateSessionRequest(BaseModel):
-    """PATCH /api/sessions/{id} request."""
+class UpdateThreadRequest(BaseModel):
+    """PATCH /api/threads/{id} request."""
 
     title: str | None = None
     project_id: str | None = None
@@ -226,3 +226,4 @@ class ErrorResponse(BaseModel):
     """Error response body."""
 
     error: dict[str, Any]
+

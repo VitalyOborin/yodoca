@@ -3,7 +3,8 @@
 import logging
 import time
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from agents import function_tool
 from pydantic import BaseModel, Field
@@ -67,15 +68,15 @@ class CausalEdgeInput(BaseModel):
     )
 
 
-class SessionConsolidatedResult(BaseModel):
-    """Result of is_session_consolidated."""
+class ThreadConsolidatedResult(BaseModel):
+    """Result of is_thread_consolidated."""
 
-    session_id: str
+    thread_id: str
     consolidated: bool
 
 
-class SessionEpisodesResult(BaseModel):
-    """Result of get_session_episodes."""
+class ThreadEpisodesResult(BaseModel):
+    """Result of get_thread_episodes."""
 
     episodes: list[dict[str, Any]] = Field(default_factory=list)
     count: int = 0
@@ -106,9 +107,9 @@ class ResolveConflictResult(BaseModel):
 
 
 class MarkConsolidatedResult(BaseModel):
-    """Result of mark_session_consolidated."""
+    """Result of mark_thread_consolidated."""
 
-    session_id: str
+    thread_id: str
     status: str = "consolidated"
 
 
@@ -135,26 +136,26 @@ def build_write_path_tools(
     """Build internal tools for the write-path memory agent."""
 
     @function_tool
-    async def is_session_consolidated(session_id: str) -> SessionConsolidatedResult:
-        """Check if session was already consolidated. Idempotency guard."""
-        result = await storage.is_session_consolidated(session_id)
-        logger.debug("is_session_consolidated(%s) = %s", session_id, result)
-        return SessionConsolidatedResult(session_id=session_id, consolidated=result)
+    async def is_thread_consolidated(thread_id: str) -> ThreadConsolidatedResult:
+        """Check if thread was already consolidated. Idempotency guard."""
+        result = await storage.is_thread_consolidated(thread_id)
+        logger.debug("is_thread_consolidated(%s) = %s", thread_id, result)
+        return ThreadConsolidatedResult(thread_id=thread_id, consolidated=result)
 
     @function_tool
-    async def get_session_episodes(
-        session_id: str,
+    async def get_thread_episodes(
+        thread_id: str,
         limit: int = 30,
         offset: int = 0,
-    ) -> SessionEpisodesResult:
-        """Fetch episodic nodes for a session. Paginated, ordered by event_time."""
-        episodes = await storage.get_session_episodes(
-            session_id, limit=limit, offset=offset
+    ) -> ThreadEpisodesResult:
+        """Fetch episodic nodes for a thread. Paginated, ordered by event_time."""
+        episodes = await storage.get_thread_episodes(
+            thread_id, limit=limit, offset=offset
         )
         logger.debug(
-            "get_session_episodes(%s): returned %d episodes", session_id, len(episodes)
+            "get_thread_episodes(%s): returned %d episodes", thread_id, len(episodes)
         )
-        return SessionEpisodesResult(episodes=episodes, count=len(episodes))
+        return ThreadEpisodesResult(episodes=episodes, count=len(episodes))
 
     @function_tool
     async def save_nodes_batch(nodes: list[NodeInput]) -> SaveBatchResult:
@@ -325,11 +326,11 @@ def build_write_path_tools(
         )
 
     @function_tool
-    async def mark_session_consolidated(session_id: str) -> MarkConsolidatedResult:
-        """Mark session as consolidated. Call only after all extraction is done."""
-        await storage.mark_session_consolidated(session_id)
-        logger.info("mark_session_consolidated: %s", session_id)
-        return MarkConsolidatedResult(session_id=session_id, status="consolidated")
+    async def mark_thread_consolidated(thread_id: str) -> MarkConsolidatedResult:
+        """Mark thread as consolidated. Call only after all extraction is done."""
+        await storage.mark_thread_consolidated(thread_id)
+        logger.info("mark_thread_consolidated: %s", thread_id)
+        return MarkConsolidatedResult(thread_id=thread_id, status="consolidated")
 
     @function_tool
     async def save_causal_edges(edges: list[CausalEdgeInput]) -> SaveCausalEdgesResult:
@@ -377,13 +378,14 @@ def build_write_path_tools(
         return UpdateEntitySummaryResult(entity_id=entity_id, status="updated")
 
     return [
-        is_session_consolidated,
-        get_session_episodes,
+        is_thread_consolidated,
+        get_thread_episodes,
         save_nodes_batch,
         extract_and_link_entities,
         detect_conflicts,
         resolve_conflict,
-        mark_session_consolidated,
+        mark_thread_consolidated,
         save_causal_edges,
         update_entity_summary,
     ]
+

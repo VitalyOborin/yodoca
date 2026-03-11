@@ -4,7 +4,6 @@ import logging
 from urllib.parse import urljoin
 
 import httpx
-
 from interfaces import SearchResult, domain_matches
 
 logger = logging.getLogger(__name__)

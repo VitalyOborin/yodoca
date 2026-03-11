@@ -4,7 +4,6 @@ import logging
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ class BaseExecutor(ABC):
     @abstractmethod
     def execute(
         self, command: str, cwd: Path | str, timeout: int
-    ) -> Tuple[int, str, str]:
+    ) -> tuple[int, str, str]:
         """
         Execute a shell command.
         Returns: (exit_code, stdout, stderr)
@@ -31,7 +30,7 @@ class LocalUnsafeExecutor(BaseExecutor):
 
     def execute(
         self, command: str, cwd: Path | str, timeout: int
-    ) -> Tuple[int, str, str]:
+    ) -> tuple[int, str, str]:
         logger.warning("UNSAFE EXECUTION: %s", command)
         try:
             result = subprocess.run(

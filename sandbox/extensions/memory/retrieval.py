@@ -7,8 +7,9 @@ import math
 import re
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def classify_query_complexity(query: str) -> str:
 def get_adaptive_params(complexity: str) -> dict[str, Any]:
     """Token budget, retrieval depth, and graph depth by complexity."""
     if complexity == "simple":
-        return {"token_budget": 600, "limit": 3, "graph_depth": 2}
+        return {"token_budget": 600, "limit": 5, "graph_depth": 2}
     return {"token_budget": 3000, "limit": 20, "graph_depth": 4}
 
 

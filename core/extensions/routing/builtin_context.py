@@ -42,7 +42,7 @@ class ActiveChannelContextProvider:
         if channels_section:
             parts.append(channels_section)
 
-        # When user is on a specific channel, add session context
+        # When user is on a specific channel, add thread context
         if turn_context.channel_id:
             descriptions = self._router.get_channel_descriptions()
             channel_desc = (
@@ -50,7 +50,7 @@ class ActiveChannelContextProvider:
             )
             user_id = turn_context.user_id or "unknown"
             parts.append(
-                "[Current Session Context]\n"
+                "[Current Thread Context]\n"
                 f"Channel: {turn_context.channel_id} ({channel_desc})\n"
                 f"User ID: {user_id}\n\n"
                 f"IMPORTANT: You are currently communicating with the user through the '{turn_context.channel_id}'. "
@@ -61,3 +61,4 @@ class ActiveChannelContextProvider:
         if not parts:
             return None
         return "\n\n---\n\n".join(parts)
+

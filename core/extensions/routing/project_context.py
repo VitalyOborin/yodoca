@@ -5,7 +5,7 @@ from core.extensions.persistence.project_service import ProjectService
 
 
 class ProjectInstructionsContextProvider:
-    """Inject project instructions for the current session before memory context."""
+    """Inject project instructions for the current thread before memory context."""
 
     def __init__(self, project_service: ProjectService) -> None:
         self._project_service = project_service
@@ -15,10 +15,11 @@ class ProjectInstructionsContextProvider:
         return 10
 
     async def get_context(self, prompt: str, turn_context: TurnContext) -> str | None:
-        session_id = turn_context.session_id
-        if not session_id:
+        thread_id = turn_context.thread_id
+        if not thread_id:
             return None
-        instructions = self._project_service.get_project_instructions(session_id)
+        instructions = self._project_service.get_project_instructions(thread_id)
         if not instructions:
             return None
         return "[Project Instructions]\n" + instructions.strip()
+

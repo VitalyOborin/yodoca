@@ -1,12 +1,12 @@
-"""Typed domain models for session and project persistence."""
+"""Typed domain models for thread and project persistence."""
 
 from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass(frozen=True)
-class SessionInfo:
-    """Stored session metadata."""
+class ThreadInfo:
+    """Stored thread metadata."""
 
     id: str
     project_id: str | None
@@ -50,3 +50,4 @@ class ProjectInfo:
             "updated_at": self.updated_at,
             "files": list(self.files),
         }
+

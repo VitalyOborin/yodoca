@@ -1,4 +1,4 @@
-"""Persistent session metadata and history stored alongside agent_messages."""
+"""Persistent thread metadata and history stored alongside agent_messages."""
 
 import json
 import sqlite3
@@ -6,17 +6,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from core.extensions.persistence.models import SessionInfo
-from core.extensions.persistence.schema import ensure_session_schema
+from core.extensions.persistence.models import ThreadInfo
+from core.extensions.persistence.schema import ensure_thread_schema
 from core.extensions.update_fields import UNSET, UnsetType
 
 
-class SessionRepository:
-    """CRUD for session metadata and history."""
+class ThreadRepository:
+    """CRUD for thread metadata and history."""
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
-        ensure_session_schema(db_path)
+        ensure_thread_schema(db_path)
 
     @property
     def db_path(self) -> str:
@@ -28,19 +28,29 @@ class SessionRepository:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def create_session(
+    def _agent_messages_thread_column(self, conn: sqlite3.Connection) -> str:
+        """Return FK column name used by agent_messages for thread identity."""
+        rows = conn.execute("PRAGMA table_info(agent_messages)").fetchall()
+        cols = {str(row["name"]) for row in rows}
+        if "session_id" in cols:
+            return "session_id"
+        if "thread_id" in cols:
+            return "thread_id"
+        return "session_id"
+
+    def create_thread(
         self,
-        session_id: str,
+        thread_id: str,
         channel_id: str,
         project_id: str | None,
         title: str | None,
         now_ts: int,
-    ) -> SessionInfo:
+    ) -> ThreadInfo:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO sessions (
-                    session_id,
+                INSERT INTO threads (
+                    thread_id,
                     project_id,
                     title,
                     channel_id,
@@ -49,54 +59,54 @@ class SessionRepository:
                     is_archived
                 )
                 VALUES (?, ?, ?, ?, ?, ?, 0)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    project_id = COALESCE(excluded.project_id, sessions.project_id),
-                    title = COALESCE(excluded.title, sessions.title),
+                ON CONFLICT(thread_id) DO UPDATE SET
+                    project_id = COALESCE(excluded.project_id, threads.project_id),
+                    title = COALESCE(excluded.title, threads.title),
                     channel_id = CASE
-                        WHEN sessions.channel_id = 'unknown' THEN excluded.channel_id
-                        ELSE sessions.channel_id
+                        WHEN threads.channel_id = 'unknown' THEN excluded.channel_id
+                        ELSE threads.channel_id
                     END,
                     last_active_at = MAX(
-                        sessions.last_active_at,
+                        threads.last_active_at,
                         excluded.last_active_at
                     )
                 """,
-                (session_id, project_id, title, channel_id, now_ts, now_ts),
+                (thread_id, project_id, title, channel_id, now_ts, now_ts),
             )
             conn.commit()
-        session = self.get_session(session_id, include_archived=True)
-        if session is None:
-            raise RuntimeError(f"Failed to persist session {session_id}")
-        return session
+        thread = self.get_thread(thread_id, include_archived=True)
+        if thread is None:
+            raise RuntimeError(f"Failed to persist thread {thread_id}")
+        return thread
 
-    def get_session(
-        self, session_id: str, include_archived: bool = False
-    ) -> SessionInfo | None:
+    def get_thread(
+        self, thread_id: str, include_archived: bool = False
+    ) -> ThreadInfo | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT
-                    session_id,
+                    thread_id,
                     project_id,
                     title,
                     channel_id,
                     created_at,
                     last_active_at,
                     is_archived
-                FROM sessions
-                WHERE session_id = ?
+                FROM threads
+                WHERE thread_id = ?
                   AND (? = 1 OR is_archived = 0)
                 """,
-                (session_id, int(include_archived)),
+                (thread_id, int(include_archived)),
             ).fetchone()
-        return self._row_to_session(row)
+        return self._row_to_thread(row)
 
-    def list_sessions(
+    def list_threads(
         self,
         include_archived: bool = False,
         project_id: str | None = None,
         channel_id: str | None = None,
-    ) -> list[SessionInfo]:
+    ) -> list[ThreadInfo]:
         clauses = ["(? = 1 OR is_archived = 0)"]
         params: list[Any] = [int(include_archived)]
         if project_id is not None:
@@ -110,36 +120,36 @@ class SessionRepository:
             rows = conn.execute(
                 f"""
                 SELECT
-                    session_id,
+                    thread_id,
                     project_id,
                     title,
                     channel_id,
                     created_at,
                     last_active_at,
                     is_archived
-                FROM sessions
+                FROM threads
                 WHERE {where}
-                ORDER BY last_active_at DESC, created_at DESC, session_id DESC
+                ORDER BY last_active_at DESC, created_at DESC, thread_id DESC
                 """,
                 params,
             ).fetchall()
-        sessions: list[SessionInfo] = []
+        threads: list[ThreadInfo] = []
         for row in rows:
-            session = self._row_to_session(row)
-            if session is not None:
-                sessions.append(session)
-        return sessions
+            thread = self._row_to_thread(row)
+            if thread is not None:
+                threads.append(thread)
+        return threads
 
-    def update_session(
+    def update_thread(
         self,
-        session_id: str,
+        thread_id: str,
         *,
         title: str | None | UnsetType = UNSET,
         project_id: str | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
         last_active_at: int | UnsetType = UNSET,
         channel_id: str | UnsetType = UNSET,
-    ) -> SessionInfo | None:
+    ) -> ThreadInfo | None:
         assignments: list[str] = []
         params: list[Any] = []
         if title is not UNSET:
@@ -158,41 +168,42 @@ class SessionRepository:
             assignments.append("channel_id = ?")
             params.append(channel_id)
         if not assignments:
-            return self.get_session(session_id, include_archived=True)
-        params.append(session_id)
+            return self.get_thread(thread_id, include_archived=True)
+        params.append(thread_id)
         with self._connect() as conn:
             cur = conn.execute(
-                f"UPDATE sessions SET {', '.join(assignments)} WHERE session_id = ?",
+                f"UPDATE threads SET {', '.join(assignments)} WHERE thread_id = ?",
                 params,
             )
             conn.commit()
         if cur.rowcount == 0:
             return None
-        return self.get_session(session_id, include_archived=True)
+        return self.get_thread(thread_id, include_archived=True)
 
-    def archive_session(self, session_id: str) -> bool:
+    def archive_thread(self, thread_id: str) -> bool:
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE sessions SET is_archived = 1 WHERE session_id = ?",
-                (session_id,),
+                "UPDATE threads SET is_archived = 1 WHERE thread_id = ?",
+                (thread_id,),
             )
             conn.commit()
         return cur.rowcount > 0
 
-    def get_session_history(self, session_id: str) -> list[dict[str, Any]] | None:
-        if self.get_session(session_id, include_archived=True) is None:
+    def get_thread_history(self, thread_id: str) -> list[dict[str, Any]] | None:
+        if self.get_thread(thread_id, include_archived=True) is None:
             return None
         if not Path(self._db_path).exists():
             return []
         with self._connect() as conn:
+            key_col = self._agent_messages_thread_column(conn)
             rows = conn.execute(
-                """
+                f"""
                 SELECT message_data
                 FROM agent_messages
-                WHERE session_id = ?
+                WHERE {key_col} = ?
                 ORDER BY id ASC
                 """,
-                (session_id,),
+                (thread_id,),
             ).fetchall()
         history: list[dict[str, Any]] = []
         for row in rows:
@@ -206,31 +217,32 @@ class SessionRepository:
                 history.append({"value": parsed})
         return history
 
-    def sync_last_active_at(self, session_id: str) -> int | None:
+    def sync_last_active_at(self, thread_id: str) -> int | None:
         with self._connect() as conn:
+            key_col = self._agent_messages_thread_column(conn)
             row = conn.execute(
-                """
+                f"""
                 SELECT COALESCE(
                     (
                         SELECT CAST(strftime('%s', MAX(created_at)) AS INTEGER)
                         FROM agent_messages
-                        WHERE session_id = ?
+                        WHERE {key_col} = ?
                     ),
                     (
                         SELECT CAST(strftime('%s', updated_at) AS INTEGER)
-                        FROM sessions
-                        WHERE session_id = ?
+                        FROM threads
+                        WHERE thread_id = ?
                     )
                 ) AS last_active_at
                 """,
-                (session_id, session_id),
+                (thread_id, thread_id),
             ).fetchone()
             if row is None or row["last_active_at"] is None:
                 return None
             last_active_at = int(row["last_active_at"])
             conn.execute(
-                "UPDATE sessions SET last_active_at = ? WHERE session_id = ?",
-                (last_active_at, session_id),
+                "UPDATE threads SET last_active_at = ? WHERE thread_id = ?",
+                (last_active_at, thread_id),
             )
             conn.commit()
         return last_active_at
@@ -245,11 +257,11 @@ class SessionRepository:
             dt = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
             return int(dt.replace(tzinfo=UTC).timestamp())
 
-    def _row_to_session(self, row: sqlite3.Row | None) -> SessionInfo | None:
+    def _row_to_thread(self, row: sqlite3.Row | None) -> ThreadInfo | None:
         if row is None:
             return None
-        return SessionInfo(
-            id=row["session_id"],
+        return ThreadInfo(
+            id=row["thread_id"],
             project_id=row["project_id"],
             title=row["title"],
             channel_id=row["channel_id"],
@@ -257,3 +269,4 @@ class SessionRepository:
             last_active_at=int(row["last_active_at"]),
             is_archived=bool(row["is_archived"]),
         )
+

@@ -120,7 +120,7 @@ async def post_chat_completions(request: Request) -> JSONResponse | StreamingRes
             ).model_dump(),
         )
 
-    session_id = request.headers.get("X-Session-Id")
+    thread_id = request.headers.get("X-Thread-Id")
     user_id = config.get("default_user_id", "web_user")
     timeout = config.get("request_timeout_seconds", 120)
     model_name = config.get("model_name", "yodoca")
@@ -132,8 +132,8 @@ async def post_chat_completions(request: Request) -> JSONResponse | StreamingRes
         "user_id": user_id,
         "channel_id": ext._channel_id,
     }
-    if session_id:
-        payload["session_id"] = session_id
+    if thread_id:
+        payload["thread_id"] = thread_id
 
     try:
         if req.stream:
@@ -254,7 +254,7 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
             ).model_dump(),
         )
 
-    session_id = request.headers.get("X-Session-Id")
+    thread_id = request.headers.get("X-Thread-Id")
     user_id = config.get("default_user_id", "web_user")
     timeout = config.get("request_timeout_seconds", 120)
     model_name = config.get("model_name", "yodoca")
@@ -267,8 +267,8 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
         "user_id": user_id,
         "channel_id": ext._channel_id,
     }
-    if session_id:
-        payload["session_id"] = session_id
+    if thread_id:
+        payload["thread_id"] = thread_id
 
     try:
         if req.stream:
@@ -407,3 +407,4 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
         bridge.release()
         bridge.clear_active()
         raise
+
