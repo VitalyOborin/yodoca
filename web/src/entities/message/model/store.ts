@@ -10,6 +10,58 @@ function mins(m: number): number {
 }
 
 const now = Date.now();
+const MARKDOWN_DEMO_MESSAGE = `# Markdown demo for Yodoca
+
+## Formatting
+This paragraph contains **bold text**, *italic text*, and inline code: \`context.emit("user.message", payload)\`.
+
+> Quote: Transparent agent actions build user trust.
+
+## Lists
+- Event-driven architecture
+- Durable event journal
+- Progressive authorization
+
+1. Analyze request
+2. Preview intent
+3. Execute safely
+
+## Links
+Read [Architecture docs](https://example.com/docs/architecture) and [Event bus guide](https://example.com/docs/event-bus).
+
+## Python block
+\`\`\`python
+from datetime import datetime, timezone
+
+def emit_event(topic: str, payload: dict) -> dict:
+    return {
+        "topic": topic,
+        "payload": payload,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+\`\`\`
+
+## JSON block
+\`\`\`json
+{
+  "event": "task.created",
+  "thread_id": "thread-1",
+  "priority": "high",
+  "meta": {
+    "source": "chat",
+    "attempt": 1
+  }
+}
+\`\`\`
+
+## Text block
+\`\`\`text
+TASK STATUS BOARD
+- planning: done
+- execution: running
+- review: pending
+\`\`\`
+`;
 
 const MOCK_MESSAGES: Message[] = [
   {
@@ -56,6 +108,49 @@ const MOCK_MESSAGES: Message[] = [
     content:
       "I recommend splitting the module into smaller services with clear boundaries. Here are the core event topics I'd suggest:\n\n- `user.message` — incoming user messages\n- `agent.response` — agent replies\n- `system.error` — error notifications\n- `task.created` / `task.completed` — task lifecycle\n- `memory.updated` — knowledge base changes\n\nEach topic follows the `domain.action` naming convention for consistency.",
     createdAt: new Date(now - mins(43)),
+  },
+  {
+    id: 'msg-7',
+    threadId: 'thread-1',
+    role: 'user',
+    content: 'Can you provide a markdown-rich example message for docs and UI testing?',
+    createdAt: new Date(now - mins(39)),
+  },
+  {
+    id: 'msg-8',
+    threadId: 'thread-1',
+    role: 'agent',
+    content: MARKDOWN_DEMO_MESSAGE,
+    createdAt: new Date(now - mins(38)),
+  },
+  {
+    id: 'msg-9',
+    threadId: 'thread-1',
+    role: 'user',
+    content: 'Looks good. Add a short rollout checklist for this UI update.',
+    createdAt: new Date(now - mins(33)),
+  },
+  {
+    id: 'msg-13',
+    threadId: 'thread-1',
+    role: 'agent',
+    content:
+      'Rollout checklist:\n- Enable markdown rendering in chat\n- Verify syntax highlighting for python/json/text\n- Validate mobile scroll and composer overlap behavior',
+    createdAt: new Date(now - mins(31)),
+  },
+  {
+    id: 'msg-14',
+    threadId: 'thread-1',
+    role: 'user',
+    content: 'Great, ship this in the next frontend patch.',
+    createdAt: new Date(now - mins(28)),
+  },
+  {
+    id: 'msg-15',
+    threadId: 'thread-1',
+    role: 'agent',
+    content: 'Acknowledged. I will include this in the next patch and keep backward compatibility for plain text messages.',
+    createdAt: new Date(now - mins(27)),
   },
   {
     id: 'msg-10',

@@ -47,7 +47,7 @@ function handleInput() {
           v-model="inputText"
           placeholder="Опишите задачу для агента..."
           rows="1"
-          class="app-scrollbar max-h-[180px] min-h-[64px] w-full resize-none border-0 bg-transparent px-3 pt-3 pb-2 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground"
+          class="app-scrollbar max-h-[180px] min-h-[64px] w-full resize-none border-0 bg-transparent px-3 pt-3 pb-2 text-sm leading-6 text-foreground outline-none placeholder:text-subtle-foreground"
           @keydown="handleKeydown"
           @input="handleInput"
         />

@@ -201,6 +201,97 @@
     border-radius: 999px;
     background-clip: padding-box;
   }
+
+  .chat-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .chat-markdown h1,
+  .chat-markdown h2,
+  .chat-markdown h3 {
+    margin: 1rem 0 0.6rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: hsl(var(--foreground));
+  }
+
+  .chat-markdown h1 {
+    font-size: 1.2rem;
+  }
+
+  .chat-markdown h2 {
+    font-size: 1.05rem;
+  }
+
+  .chat-markdown h3 {
+    font-size: 1rem;
+  }
+
+  .chat-markdown p {
+    margin: 0.6rem 0;
+  }
+
+  .chat-markdown a {
+    color: hsl(var(--info));
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .chat-markdown strong {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .chat-markdown em {
+    font-style: italic;
+  }
+
+  .chat-markdown ul,
+  .chat-markdown ol {
+    margin: 0.6rem 0;
+    padding-left: 1.2rem;
+  }
+
+  .chat-markdown li {
+    margin: 0.2rem 0;
+  }
+
+  .chat-markdown blockquote {
+    margin: 0.7rem 0;
+    border-left: 2px solid hsl(var(--border));
+    padding-left: 0.8rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .chat-markdown :not(pre) > code {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--secondary) / 0.5);
+    padding: 0.1rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+  }
+
+  .chat-markdown pre {
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.65rem;
+    background: hsl(var(--secondary));
+  }
+
+  .chat-markdown pre code.hljs {
+    display: block;
+    padding: 0.75rem 0.9rem;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
 }
 
 @keyframes fade-slide-in {

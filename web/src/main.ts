@@ -4,6 +4,7 @@ import { VueQueryPlugin } from '@tanstack/vue-query';
 import App from './App.vue';
 import router from './app/router';
 import './app/styles/globals.css';
+import 'highlight.js/styles/github-dark.css';
 
 const app = createApp(App);
 

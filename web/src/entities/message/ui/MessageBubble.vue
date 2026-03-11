@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { Message } from '../model/types';
+import { renderMarkdown } from '@/shared/lib';
 
-defineProps<{
+const props = defineProps<{
   message: Message;
 }>();
+
+const renderedMarkdown = computed(() => renderMarkdown(props.message.content));
 </script>
 
 <template>
@@ -19,7 +23,8 @@ defineProps<{
       v-else
       class="max-w-full px-0 py-1 text-card-foreground"
     >
-      <p class="whitespace-pre-wrap leading-6 text-foreground">{{ message.content }}</p>
+      <!-- eslint-disable-next-line vue/no-v-html -->
+      <div class="chat-markdown leading-6 text-foreground" v-html="renderedMarkdown" />
     </article>
   </div>
 </template>
