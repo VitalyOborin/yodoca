@@ -1,26 +1,59 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
-import { Bot, Compass, LibraryBig, Orbit, Waves } from 'lucide-vue-next';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { AlertCircle, CheckCircle2, LoaderCircle, PauseCircle } from 'lucide-vue-next';
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
+import { useAgentStore } from '@/entities/agent';
 import { SendMessageForm } from '@/features/send-message';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
 
 const threadStore = useThreadStore();
 const messageStore = useMessageStore();
+const agentStore = useAgentStore();
+
 const scrollContainer = ref<HTMLElement | null>(null);
+const pendingTimers = new Set<number>();
 
 const currentMessages = computed(() => {
   if (!threadStore.activeThreadId) return [];
   return messageStore.getThreadMessages(threadStore.activeThreadId);
 });
 
-const heroTags = ['Streaming-ready', 'Editorial UI', 'Mock intelligence'];
-const capabilityChips = ['Research mode', 'Workspace memory', 'Artifact preview'];
-const followUpPrompts = [
-  'Turn this into a step-by-step plan',
-  'Generate a concise implementation brief',
-  'Compare two alternative approaches',
-];
+const phaseBadgeClass = computed(() => {
+  const map = {
+    idle: 'text-muted-foreground border-border bg-secondary/50',
+    thinking: 'text-primary border-primary/35 bg-primary/10',
+    acting: 'text-cyan-300 border-cyan-400/30 bg-cyan-500/10',
+    waiting_input: 'text-amber-300 border-amber-400/30 bg-amber-500/10',
+    error: 'text-destructive border-destructive/35 bg-destructive/10',
+    complete: 'text-emerald-300 border-emerald-400/30 bg-emerald-500/10',
+  } as const;
+  return map[agentStore.phase];
+});
+
+function phaseLabel() {
+  const map = {
+    idle: 'Idle',
+    thinking: 'Thinking',
+    acting: 'Executing',
+    waiting_input: 'Needs input',
+    error: 'Error',
+    complete: 'Complete',
+  } as const;
+  return map[agentStore.phase];
+}
+
+function queueTimeout(callback: () => void, delay: number): Promise<void> {
+  return new Promise((resolve) => {
+    const id = window.setTimeout(() => {
+      pendingTimers.delete(id);
+      callback();
+      resolve();
+    }, delay);
+    pendingTimers.add(id);
+  });
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -39,165 +72,111 @@ watch(
   () => scrollToBottom(),
 );
 
-function handleSend(content: string) {
+async function handleSend(content: string) {
   if (!threadStore.activeThreadId) return;
-  messageStore.addMessage(threadStore.activeThreadId, 'user', content);
 
-  setTimeout(() => {
+  messageStore.addMessage(threadStore.activeThreadId, 'user', content);
+  threadStore.touchThread(threadStore.activeThreadId, content);
+  agentStore.startRun(content);
+
+  await queueTimeout(() => {
+    agentStore.beginExecution();
+  }, 420);
+
+  const failRequest = /error|ошибк|fail/i.test(content);
+  if (failRequest) {
+    await queueTimeout(() => {
+      agentStore.failRun('Не удалось завершить действие: конфликт валидации данных.');
+      if (!threadStore.activeThreadId) return;
+      messageStore.addMessage(
+        threadStore.activeThreadId,
+        'agent',
+        'Не удалось завершить действие из-за конфликта данных. Проверьте входные параметры и повторите.',
+      );
+      threadStore.touchThread(
+        threadStore.activeThreadId,
+        'Не удалось завершить действие из-за конфликта данных.',
+      );
+    }, 700);
+    return;
+  }
+
+  await queueTimeout(() => {
     if (!threadStore.activeThreadId) return;
     messageStore.addMessage(
       threadStore.activeThreadId,
       'agent',
-      "I'm a mock response. In the real application, this will be powered by the AG-UI protocol streaming real agent responses.",
+      'Готово. Я сформировал план, обновил action log и подготовил черновик для подтверждения в правой панели.',
     );
-  }, 800);
+    threadStore.touchThread(
+      threadStore.activeThreadId,
+      'Готово. Я сформировал план, обновил action log и подготовил черновик.',
+    );
+    agentStore.completeRun('Ответ отправлен в чат, workspace обновлен.');
+  }, 760);
 }
+
+onBeforeUnmount(() => {
+  for (const timer of pendingTimers) {
+    clearTimeout(timer);
+  }
+  pendingTimers.clear();
+});
 </script>
 
 <template>
-  <main class="relative flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
-    <header class="shrink-0 border-b border-white/10 px-4 py-4 sm:px-6 lg:px-8">
-      <div class="mb-4 flex flex-wrap gap-2">
-        <span
-          v-for="chip in capabilityChips"
-          :key="chip"
-          class="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-foreground/[0.58]"
-        >
-          {{ chip }}
-        </span>
-      </div>
-
-      <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <p class="mb-2 text-[11px] uppercase tracking-[0.32em] text-foreground/[0.42]">
-            Thread focus
-          </p>
-          <h2 class="text-2xl font-semibold tracking-[-0.04em] text-foreground sm:text-3xl">
-            {{ threadStore.activeThread?.title ?? 'Select a chat' }}
-          </h2>
+  <main class="relative min-w-0 min-h-0 flex flex-1 flex-col border-r border-border xl:border-r-0">
+    <header class="border-b border-border px-4 py-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-xs uppercase tracking-[0.2em] text-muted-foreground">Thread</p>
+          <h1 class="truncate text-lg font-semibold text-foreground">
+            {{ threadStore.activeThread?.title ?? 'Select a conversation' }}
+          </h1>
         </div>
 
-        <div class="flex flex-wrap gap-2">
-          <span
-            v-for="tag in heroTags"
-            :key="tag"
-            class="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-[11px] uppercase tracking-[0.22em] text-foreground/[0.58]"
+        <div class="flex items-center gap-2">
+          <span class="rounded-full border px-2.5 py-1 text-xs" :class="phaseBadgeClass">{{ phaseLabel() }}</span>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            class="focus-ring"
+            :disabled="agentStore.phase !== 'waiting_input'"
+            @click="agentStore.setPhase('idle')"
           >
-            {{ tag }}
-          </span>
+            Resume
+          </Button>
         </div>
       </div>
     </header>
 
-    <div
-      ref="scrollContainer"
-      class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-56 sm:px-6 sm:pt-6 lg:px-8"
-    >
-      <div
-        class="mesh-card mb-6 rounded-[1.8rem] border border-white/10 p-5 text-foreground sm:p-6"
-      >
-        <div class="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.85fr)]">
-          <div>
-            <p class="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/[0.1] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.28em] text-accent">
-              <Waves class="h-3.5 w-3.5" />
-              Agent workspace
-            </p>
-            <h3 class="display-title text-4xl leading-none text-white sm:text-5xl">
-              A chat surface built for action, not only dialogue.
-            </h3>
-            <p class="mt-4 max-w-xl text-sm leading-7 text-foreground/[0.7] sm:text-[15px]">
-              The strongest AI interfaces now mix conversation with workspace memory, visible
-              operating mode and artifact-style outputs. This mock now leans into that direction.
-            </p>
-
-            <div class="mt-6 grid gap-3 sm:grid-cols-3">
-              <div class="glass-panel rounded-[1.4rem] border border-white/10 p-4">
-                <Bot class="mb-3 h-5 w-5 text-primary" />
-                <p class="text-xs uppercase tracking-[0.24em] text-foreground/[0.4]">Agent mode</p>
-                <p class="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Prototype</p>
-              </div>
-              <div class="glass-panel rounded-[1.4rem] border border-white/10 p-4">
-                <LibraryBig class="mb-3 h-5 w-5 text-accent" />
-                <p class="text-xs uppercase tracking-[0.24em] text-foreground/[0.4]">Context</p>
-                <p class="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Attached</p>
-              </div>
-              <div class="glass-panel rounded-[1.4rem] border border-white/10 p-4">
-                <Orbit class="mb-3 h-5 w-5 text-primary" />
-                <p class="text-xs uppercase tracking-[0.24em] text-foreground/[0.4]">Style</p>
-                <p class="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Bold</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="glass-panel rounded-[1.7rem] border border-white/10 p-4">
-            <div class="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p class="text-[10px] uppercase tracking-[0.28em] text-foreground/[0.38]">
-                  Live artifact
-                </p>
-                <p class="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">
-                  Working memory panel
-                </p>
-              </div>
-              <Compass class="h-[18px] w-[18px] text-accent" />
-            </div>
-
-            <div class="rounded-[1.3rem] border border-white/10 bg-black/[0.16] p-4">
-              <div class="mb-3 flex items-center gap-2">
-                <span class="h-2.5 w-2.5 rounded-full bg-primary" />
-                <span class="h-2.5 w-2.5 rounded-full bg-accent" />
-                <span class="h-2.5 w-2.5 rounded-full bg-white/40" />
-              </div>
-              <p class="text-sm font-semibold text-white">Architecture review board</p>
-              <div class="mt-4 space-y-3 text-sm text-foreground/[0.66]">
-                <div class="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2">
-                  Focus: event bus boundaries
-                </div>
-                <div class="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2">
-                  Context packets: 3 files attached
-                </div>
-                <div class="rounded-2xl border border-primary/20 bg-primary/[0.12] px-3 py-2 text-primary">
-                  Suggested next output: implementation brief
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="mx-auto flex w-full max-w-4xl flex-col pb-4">
-        <div class="mb-5 flex flex-wrap gap-2">
-          <button
-            v-for="prompt in followUpPrompts"
-            :key="prompt"
-            type="button"
-            class="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-foreground/[0.66] transition-colors hover:bg-white/[0.1] hover:text-white"
-          >
-            {{ prompt }}
-          </button>
-        </div>
-
+    <ScrollArea class="min-h-0 flex-1">
+      <div ref="scrollContainer" class="mx-auto w-full max-w-[760px] space-y-1 px-4 pt-4 pb-44">
         <div
           v-if="currentMessages.length === 0"
-          class="glass-panel flex min-h-[280px] items-center justify-center rounded-[2rem] border border-white/10 px-6 text-center text-muted-foreground"
+          class="rounded-xl border border-border bg-secondary/40 px-4 py-6 text-center"
         >
-          <div>
-            <p class="display-title text-4xl text-white">No dialogue yet.</p>
-            <p class="mt-3 text-[15px] leading-7 text-foreground/[0.62]">
-              Start a conversation and the mock agent will answer with placeholder intelligence.
-            </p>
-          </div>
+          <p class="text-sm text-muted-foreground">Начните диалог. Агент покажет intent preview и audit trail справа.</p>
         </div>
-        <MessageBubble v-for="message in currentMessages" :key="message.id" :message="message" />
-      </div>
-    </div>
 
-    <div class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4 pt-12 sm:px-6 lg:px-8"
-      style="background: linear-gradient(to bottom, transparent, rgb(16 20 32 / 0.85) 40%, rgb(16 20 32 / 0.95))"
-    >
-      <div class="pointer-events-auto mx-auto max-w-4xl">
-        <SendMessageForm @send="handleSend" />
+        <section aria-live="polite" aria-atomic="false">
+          <MessageBubble v-for="message in currentMessages" :key="message.id" :message="message" />
+        </section>
       </div>
-    </div>
+    </ScrollArea>
+
+    <footer class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
+      <div class="pointer-events-auto mx-auto w-full max-w-[760px]">
+        <div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircle v-if="agentStore.phase === 'thinking' || agentStore.phase === 'acting'" class="h-3.5 w-3.5 animate-spin" />
+          <PauseCircle v-else-if="agentStore.phase === 'waiting_input'" class="h-3.5 w-3.5 text-[hsl(var(--warning))]" />
+          <AlertCircle v-else-if="agentStore.phase === 'error'" class="h-3.5 w-3.5 text-destructive" />
+          <CheckCircle2 v-else-if="agentStore.phase === 'complete'" class="h-3.5 w-3.5 text-[hsl(var(--success))]" />
+          <span v-if="agentStore.currentStep">{{ agentStore.currentStep }}</span>
+        </div>
+        <SendMessageForm :disabled="agentStore.phase === 'thinking' || agentStore.phase === 'acting'" @send="handleSend" />
+      </div>
+    </footer>
   </main>
 </template>

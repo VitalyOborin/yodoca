@@ -90,6 +90,15 @@ export const useThreadStore = defineStore('threads', () => {
     activeThreadId.value = nextActiveThread?.id ?? null;
   }
 
+  function touchThread(id: string, preview: string) {
+    const thread = threads.value.find((item) => item.id === id);
+    if (!thread) return;
+
+    thread.lastMessagePreview = preview;
+    thread.messageCount += 1;
+    thread.updatedAt = new Date();
+  }
+
   return {
     threads,
     activeThreadId,
@@ -99,5 +108,6 @@ export const useThreadStore = defineStore('threads', () => {
     createThread,
     renameThread,
     deleteThread,
+    touchThread,
   };
 });
