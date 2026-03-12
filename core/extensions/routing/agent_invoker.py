@@ -3,13 +3,42 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from core.extensions.contract import TurnContext
 from core.extensions.persistence.session_manager import SessionManager
 from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class TraceHook(Protocol):
+    """Optional hook for execution tracing. No-op when no hook is registered."""
+
+    async def on_invoke_start(
+        self, prompt: str, session_id: str, agent_id: str
+    ) -> str:
+        """Called before agent invocation. Returns span_id."""
+        ...
+
+    async def on_invoke_end(
+        self, span_id: str, output: str, error: str | None = None
+    ) -> None:
+        """Called after agent invocation completes or fails."""
+        ...
+
+    async def on_tool_call(
+        self, parent_span_id: str, tool_name: str, arguments: str
+    ) -> str:
+        """Called when a tool call is detected. Returns span_id."""
+        ...
+
+    async def on_tool_result(
+        self, span_id: str, result: str, error: str | None = None
+    ) -> None:
+        """Called when a tool call completes."""
+        ...
 
 
 def _get_response_delta_type() -> type | None:
@@ -38,6 +67,51 @@ class AgentInvoker:
         self._invoke_middleware: Callable[[str, TurnContext], Awaitable[str]] | None = (
             None
         )
+        self._trace_hooks: list[TraceHook] = []
+
+    def register_trace_hook(self, hook: TraceHook) -> None:
+        """Register a tracing hook. Multiple hooks are supported."""
+        self._trace_hooks.append(hook)
+
+    async def _fire_invoke_start(
+        self, prompt: str, session_id: str, agent_id: str
+    ) -> list[str]:
+        span_ids: list[str] = []
+        for hook in self._trace_hooks:
+            try:
+                sid = await hook.on_invoke_start(prompt, session_id, agent_id)
+                span_ids.append(sid)
+            except Exception:
+                logger.debug("TraceHook.on_invoke_start failed", exc_info=True)
+                span_ids.append("")
+        return span_ids
+
+    async def _fire_invoke_end(
+        self, span_ids: list[str], output: str, error: str | None = None
+    ) -> None:
+        for hook, sid in zip(self._trace_hooks, span_ids):
+            if not sid:
+                continue
+            try:
+                await hook.on_invoke_end(sid, output, error)
+            except Exception:
+                logger.debug("TraceHook.on_invoke_end failed", exc_info=True)
+
+    async def _fire_tool_call(
+        self, span_ids: list[str], tool_name: str, arguments: str
+    ) -> list[str]:
+        tool_span_ids: list[str] = []
+        for hook, parent_sid in zip(self._trace_hooks, span_ids):
+            if not parent_sid:
+                tool_span_ids.append("")
+                continue
+            try:
+                tsid = await hook.on_tool_call(parent_sid, tool_name, arguments)
+                tool_span_ids.append(tsid)
+            except Exception:
+                logger.debug("TraceHook.on_tool_call failed", exc_info=True)
+                tool_span_ids.append("")
+        return tool_span_ids
 
     def set_agent(self, agent: Any, agent_id: str = "orchestrator") -> None:
         self._agent = agent
@@ -105,6 +179,8 @@ class AgentInvoker:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
         sess = session if session is not None else self._sessions.session
+        session_id = str(getattr(sess, "id", "unknown"))
+        span_ids = await self._fire_invoke_start(stripped, session_id, self._agent_id)
         async with self._user_lock:
             try:
                 channel_id = turn_context.channel_id if turn_context else None
@@ -114,9 +190,12 @@ class AgentInvoker:
                     session=sess,
                     channel_id=channel_id,
                 )
-                return result.final_output or ""
+                output = result.final_output or ""
+                await self._fire_invoke_end(span_ids, output)
+                return output
             except Exception as e:
                 logger.exception("Agent invocation failed: %s", e)
+                await self._fire_invoke_end(span_ids, "", error=str(e))
                 return f"(Error: {e})"
 
     async def _consume_stream_events(
@@ -124,6 +203,7 @@ class AgentInvoker:
         result: Any,
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None,
+        parent_span_ids: list[str] | None = None,
     ) -> tuple[str, BaseException | None]:
         full_text = ""
         try:
@@ -135,9 +215,15 @@ class AgentInvoker:
                     await on_chunk(delta)
                 elif event.type == "run_item_stream_event":
                     item = getattr(event, "item", None)
-                    if getattr(item, "type", None) == "tool_call_item" and on_tool_call:
+                    if getattr(item, "type", None) == "tool_call_item":
                         raw_item = getattr(item, "raw_item", None)
-                        await on_tool_call(str(getattr(raw_item, "name", "tool")))
+                        tool_name = str(getattr(raw_item, "name", "tool"))
+                        if on_tool_call:
+                            await on_tool_call(tool_name)
+                        if parent_span_ids and self._trace_hooks:
+                            await self._fire_tool_call(
+                                parent_span_ids, tool_name, ""
+                            )
             return full_text, None
         except BaseException as e:
             return full_text, e
@@ -167,6 +253,10 @@ class AgentInvoker:
         on_tool_call: Callable[[str], Awaitable[None]] | None,
         use_background_lock: bool,
     ) -> str:
+        session_id = str(getattr(session, "id", "unknown"))
+        span_ids = await self._fire_invoke_start(
+            stripped, session_id, self._agent_id
+        )
         lock = self._background_lock if use_background_lock else self._user_lock
         async with lock:
             full_text = ""
@@ -178,12 +268,16 @@ class AgentInvoker:
                     result=result,
                     on_chunk=on_chunk,
                     on_tool_call=on_tool_call,
+                    parent_span_ids=span_ids,
                 )
                 if stream_error is not None:
                     raise stream_error
-                return result.final_output or full_text
+                output = result.final_output or full_text
+                await self._fire_invoke_end(span_ids, output)
+                return output
             except Exception as e:
                 logger.exception("Agent streaming invocation failed: %s", e)
+                await self._fire_invoke_end(span_ids, full_text, error=str(e))
                 if full_text:
                     try:
                         await on_chunk(f"\n(Error: {e})")
@@ -224,6 +318,10 @@ class AgentInvoker:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
         session = self._sessions.get_background_session()
+        session_id = str(getattr(session, "id", "unknown"))
+        span_ids = await self._fire_invoke_start(
+            stripped, session_id, self._agent_id
+        )
         async with self._background_lock:
             try:
                 channel_id = turn_context.channel_id if turn_context else None
@@ -233,9 +331,12 @@ class AgentInvoker:
                     session=session,
                     channel_id=channel_id,
                 )
-                return result.final_output or ""
+                output = result.final_output or ""
+                await self._fire_invoke_end(span_ids, output)
+                return output
             except Exception as e:
                 logger.exception("Agent background invocation failed: %s", e)
+                await self._fire_invoke_end(span_ids, "", error=str(e))
                 return f"(Error: {e})"
 
     async def invoke_agent_background_streamed(
