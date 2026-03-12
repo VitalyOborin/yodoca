@@ -24,3 +24,5 @@ config/settings.yaml
 docs/discovery/
 node_modules/
 .vscode/
+web/dist/
+web/node_modules/
