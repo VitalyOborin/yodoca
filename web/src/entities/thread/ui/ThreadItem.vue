@@ -109,7 +109,7 @@ function saveTitle() {
             type="button"
             variant="ghost"
             size="icon-sm"
-            class="h-7 w-7 text-destructive"
+            class="h-7 w-7 text-destructive hover:!bg-destructive hover:!text-white dark:hover:!bg-destructive"
             @click.stop="$emit('delete')"
           >
             <Trash2 class="h-3.5 w-3.5" />
