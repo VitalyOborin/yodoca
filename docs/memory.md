@@ -65,7 +65,7 @@ Before every agent invocation the kernel calls `get_context(prompt)`. The extens
 
 **Thread change detection:**
 
-When a `user_message` arrives with a new `thread_id`, the extension registers the session and triggers consolidation of the old session. This ensures completed threads are processed promptly — without waiting for the nightly schedule.
+When a `user_message` arrives with a new `thread_id`, the extension registers the thread and triggers consolidation of the old thread. This ensures completed threads are processed promptly — without waiting for the nightly schedule.
 
 **Nightly maintenance (`SchedulerProvider`, daily 03:00):**
 
@@ -105,7 +105,7 @@ CREATE TABLE nodes (
 
     source_type      TEXT,     -- conversation | tool_result | extraction | consolidation
     source_role      TEXT,     -- user | orchestrator | memory_agent
-    thread_id       TEXT,     -- links episodic nodes to their conversation session
+    thread_id       TEXT,     -- links episodic nodes to their conversation thread
     attributes       TEXT DEFAULT '{}'
 );
 ```
@@ -156,7 +156,7 @@ CREATE TABLE edges (
 
 | Type | Created by | Purpose |
 |---|---|---|
-| `temporal` | Hot path (automatic) | Links consecutive episodes within a session. Enables timeline traversal. |
+| `temporal` | Hot path (automatic) | Links consecutive episodes within a thread. Enables timeline traversal. |
 | `causal` | Nightly maintenance (LLM inference) | Cause-effect relationships between episodes. Default `confidence = 0.7`. |
 | `entity` | Write-path agent | Links nodes sharing the same entity mention. |
 | `derived_from` | Write-path agent | Links extracted facts to their source episodes (provenance). |
@@ -204,7 +204,7 @@ CREATE TABLE node_entities (
 
 ### `thread_consolidations`
 
-Tracks session lifecycle for consolidation. Registered when a `user_message` with a new `thread_id` is first seen.
+Tracks thread lifecycle for consolidation. Registered when a `user_message` with a new `thread_id` is first seen.
 
 ```sql
 CREATE TABLE thread_consolidations (
@@ -280,13 +280,13 @@ The `memory` extension implements four search strategies, combined via Reciproca
 
 | Tool | Description |
 |---|---|
-| `is_session_consolidated` | Idempotency check before processing. |
-| `get_session_episodes` | Fetch session episodes paginated. |
+| `is_thread_consolidated` | Idempotency check before processing. |
+| `get_thread_episodes` | Fetch thread episodes paginated. |
 | `save_nodes_batch` | Save extracted facts/procedures/opinions with `derived_from` edges and batch embeddings. |
 | `extract_and_link_entities` | LLM-powered entity extraction and resolution for a batch of nodes. |
 | `detect_conflicts` | Hybrid search for potentially contradicting facts. |
 | `resolve_conflict` | Soft-delete old fact, create `supersedes` edge. |
-| `mark_session_consolidated` | Record consolidation completion. |
+| `mark_thread_consolidated` | Record consolidation completion. |
 | `save_causal_edges` | Create `causal` edges between episode pairs (confidence 0.7). |
 | `update_entity_summary` | Update entity summary and re-embed. |
 
@@ -301,7 +301,7 @@ user_message / agent_response event
   → generate episodic node (type='episodic', content, thread_id, source_role)
   → submit to write queue (fire-and-forget)
   → FTS5 trigger fires automatically on INSERT
-  → query last episode in session → create temporal edge (fire-and-forget)
+  → query last episode in thread → create temporal edge (fire-and-forget)
   → if embedding available: asyncio.create_task(slow_path)
 ```
 
@@ -328,29 +328,29 @@ ContextProvider.get_context(prompt)
   → return formatted markdown or None
 ```
 
-### Thread consolidation (triggered on session switch + nightly at 03:00)
+### Thread consolidation (triggered on thread switch + nightly at 03:00)
 
 ```
 new thread_id detected in user_message
-  → ensure_session(thread_id)
-  → asyncio.create_task(_consolidate_session(old_thread_id))
+  → ensure_thread(thread_id)
+  → asyncio.create_task(_consolidate_thread(old_thread_id))
 
-_consolidate_session(thread_id)
-  → write_agent.consolidate_session(thread_id):
-      is_session_consolidated?  → skip if true
-      get_session_episodes (paginated)
+_consolidate_thread(thread_id)
+  → write_agent.consolidate_thread(thread_id):
+      is_thread_consolidated?  → skip if true
+      get_thread_episodes (paginated)
       [LLM] extract semantic facts, procedural patterns, opinions
       save_nodes_batch → INSERT nodes + derived_from edges + batch embed
       extract_and_link_entities → resolve or create entity anchors
       detect_conflicts → resolve_conflict if needed
-      mark_session_consolidated
+      mark_thread_consolidated
 ```
 
 ### Nightly maintenance (daily at 03:00)
 
 ```
 execute_task("run_nightly_maintenance")
-  1. Consolidate pending threads (for each unconsolidated session)
+  1. Consolidate pending threads (for each unconsolidated thread)
   2. Apply Ebbinghaus decay + prune below threshold
   3. Entity enrichment (LLM summaries for entities with ≥3 mentions and no summary)
   4. Causal inference (analyze consecutive episode pairs for cause-effect)

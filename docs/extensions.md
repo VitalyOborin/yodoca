@@ -232,7 +232,7 @@ The Web Channel extension ([ADR 026](adr/026-web-channel.md)) implements `Channe
 - SSE streaming mapped from `StreamingChannelProvider`
 - request/response bridging via `RequestBridge` (single active request guard, future/queue correlation, long-poll notifications)
 
-Unlike CLI and Telegram, `web_channel` can pass `thread_id` from the `X-Thread-Id` header into `router.handle_user_message(...)`, which activates named session pooling in `ThreadManager`.
+Unlike CLI and Telegram, `web_channel` can pass `thread_id` from the `X-Thread-Id` header into `router.handle_user_message(...)`, which activates named thread pooling in `ThreadManager`.
 
 See [channels.md](channels.md#web-channel) and [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml).
 
@@ -372,7 +372,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
 | `get_secret(name)` | Read secret by name (keyring first, then `.env`). Async; use `await ctx.get_secret(name)`. |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
-| `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent session metadata and history access |
+| `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent thread metadata and history access |
 | `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
 
 ### Event Bus
@@ -423,7 +423,7 @@ See [event_bus.md](event_bus.md) for full details.
 2. **Kernel** subscribes to `user.message`; calls `router.handle_user_message()`
 3. **MessageRouter** invokes Orchestrator; sends response via `channel.send_to_user()`
 
-`web_channel` may also include `thread_id` in the event payload; the router then selects or creates a named runtime session instead of using the default rotated session.
+`web_channel` may also include `thread_id` in the event payload; the router then selects or creates a named runtime thread instead of using the default rotated thread.
 
 ### Flow: Proactive Agent (e.g. Reminders)
 

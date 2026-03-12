@@ -31,7 +31,7 @@
 | 🔌 **Extensions-only kernel** | Every feature — channels, memory, agents, schedulers — is an extension. Core has zero user-facing code. |
 | 📦 **Declarative agents** | Define a sub-agent in one `manifest.yaml`. No Python required. |
 | 🔄 **Multi-provider LLM** | OpenAI, Anthropic, LM Studio, OpenRouter — per-agent model routing from config. |
-| 💾 **Zero external deps** | SQLite for events, memory, sessions. No Redis, no Postgres, no cloud. |
+| 💾 **Zero external deps** | SQLite for events, memory, threads. No Redis, no Postgres, no cloud. |
 | 🛡 **Supervisor** | Auto-restart on crash, restart-by-file, backoff. Run `python -m supervisor` and forget. |
 | 🔐 **Secrets** | API keys in OS keyring (Windows Credential Manager, Keychain) or `.env` fallback. |
 | 🧭 **Onboarding** | Guided setup wizard when config is missing. Supervisor launches it automatically. |

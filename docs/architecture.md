@@ -6,7 +6,7 @@ High-level overview of the assistant4 system: entry points, bootstrap flow, and 
 
 ## Overview
 
-assistant4 is an **AI agent platform** built around an extensible kernel. The system processes user messages through channels, invokes the Orchestrator agent with context from memory plus persistent session/project state, and delivers responses back to the user. Extensions provide tools, channels, agents, schedulers, and services.
+assistant4 is an **AI agent platform** built around an extensible kernel. The system processes user messages through channels, invokes the Orchestrator agent with context from memory plus persistent thread/project state, and delivers responses back to the user. Extensions provide tools, channels, agents, schedulers, and services.
 
 **Key principles:**
 
@@ -150,7 +150,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/extensions/routing/router.py`
 - **Role:** Routes user messages to the Orchestrator; delivers responses to channels. In-memory pub/sub for `user_message` and `agent_response`. ContextProvider middleware enriches prompts before agent invocation.
 - **Internal split:** `core/extensions/routing/` isolates agent invocation, approval coordination, response delivery, event wiring, scheduler wiring, and built-in context providers.
-- **Key details:** `AgentInvoker` serializes concurrent agent invocations; `ThreadManager` owns runtime and named session pools; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
+- **Key details:** `AgentInvoker` serializes concurrent agent invocations; `ThreadManager` owns runtime and named thread pools; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
 - **Streaming:** If the channel implements `StreamingChannelProvider`, `handle_user_message()` uses `invoke_agent_streamed()` and calls the channel's stream lifecycle (`on_stream_start` → `on_stream_chunk` / `on_stream_status` → `on_stream_end`). Otherwise it uses `invoke_agent()` and `send_to_user()` as before. See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
 
 ### Persistence Services
@@ -216,7 +216,7 @@ EventBus  (journal → dispatch)
 router.handle_user_message(text, user_id, channel, event_id=event.id)
   ├─ if event_id and already in user_message_processing → skip (idempotency)
   ├─ if thread_id passed by channel → ThreadManager.get_or_create_thread(thread_id)
-  ├─ else → inactivity-based default session rotation
+  ├─ else → inactivity-based default thread rotation
   ├─ _emit("user_message")                → Memory.save_episode (subscriber)
   ├─ if channel is StreamingChannelProvider:
   │    ├─ channel.on_stream_start(user_id)

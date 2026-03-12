@@ -386,18 +386,18 @@ This is the same pattern used by `heartbeat` (`model_router.get_model("heartbeat
 
 #### 10.1 Post-Thread Consolidation
 
-Triggered when a session change is detected (see §15) or by nightly maintenance for missed threads.
+Triggered when a thread change is detected (see §15) or by nightly maintenance for missed threads.
 
 **Idempotency protocol:** The write-path agent follows a strict check-before-run pattern to ensure safe retries if interrupted:
 
 ```
-consolidate_session(thread_id):
+consolidate_thread(thread_id):
   │
-  ├─ 1. CHECK: is_session_consolidated(thread_id)?
+  ├─ 1. CHECK: is_thread_consolidated(thread_id)?
   │     → If yes: skip (return early, no work)
   │     → If no: proceed
   │
-  ├─ 2. Fetch episodic nodes for session (paginated)
+  ├─ 2. Fetch episodic nodes for thread (paginated)
   ├─ 3. Extract semantic facts (durable knowledge about the user/world)
   ├─ 4. Extract procedural patterns (successful action sequences)
   ├─ 5. Extract opinions/preferences (subjective assessments)
@@ -407,11 +407,11 @@ consolidate_session(thread_id):
   │     ├─ Resolve entities to existing anchors or create new ones
   │     └─ Detect and resolve conflicts with existing facts
   │
-  └─ 7. COMMIT: mark_session_consolidated(thread_id)
+  └─ 7. COMMIT: mark_thread_consolidated(thread_id)
          (only after all operations complete successfully)
 ```
 
-If the agent is interrupted between steps 2-6, the session remains unconsolidated. The next invocation (nightly maintenance or retry) re-runs from step 1, detects `consolidated = false`, and re-processes. Duplicate fact extraction is handled by deduplication (embedding similarity check against existing facts for the same session).
+If the agent is interrupted between steps 2-6, the thread remains unconsolidated. The next invocation (nightly maintenance or retry) re-runs from step 1, detects `consolidated = false`, and re-processes. Duplicate fact extraction is handled by deduplication (embedding similarity check against existing facts for the same thread).
 
 The agent has tools for each of these operations. It decides what to extract, how to phrase facts, and how to resolve conflicts — all in natural language via LLM. This replaces hundreds of lines of hardcoded extraction logic with a prompt and 6-8 tools.
 
@@ -441,13 +441,13 @@ These tools are **not exposed to the Orchestrator** — they are internal to the
 
 | Tool                        | Description                                                                  |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `get_session_episodes`      | Fetch episodic nodes for a session (paginated)                               |
+| `get_thread_episodes`       | Fetch episodic nodes for a thread (paginated)                                |
 | `save_nodes_batch`          | Save extracted nodes (semantic/procedural/opinion) with `derived_from` edges |
 | `extract_and_link_entities` | LLM-powered NER + entity resolution for a batch of nodes                     |
 | `detect_conflicts`          | Find potentially contradicting facts via hybrid search                       |
 | `resolve_conflict`          | Create `supersedes` edge, adjust confidence scores                           |
-| `mark_session_consolidated` | Set consolidation flag for a session                                         |
-| `is_session_consolidated`   | Check if session was already consolidated (idempotency guard)                |
+| `mark_thread_consolidated`  | Set consolidation flag for a thread                                          |
+| `is_thread_consolidated`    | Check if thread was already consolidated (idempotency guard)                 |
 | `save_causal_edges`         | Create `causal` edges between episode pairs (Phase 5+)                       |
 | `update_entity_summary`     | Regenerate entity summary and re-embed                                       |
 
@@ -785,28 +785,28 @@ The `search()` method internally computes the query embedding (for vector search
 
 #### Core Change: Inactivity-Based Thread Rotation
 
-**Problem:** Currently, `core/runner.py` generates `thread_id` once at process startup (`f"orchestrator_{int(time.time())}"`) and never changes it. The `MessageRouter` passes this static ID in every `user_message` and `agent_response` event. This means Memory v2's session-change detection never triggers — all episodes belong to one infinite session.
+**Problem:** Currently, `core/runner.py` generates `thread_id` once at process startup (`f"orchestrator_{int(time.time())}"`) and never changes it. The `MessageRouter` passes this static ID in every `user_message` and `agent_response` event. This means Memory v2's thread-change detection never triggers — all episodes belong to one infinite thread.
 
-**Decision:** `MessageRouter` gains inactivity-based session rotation. The kernel already owns `thread_id` lifecycle (creates it, passes it to `SQLiteThread`, injects it into events). Adding rotation is a natural extension of existing responsibility.
+**Decision:** `MessageRouter` gains inactivity-based thread rotation. The kernel already owns `thread_id` lifecycle (creates it, passes it to `SQLiteThread`, injects it into events). Adding rotation is a natural extension of existing responsibility.
 
 **Mechanism:**
 
 ```python
 # In MessageRouter (core/extensions/router.py):
-_DEFAULT_SESSION_TIMEOUT = 1800  # 30 minutes
+_DEFAULT_THREAD_TIMEOUT = 1800  # 30 minutes
 
 async def handle_user_message(self, text: str, user_id: str, channel: ChannelProvider) -> None:
     now = time.time()
-    if self._last_message_at and (now - self._last_message_at) > self._session_timeout:
-        await self._rotate_session()
+    if self._last_message_at and (now - self._last_message_at) > self._thread_timeout:
+        await self._rotate_thread()
     self._last_message_at = now
     await self._emit("user_message", {..., "thread_id": self._thread_id})
     # ... existing invoke_agent + agent_response ...
 
-async def _rotate_session(self) -> None:
+async def _rotate_thread(self) -> None:
     old_id = self._thread_id
     self._thread_id = f"orchestrator_{int(time.time())}"
-    self._session = SQLiteThread(self._thread_id, self._session_db_path)
+    self._thread = SQLiteThread(self._thread_id, self._thread_db_path)
     if self._event_bus:
         await self._event_bus.publish(
             "thread.completed",
@@ -817,32 +817,32 @@ async def _rotate_session(self) -> None:
 
 **Design details:**
 
-1. **Inactivity timeout** is configurable via `settings.yaml` (`session.timeout_sec`, default 1800). Stored in `MessageRouter._session_timeout`.
-2. **`SQLiteThread` rotation:** On session change, a new `SQLiteThread` is created for the Agents SDK, giving the Orchestrator fresh short-term conversation context. The old session DB is not deleted — the Agents SDK manages its own cleanup.
-3. **`thread.completed` event** is published via EventBus when a session rotates. This is a kernel-guaranteed event — Memory v2 subscribes to it as the primary consolidation trigger.
-4. **Future extension points:** User-initiated session reset (via command or tool), channel-specific session boundaries, and other rotation triggers can be added to `MessageRouter` without changing the memory extension. The contract is: `thread_id` changes in events → memory detects the change and consolidates.
+1. **Inactivity timeout** is configurable via `settings.yaml` (`thread.timeout_sec`, default 1800). Stored in `MessageRouter._thread_timeout`.
+2. **`SQLiteThread` rotation:** On thread change, a new `SQLiteThread` is created for the Agents SDK, giving the Orchestrator fresh short-term conversation context. The old thread DB is not deleted — the Agents SDK manages its own cleanup.
+3. **`thread.completed` event** is published via EventBus when a thread rotates. This is a kernel-guaranteed event — Memory v2 subscribes to it as the primary consolidation trigger.
+4. **Future extension points:** User-initiated thread reset (via command or tool), channel-specific thread boundaries, and other rotation triggers can be added to `MessageRouter` without changing the memory extension. The contract is: `thread_id` changes in events → memory detects the change and consolidates.
 
 #### Thread Change Detection in Memory v2
 
-Memory v2 detects session boundaries via two complementary mechanisms:
+Memory v2 detects thread boundaries via two complementary mechanisms:
 
-**Primary: `thread.completed` EventBus event.** Published by the kernel when `MessageRouter` rotates the session. Memory v2 subscribes and triggers consolidation:
+**Primary: `thread.completed` EventBus event.** Published by the kernel when `MessageRouter` rotates the thread. Memory v2 subscribes and triggers consolidation:
 
 ```python
-async def _on_session_completed(self, event: Event) -> None:
+async def _on_thread_completed(self, event: Event) -> None:
     thread_id = event.payload.get("thread_id")
     if thread_id:
-        asyncio.create_task(self._consolidate_session(thread_id))
+        asyncio.create_task(self._consolidate_thread(thread_id))
 ```
 
-**Secondary: `thread_id` change in `user_message` events.** The hot-path handler tracks the current `thread_id`. When a new `thread_id` appears, the previous session is consolidated. This acts as a fallback if the EventBus event is missed:
+**Secondary: `thread_id` change in `user_message` events.** The hot-path handler tracks the current `thread_id`. When a new `thread_id` appears, the previous thread is consolidated. This acts as a fallback if the EventBus event is missed:
 
 ```python
 async def _on_user_message(self, data: dict) -> None:
     thread_id = data.get("thread_id")
     if self._current_thread_id and thread_id != self._current_thread_id:
         asyncio.create_task(
-            self._consolidate_session(self._current_thread_id)
+            self._consolidate_thread(self._current_thread_id)
         )
     self._current_thread_id = thread_id
     await self._hot_path_ingest(data)
@@ -905,7 +905,7 @@ Each capability layer degrades independently:
 | `embed_batch()` in embedding ext                    | No batch embedding                   | Memory falls back to sequential `embed()` calls. Consolidation is slower (~2-6s vs ~300ms) but functionally identical.                                                 |
 | `sqlite-vec`                                        | No ANN index                         | FTS5 + entity lookup (embeddings stored in BLOB but not indexed)                                                                                                       |
 | LLM for write-path agent                            | No consolidation, no LLM-powered NER | Hot path still records episodes; regex entities still link; decay still runs. Consolidation is deferred until LLM is available.                                        |
-| `thread.completed` event (core C1)                 | No event-driven consolidation        | Memory detects session changes via `thread_id` diff in `user_message` events (secondary). Nightly cron catches remaining unconsolidated threads (tertiary).          |
+| `thread.completed` event (core C1)                 | No event-driven consolidation        | Memory detects thread changes via `thread_id` diff in `user_message` events (secondary). Nightly cron catches remaining unconsolidated threads (tertiary).           |
 
 
 The system is fully functional with just SQLite + FTS5, degrading gracefully as each capability layer is added.
@@ -920,7 +920,7 @@ The system is fully functional with just SQLite + FTS5, degrading gracefully as 
 4. Delete old memory database (`sandbox/data/memory/`).
 5. Update `heartbeat` manifest: remove `depends_on` references to `memory_maintenance` and `memory_reflection`.
 
-The agent starts fresh with an empty memory. Episodic nodes accumulate from the first conversation. Consolidation runs after the first completed session.
+The agent starts fresh with an empty memory. Episodic nodes accumulate from the first conversation. Consolidation runs after the first completed thread.
 
 ## Core Changes Required
 
@@ -928,21 +928,21 @@ This ADR introduces two changes outside the memory extension boundary. Both are 
 
 ### C1. Thread Rotation in `MessageRouter`
 
-**What changes:** `core/extensions/router.py` — `MessageRouter` gains inactivity-based session rotation (detailed in §15).
+**What changes:** `core/extensions/router.py` — `MessageRouter` gains inactivity-based thread rotation (detailed in §15).
 
 **Scope of change:**
 
 | File | Change |
 | --- | --- |
-| `core/extensions/router.py` | Add `_last_message_at`, `_session_timeout` fields. In `handle_user_message()`, compare elapsed time → call `_rotate_session()` if exceeded. `_rotate_session()` creates new `thread_id` + `SQLiteThread`, publishes `thread.completed` via EventBus. |
+| `core/extensions/router.py` | Add `_last_message_at`, `_thread_timeout` fields. In `handle_user_message()`, compare elapsed time → call `_rotate_thread()` if exceeded. `_rotate_thread()` creates new `thread_id` + `SQLiteThread`, publishes `thread.completed` via EventBus. |
 | `core/events/topics.py` | Register `thread.completed` topic (one line). |
-| `core/settings.py` | Add `session.timeout_sec` default (1800). |
+| `core/settings.py` | Add `thread.timeout_sec` default (1800). |
 
 **Why in core:** The kernel already owns `thread_id` lifecycle — it creates the ID, passes it to `SQLiteThread`, and injects it into `user_message`/`agent_response` events. Thread rotation is a natural extension of this existing responsibility. If rotation lived in the memory extension, the extension would need to fabricate new `thread_id` values and somehow propagate them back to the kernel — increasing coupling.
 
 **Backward-compatible:** Extensions that ignore `thread.completed` are unaffected. The `thread_id` format does not change. `SQLiteThread` rotation only affects the Agents SDK's short-term conversation buffer — the Orchestrator's behavior is identical from the user's perspective.
 
-**Forward extension points:** The `_rotate_session()` method can be called from other triggers in the future: user-initiated reset command, channel-specific boundaries, or explicit API calls. The mechanism is generic; inactivity timeout is simply the first trigger.
+**Forward extension points:** The `_rotate_thread()` method can be called from other triggers in the future: user-initiated reset command, channel-specific boundaries, or explicit API calls. The mechanism is generic; inactivity timeout is simply the first trigger.
 
 ### C2. Batch Embedding in `embedding` Extension
 
@@ -1031,7 +1031,7 @@ else:
 | Causal inference produces false edges           | Medium   | LLM inferring cause-effect from episode pairs has high hallucination risk — false `causal` edges degrade "why" queries. Mitigations: causal edges default to `confidence = 0.7` (below user-stated facts at 1.0); causal inference is deferred to Phase 5 (after the base system is validated); the agent prompt requires explicit cause-effect language, not speculation. Temporal edges (deterministic, auto-created) provide 80% of timeline value without this risk. |
 | Graph queries become slow at scale              | Low      | Recursive CTEs have depth limits (3-4). Indexes on `relation_type`, `source_id`, `target_id`. For a personal agent, 10K-100K nodes is the realistic ceiling — well within SQLite's comfort zone.                                                                                                                                                                                                                                                                         |
 | Entity resolution errors (wrong merges)         | Medium   | Conservative thresholds: exact alias match in hot path, LLM verification in write-path. Entity merges are logged in `attributes`. Manual `correct_fact` and future `split_entity` tools provide recourse.                                                                                                                                                                                                                                                                |
-| Write-path agent interrupted mid-consolidation  | Medium   | Idempotency protocol (§10.1): `is_session_consolidated` check before processing; `mark_session_consolidated` only after all operations complete. Partial work (saved nodes) is harmless — duplicate runs may create duplicate facts, caught by deduplication in the next consolidation.                                                                                                                                                                                  |
+| Write-path agent interrupted mid-consolidation  | Medium   | Idempotency protocol (§10.1): `is_thread_consolidated` check before processing; `mark_thread_consolidated` only after all operations complete. Partial work (saved nodes) is harmless — duplicate runs may create duplicate facts, caught by deduplication in the next consolidation.                                                                                                                                                                                   |
 | No backward compatibility with v1 data          | Low      | Accepted trade-off. Fresh start is preferred over complex migration from a fundamentally different schema.                                                                                                                                                                                                                                                                                                                                                               |
 
 

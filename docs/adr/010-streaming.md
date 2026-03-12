@@ -121,7 +121,7 @@ async def invoke_agent_streamed(
         result = Runner.run_streamed(
             self._agent,
             prompt,
-            session=self._session,
+            session=self._thread,
         )
         full_text = ""
         async for event in result.stream_events():
@@ -143,8 +143,8 @@ async def invoke_agent_streamed(
 async def handle_user_message(self, text, user_id, channel):
     # Thread rotation (unchanged)
     now = time.time()
-    if self._last_message_at and (now - self._last_message_at) > self._session_timeout:
-        await self._rotate_session()
+    if self._last_message_at and (now - self._last_message_at) > self._thread_timeout:
+        await self._rotate_thread()
     self._last_message_at = now
 
     await self._emit("user_message", {...})

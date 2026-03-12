@@ -36,7 +36,7 @@ Use a single `threads` table for both SDK and Yodoca:
 
 Positive:
 
-- Single source of truth for session metadata
+- Single source of truth for thread metadata
 - No startup backfill, simpler code
 - `agent_threads` table is never created
 

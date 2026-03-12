@@ -173,9 +173,9 @@ extensions:
     provider: openai
 ```
 
-(Other sections such as `event_bus`, `logging`, `session`, `supervisor` keep their defaults if omitted.)
+(Other sections such as `event_bus`, `logging`, `thread`, `supervisor` keep their defaults if omitted.)
 
-### Override only logging and session
+### Override only logging and thread
 
 You can leave agents and providers as defaults and override a few keys:
 
