@@ -83,18 +83,12 @@ def _create_agent(
     )
 
 
-def _configure_thread_and_context(
+def _configure_thread(
     router: MessageRouter,
-    loader: Loader,
-    agent: Any,
     settings: dict,
     data_dir: Path,
     event_bus: EventBus,
 ) -> None:
-    mcp_servers = loader.get_mcp_servers()
-    if mcp_servers:
-        agent.mcp_servers = mcp_servers
-        agent.mcp_config = {"convert_schemas_to_strict": True}
     thread_timeout = get_setting(settings, "thread.timeout_sec", 1800)
     thread_dir = data_dir / "memory"
     thread_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +97,17 @@ def _configure_thread_and_context(
         thread_timeout=thread_timeout,
         event_bus=event_bus,
     )
+
+
+def _configure_agent_mcp_and_context(
+    loader: Loader,
+    router: MessageRouter,
+    agent: Any,
+) -> None:
+    mcp_servers = loader.get_mcp_servers()
+    if mcp_servers:
+        agent.mcp_servers = mcp_servers
+        agent.mcp_config = {"convert_schemas_to_strict": True}
     loader.wire_context_providers(router)
 
 
@@ -118,10 +123,11 @@ async def main_async() -> None:
     event_bus = _build_event_bus(settings)
     await event_bus.recover()
     loader.set_event_bus(event_bus)
+    _configure_thread(router, settings, data_dir, event_bus)
     await _wire_extensions(loader, router, event_bus)
     agent = _create_agent(loader, router, event_bus, settings, model_router, registry)
     router.set_agent(agent)
-    _configure_thread_and_context(router, loader, agent, settings, data_dir, event_bus)
+    _configure_agent_mcp_and_context(loader, router, agent)
     await event_bus.start()
     await loader.start_all()
     lifecycle_task = start_lifecycle_loop(registry, interval_seconds=60.0)
