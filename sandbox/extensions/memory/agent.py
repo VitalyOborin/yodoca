@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ConsolidationResult:
-    """Result of consolidate_session."""
+    """Result of consolidate_thread."""
 
-    session_id: str
+    thread_id: str
     status: str = "completed"
 
 
@@ -50,25 +50,25 @@ class MemoryAgent:
                 tools=tools,
             )
 
-    async def consolidate_session(self, session_id: str) -> ConsolidationResult:
-        """Run consolidation for a session. Agent uses tools to extract, link, and mark done."""
-        task = f"Consolidate session {session_id}. Follow the workflow: check idempotency, fetch episodes, extract facts/procedures/opinions, save nodes with derived_from edges, link entities, resolve conflicts if any, then mark session consolidated."
-        logger.info("Consolidation started: session=%s", session_id)
+    async def consolidate_thread(self, thread_id: str) -> ConsolidationResult:
+        """Run consolidation for a thread. Agent uses tools to extract, link, and mark done."""
+        task = f"Consolidate thread {thread_id}. Follow the workflow: check idempotency, fetch episodes, extract facts/procedures/opinions, save nodes with derived_from edges, link entities, resolve conflicts if any, then mark thread consolidated."
+        logger.info("Consolidation started: thread=%s", thread_id)
         try:
             await Runner.run(
                 self._agent,
                 task,
                 max_turns=15,
             )
-            logger.info("Consolidation completed: session=%s", session_id)
+            logger.info("Consolidation completed: thread=%s", thread_id)
             return ConsolidationResult(
-                session_id=session_id,
+                thread_id=thread_id,
                 status="completed",
             )
         except Exception:
-            logger.exception("Consolidation error: session=%s", session_id)
+            logger.exception("Consolidation error: thread=%s", thread_id)
             return ConsolidationResult(
-                session_id=session_id,
+                thread_id=thread_id,
                 status="error",
             )
 

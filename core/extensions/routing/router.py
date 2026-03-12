@@ -241,7 +241,7 @@ class MessageRouter:
                 "text": text,
                 "user_id": user_id,
                 "channel": channel,
-                "session_id": effective_session_id,
+                "thread_id": effective_session_id,
             },
         )
         response = await self._delivery.deliver(
@@ -257,7 +257,7 @@ class MessageRouter:
                 "user_id": user_id,
                 "text": response,
                 "channel": channel,
-                "session_id": effective_session_id,
+                "thread_id": effective_session_id,
                 "agent_id": self._invoker.agent_id,
             },
         )

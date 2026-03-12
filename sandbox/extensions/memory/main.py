@@ -64,7 +64,7 @@ class MemoryExtension:
         self._write_agent: object | None = None
         self._decay_service: DecayService | None = None
         self._ctx: object | None = None
-        self._current_session_id: str | None = None
+        self._current_thread_id: str | None = None
         self._token_budget: int = 2000
         self._dedup_threshold: float = 0.92
         self._last_consolidation_at: str | None = None
@@ -206,16 +206,16 @@ class MemoryExtension:
             decay_threshold=context.get_config("decay_threshold", 0.05),
         )
 
-        prev_session = await self._storage.get_latest_session_id()
-        if prev_session:
-            self._current_session_id = prev_session
-            logger.info("Resumed previous session: %s", prev_session)
+        prev_thread = await self._storage.get_latest_thread_id()
+        if prev_thread:
+            self._current_thread_id = prev_thread
+            logger.info("Resumed previous thread: %s", prev_thread)
 
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
             SystemTopics.SESSION_COMPLETED,
-            self._on_session_completed,
+            self._on_thread_completed,
         )
 
     async def start(self) -> None:
@@ -241,9 +241,9 @@ class MemoryExtension:
             if not self._storage:
                 return None
             logger.info("Nightly maintenance started")
-            unconsolidated = await self._storage.get_unconsolidated_sessions()
-            for sid in unconsolidated:
-                await self._consolidate_session(sid)
+            unconsolidated = await self._storage.get_unconsolidated_threads()
+            for tid in unconsolidated:
+                await self._consolidate_thread(tid)
             n_consolidated = len(unconsolidated)
 
             decay_stats = {"decayed": 0, "pruned": 0}
@@ -311,28 +311,28 @@ class MemoryExtension:
         if not self._storage:
             return
         text = (data.get("text") or "").strip()
-        session_id = data.get("session_id")
+        thread_id = data.get("thread_id")
 
-        if session_id and session_id != self._current_session_id:
-            if self._current_session_id:
-                prev_sid = self._current_session_id
-                if prev_sid not in self._consolidation_pending:
-                    self._consolidation_pending.add(prev_sid)
+        if thread_id and thread_id != self._current_thread_id:
+            if self._current_thread_id:
+                prev_tid = self._current_thread_id
+                if prev_tid not in self._consolidation_pending:
+                    self._consolidation_pending.add(prev_tid)
                     logger.info(
-                        "Session switch: scheduling consolidation for %s", prev_sid
+                        "Thread switch: scheduling consolidation for %s", prev_tid
                     )
-                    task = asyncio.create_task(self._consolidate_session(prev_sid))
+                    task = asyncio.create_task(self._consolidate_thread(prev_tid))
                     task.add_done_callback(
-                        lambda _: self._consolidation_pending.discard(prev_sid)
+                        lambda _: self._consolidation_pending.discard(prev_tid)
                     )
-            self._current_session_id = session_id
-            self._storage.ensure_session(session_id)
-            logger.debug("Active session: %s", session_id)
+            self._current_thread_id = thread_id
+            self._storage.ensure_thread(thread_id)
+            logger.debug("Active thread: %s", thread_id)
 
         if not text:
             return
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        prev_id = await self._storage.get_last_episode_id(thread_id or "")
         now = int(time.time())
         node_id = str(uuid.uuid4())
         node = {
@@ -344,7 +344,7 @@ class MemoryExtension:
             "valid_from": now,
             "source_type": "conversation",
             "source_role": "user",
-            "session_id": session_id,
+            "thread_id": thread_id,
         }
         self._storage.insert_node(node)
         if prev_id:
@@ -359,9 +359,9 @@ class MemoryExtension:
             )
         self._last_episode_id = node_id
         logger.debug(
-            "Episode saved: node=%s session=%s len=%d",
+            "Episode saved: node=%s thread=%s len=%d",
             node_id[:8],
-            session_id,
+            thread_id,
             len(text),
         )
         if self._embed_fn:
@@ -393,10 +393,10 @@ class MemoryExtension:
         text = (data.get("text") or "").strip()
         if not text:
             return
-        session_id = data.get("session_id") or self._current_session_id
+        thread_id = data.get("thread_id") or self._current_thread_id
         agent_id = data.get("agent_id") or "orchestrator"
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        prev_id = await self._storage.get_last_episode_id(thread_id or "")
         now = int(time.time())
         node_id = str(uuid.uuid4())
         node = {
@@ -408,7 +408,7 @@ class MemoryExtension:
             "valid_from": now,
             "source_type": "conversation",
             "source_role": agent_id,
-            "session_id": session_id,
+            "thread_id": thread_id,
         }
         self._storage.insert_node(node)
         if prev_id:
@@ -423,48 +423,48 @@ class MemoryExtension:
             )
         self._last_episode_id = node_id
         logger.debug(
-            "Agent episode saved: node=%s agent=%s session=%s len=%d",
+            "Agent episode saved: node=%s agent=%s thread=%s len=%d",
             node_id[:8],
             agent_id,
-            session_id,
+            thread_id,
             len(text),
         )
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
-    async def _on_session_completed(self, event: object) -> None:
-        """EventBus: session.completed. Trigger consolidation."""
+    async def _on_thread_completed(self, event: object) -> None:
+        """EventBus: session.completed. Trigger thread consolidation."""
         payload = getattr(event, "payload", {}) or {}
-        session_id = payload.get("session_id")
-        if session_id:
-            if session_id in self._consolidation_pending:
+        thread_id = payload.get("thread_id")
+        if thread_id:
+            if thread_id in self._consolidation_pending:
                 logger.debug(
                     "session.completed: consolidation already pending for %s",
-                    session_id,
+                    thread_id,
                 )
                 return
-            self._consolidation_pending.add(session_id)
+            self._consolidation_pending.add(thread_id)
             logger.info(
-                "session.completed: scheduling consolidation for %s", session_id
+                "session.completed: scheduling consolidation for %s", thread_id
             )
-            task = asyncio.create_task(self._consolidate_session(session_id))
+            task = asyncio.create_task(self._consolidate_thread(thread_id))
             task.add_done_callback(
-                lambda _: self._consolidation_pending.discard(session_id)
+                lambda _: self._consolidation_pending.discard(thread_id)
             )
 
-    async def _consolidate_session(self, session_id: str) -> None:
-        """Consolidate session via write-path agent."""
+    async def _consolidate_thread(self, thread_id: str) -> None:
+        """Consolidate thread via write-path agent."""
         try:
             if not self._write_agent or not self._storage:
                 logger.info(
-                    "consolidate_session skipped (no write agent): %s", session_id
+                    "consolidate_thread skipped (no write agent): %s", thread_id
                 )
                 return
-            if await self._storage.is_session_consolidated(session_id):
+            if await self._storage.is_thread_consolidated(thread_id):
                 return
-            result = await self._write_agent.consolidate_session(session_id)
-            logger.info("Session %s consolidated: %s", session_id, result)
+            result = await self._write_agent.consolidate_thread(thread_id)
+            logger.info("Thread %s consolidated: %s", thread_id, result)
         except Exception as e:
-            logger.exception("consolidate_session failed for %s: %s", session_id, e)
+            logger.exception("consolidate_thread failed for %s: %s", thread_id, e)
         finally:
-            self._consolidation_pending.discard(session_id)
+            self._consolidation_pending.discard(thread_id)

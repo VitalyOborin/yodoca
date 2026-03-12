@@ -61,6 +61,7 @@ class MemoryStorage:
         await self._write_conn.enable_load_extension(False)
         await self._write_conn.execute("PRAGMA journal_mode=WAL")
         await self._write_conn.execute("PRAGMA synchronous=NORMAL")
+        await self._reset_incompatible_schema()
 
         schema_path = Path(__file__).parent / "schema.sql"
         schema_sql = schema_path.read_text(encoding="utf-8")
@@ -81,6 +82,41 @@ class MemoryStorage:
         self._writer_task = asyncio.create_task(self._writer_loop())
         self._closed = False
         logger.info("MemoryStorage initialized: %s", self._db_path)
+
+    async def _reset_incompatible_schema(self) -> None:
+        """Drop legacy memory tables when schema uses session_id instead of thread_id."""
+        if self._write_conn is None:
+            return
+        cursor = await self._write_conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'"
+        )
+        if await cursor.fetchone() is None:
+            return
+        cursor = await self._write_conn.execute("PRAGMA table_info(nodes)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "session_id" in columns and "thread_id" not in columns:
+            logger.warning(
+                "Incompatible memory schema detected (session_id). "
+                "Resetting memory tables for thread-based schema."
+            )
+            await self._write_conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS nodes_fts_insert;
+                DROP TRIGGER IF EXISTS nodes_fts_update;
+                DROP TRIGGER IF EXISTS nodes_fts_delete;
+                DROP TABLE IF EXISTS nodes_fts;
+                DROP TABLE IF EXISTS vec_nodes;
+                DROP TABLE IF EXISTS vec_entities;
+                DROP TABLE IF EXISTS node_entities;
+                DROP TABLE IF EXISTS edges;
+                DROP TABLE IF EXISTS entities;
+                DROP TABLE IF EXISTS nodes;
+                DROP TABLE IF EXISTS sessions_consolidations;
+                DROP TABLE IF EXISTS threads_consolidations;
+                DROP TABLE IF EXISTS maintenance_metadata;
+                """
+            )
+            await self._write_conn.commit()
 
     async def _writer_loop(self) -> None:
         """Process write operations sequentially."""
@@ -154,7 +190,7 @@ class MemoryStorage:
                 id, type, content, embedding,
                 event_time, created_at, valid_from, valid_until,
                 confidence, access_count, last_accessed, decay_rate,
-                source_type, source_role, session_id, attributes
+                source_type, source_role, thread_id, attributes
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
@@ -172,7 +208,7 @@ class MemoryStorage:
             node.get("decay_rate", 0.1),
             node.get("source_type"),
             node.get("source_role"),
-            node.get("session_id"),
+            node.get("thread_id"),
             json.dumps(node.get("attributes") or {}),
         )
         self._submit_write(sql, params)
@@ -186,7 +222,7 @@ class MemoryStorage:
                 id, type, content, embedding,
                 event_time, created_at, valid_from, valid_until,
                 confidence, access_count, last_accessed, decay_rate,
-                source_type, source_role, session_id, attributes
+                source_type, source_role, thread_id, attributes
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
@@ -204,7 +240,7 @@ class MemoryStorage:
             node.get("decay_rate", 0.1),
             node.get("source_type"),
             node.get("source_role"),
-            node.get("session_id"),
+            node.get("thread_id"),
             json.dumps(node.get("attributes") or {}),
         )
         future = self._submit_write(sql, params, wait=True)
@@ -380,7 +416,7 @@ class MemoryStorage:
                     id, type, content, embedding,
                     event_time, created_at, valid_from, valid_until,
                     confidence, access_count, last_accessed, decay_rate,
-                    source_type, source_role, session_id, attributes
+                    source_type, source_role, thread_id, attributes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             params = (
@@ -398,7 +434,7 @@ class MemoryStorage:
                 node.get("decay_rate", 0.1),
                 node.get("source_type"),
                 node.get("source_role"),
-                node.get("session_id"),
+                node.get("thread_id"),
                 json.dumps(node.get("attributes") or {}),
             )
             future = self._submit_write(sql, params, wait=True)
@@ -408,17 +444,17 @@ class MemoryStorage:
             await f
         return node_ids
 
-    async def get_last_episode_id(self, session_id: str) -> str | None:
-        """Get the most recent episodic node id for a session."""
+    async def get_last_episode_id(self, thread_id: str) -> str | None:
+        """Get the most recent episodic node id for a thread."""
         if self._read_conn is None:
             return None
         cursor = await self._read_conn.execute(
             """
             SELECT id FROM nodes
-            WHERE type = 'episodic' AND session_id = ? AND valid_until IS NULL
+            WHERE type = 'episodic' AND thread_id = ? AND valid_until IS NULL
             ORDER BY event_time DESC LIMIT 1
             """,
-            (session_id,),
+            (thread_id,),
         )
         row = await cursor.fetchone()
         return row[0] if row else None
@@ -446,7 +482,7 @@ class MemoryStorage:
 
         sql = f"""
             SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
+                   n.confidence, n.thread_id
             FROM nodes n
             INNER JOIN (
                 SELECT rowid FROM nodes_fts
@@ -467,7 +503,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
@@ -559,7 +595,7 @@ class MemoryStorage:
             params = [blob, inner_limit, limit]
         sql = f"""
             SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id, v.distance
+                   n.confidence, n.thread_id, v.distance
             FROM (
                 SELECT node_id, distance FROM vec_nodes
                 WHERE embedding MATCH ? ORDER BY distance LIMIT ?
@@ -580,7 +616,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
                 "distance": r[7],
             }
             for r in rows
@@ -608,48 +644,48 @@ class MemoryStorage:
             "last_accessed": row[7],
         }
 
-    def ensure_session(self, session_id: str) -> None:
-        """Upsert session into sessions_consolidations. Fire-and-forget."""
+    def ensure_thread(self, thread_id: str) -> None:
+        """Upsert thread into threads_consolidations. Fire-and-forget."""
         import time
 
         now = int(time.time())
         sql = """
-            INSERT INTO sessions_consolidations (session_id, first_seen_at, consolidated_at)
+            INSERT INTO threads_consolidations (thread_id, first_seen_at, consolidated_at)
             VALUES (?, ?, NULL)
-            ON CONFLICT(session_id) DO NOTHING
+            ON CONFLICT(thread_id) DO NOTHING
         """
-        self._submit_write(sql, (session_id, now))
+        self._submit_write(sql, (thread_id, now))
 
-    async def is_session_consolidated(self, session_id: str) -> bool:
-        """Check if session was consolidated."""
+    async def is_thread_consolidated(self, thread_id: str) -> bool:
+        """Check if thread was consolidated."""
         if self._read_conn is None:
             return False
         cursor = await self._read_conn.execute(
-            "SELECT consolidated_at FROM sessions_consolidations WHERE session_id = ?",
-            (session_id,),
+            "SELECT consolidated_at FROM threads_consolidations WHERE thread_id = ?",
+            (thread_id,),
         )
         row = await cursor.fetchone()
         return row is not None and row[0] is not None
 
-    async def get_session_episodes(
+    async def get_thread_episodes(
         self,
-        session_id: str,
+        thread_id: str,
         *,
         limit: int = 30,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Paginated fetch of episodic nodes for a session, ordered by event_time ASC."""
+        """Paginated fetch of episodic nodes for a thread, ordered by event_time ASC."""
         if self._read_conn is None:
             return []
         cursor = await self._read_conn.execute(
             """
-            SELECT id, type, content, event_time, created_at, confidence, session_id
+            SELECT id, type, content, event_time, created_at, confidence, thread_id
             FROM nodes
-            WHERE type = 'episodic' AND session_id = ? AND valid_until IS NULL
+            WHERE type = 'episodic' AND thread_id = ? AND valid_until IS NULL
             ORDER BY event_time ASC
             LIMIT ? OFFSET ?
             """,
-            (session_id, limit, offset),
+            (thread_id, limit, offset),
         )
         rows = await cursor.fetchall()
         return [
@@ -660,29 +696,29 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
 
-    async def mark_session_consolidated(self, session_id: str) -> None:
-        """Mark session as consolidated. Awaitable via write queue."""
+    async def mark_thread_consolidated(self, thread_id: str) -> None:
+        """Mark thread as consolidated. Awaitable via write queue."""
         now = int(time.time())
         future = self._submit_write(
-            "UPDATE sessions_consolidations SET consolidated_at = ? WHERE session_id = ?",
-            (now, session_id),
+            "UPDATE threads_consolidations SET consolidated_at = ? WHERE thread_id = ?",
+            (now, thread_id),
             wait=True,
         )
         if future:
             await future
-        logger.debug("mark_session_consolidated: %s", session_id)
+        logger.debug("mark_thread_consolidated: %s", thread_id)
 
-    async def get_unconsolidated_sessions(self) -> list[str]:
-        """Return session_ids where consolidated_at IS NULL. For nightly maintenance."""
+    async def get_unconsolidated_threads(self) -> list[str]:
+        """Return thread_ids where consolidated_at IS NULL. For nightly maintenance."""
         if self._read_conn is None:
             return []
         cursor = await self._read_conn.execute(
-            "SELECT session_id FROM sessions_consolidations WHERE consolidated_at IS NULL"
+            "SELECT thread_id FROM threads_consolidations WHERE consolidated_at IS NULL"
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
@@ -726,12 +762,12 @@ class MemoryStorage:
             out[row[0]] = row[1]
         return out
 
-    async def get_latest_session_id(self) -> str | None:
-        """Return the most recent session_id (by first_seen_at). Used to resume after restart."""
+    async def get_latest_thread_id(self) -> str | None:
+        """Return the most recent thread_id (by first_seen_at). Used to resume after restart."""
         if self._read_conn is None:
             return None
         cursor = await self._read_conn.execute(
-            "SELECT session_id FROM sessions_consolidations ORDER BY first_seen_at DESC LIMIT 1"
+            "SELECT thread_id FROM threads_consolidations ORDER BY first_seen_at DESC LIMIT 1"
         )
         row = await cursor.fetchone()
         return row[0] if row else None
@@ -853,25 +889,25 @@ class MemoryStorage:
             return []
         cursor = await self._read_conn.execute(
             """
-            SELECT id, type, content, event_time, session_id
+            SELECT id, type, content, event_time, thread_id
             FROM nodes
-            WHERE type = 'episodic' AND valid_until IS NULL AND session_id IS NOT NULL
-            ORDER BY session_id, event_time
+            WHERE type = 'episodic' AND valid_until IS NULL AND thread_id IS NOT NULL
+            ORDER BY thread_id, event_time
             """
         )
         rows = await cursor.fetchall()
-        by_session: dict[str, list[dict[str, Any]]] = {}
+        by_thread: dict[str, list[dict[str, Any]]] = {}
         for r in rows:
             rec = {
                 "id": r[0],
                 "type": r[1],
                 "content": r[2],
                 "event_time": r[3],
-                "session_id": r[4],
+                "thread_id": r[4],
             }
-            by_session.setdefault(r[4], []).append(rec)
+            by_thread.setdefault(r[4], []).append(rec)
         pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        for episodes in by_session.values():
+        for episodes in by_thread.values():
             for i in range(len(episodes) - 1):
                 pairs.append((episodes[i], episodes[i + 1]))
                 if len(pairs) >= limit:
@@ -960,7 +996,7 @@ class MemoryStorage:
                   AND c.depth < ?
             )
             SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
+                   n.confidence, n.thread_id
             FROM nodes n
             JOIN chain c ON n.id = c.node_id
             WHERE n.valid_until IS NULL {time_filter}
@@ -978,7 +1014,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
@@ -1006,7 +1042,7 @@ class MemoryStorage:
                   AND cc.depth < ?
             )
             SELECT DISTINCT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
+                   n.confidence, n.thread_id
             FROM nodes n
             JOIN causal_chain cc ON n.id = cc.node_id
             WHERE n.valid_until IS NULL
@@ -1023,7 +1059,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
@@ -1046,7 +1082,7 @@ class MemoryStorage:
             params = [entity_id] + list(node_types) + [limit]
         sql = f"""
             SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
+                   n.confidence, n.thread_id
             FROM nodes n
             INNER JOIN node_entities ne ON n.id = ne.node_id
             WHERE ne.entity_id = ? AND n.valid_until IS NULL {type_filter}
@@ -1063,7 +1099,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
@@ -1097,7 +1133,7 @@ class MemoryStorage:
         cursor = await self._read_conn.execute(
             f"""
             SELECT n.id, n.type, n.content, n.event_time, n.created_at,
-                   n.confidence, n.session_id
+                   n.confidence, n.thread_id
             FROM nodes n
             WHERE {where}
             ORDER BY n.event_time ASC
@@ -1114,7 +1150,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         ]
@@ -1132,7 +1168,7 @@ class MemoryStorage:
         placeholders = ",".join("?" * len(order))
         cursor = await self._read_conn.execute(
             f"""
-            SELECT id, type, content, event_time, created_at, confidence, session_id
+            SELECT id, type, content, event_time, created_at, confidence, thread_id
             FROM nodes WHERE id IN ({placeholders}) AND valid_until IS NULL
             """,
             tuple(order),
@@ -1146,7 +1182,7 @@ class MemoryStorage:
                 "event_time": r[3],
                 "created_at": r[4],
                 "confidence": r[5],
-                "session_id": r[6],
+                "thread_id": r[6],
             }
             for r in rows
         }

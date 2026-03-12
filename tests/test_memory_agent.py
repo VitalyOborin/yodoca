@@ -15,39 +15,39 @@ from agent import ConsolidationResult, MemoryAgent, create_memory_agent
 
 
 class TestMemoryAgent:
-    """MemoryAgent.consolidate_session with mocked Runner.run."""
+    """MemoryAgent.consolidate_thread with mocked Runner.run."""
 
     @pytest.mark.asyncio
-    async def test_consolidate_session_returns_completed(
+    async def test_consolidate_thread_returns_completed(
         self,
     ) -> None:
         tools = []
-        instructions = "Consolidate session."
+        instructions = "Consolidate thread."
         agent = MemoryAgent(model=None, tools=tools, instructions=instructions)
 
         with patch("agent.Runner") as mock_runner:
             mock_runner.run = AsyncMock()
-            result = await agent.consolidate_session("sess-123")
+            result = await agent.consolidate_thread("thread-123")
 
         assert isinstance(result, ConsolidationResult)
-        assert result.session_id == "sess-123"
+        assert result.thread_id == "thread-123"
         assert result.status == "completed"
         mock_runner.run.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_consolidate_session_returns_error_on_exception(
+    async def test_consolidate_thread_returns_error_on_exception(
         self,
     ) -> None:
         tools = []
-        instructions = "Consolidate session."
+        instructions = "Consolidate thread."
         agent = MemoryAgent(model=None, tools=tools, instructions=instructions)
 
         with patch("agent.Runner") as mock_runner:
             mock_runner.run = AsyncMock(side_effect=RuntimeError("model failed"))
-            result = await agent.consolidate_session("sess-456")
+            result = await agent.consolidate_thread("thread-456")
 
         assert isinstance(result, ConsolidationResult)
-        assert result.session_id == "sess-456"
+        assert result.thread_id == "thread-456"
         assert result.status == "error"
 
 
@@ -63,4 +63,4 @@ class TestCreateMemoryAgent:
         agent = create_memory_agent(model=None, tools=tools, extension_dir=ext_dir)
 
         assert agent is not None
-        assert hasattr(agent, "consolidate_session")
+        assert hasattr(agent, "consolidate_thread")

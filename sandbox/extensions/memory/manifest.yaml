@@ -37,6 +37,6 @@ schedules:
   - name: nightly_maintenance
     cron: "0 3 * * *"
     task: run_nightly_maintenance
-    description: "Consolidate pending sessions, apply decay, enrich entities"
+    description: "Consolidate pending threads, apply decay, enrich entities"
 
 enabled: true

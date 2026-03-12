@@ -98,7 +98,7 @@ class SessionManager:
             await self._event_bus.publish(
                 SystemTopics.SESSION_COMPLETED,
                 "kernel",
-                {"session_id": old_id, "reason": "inactivity_timeout"},
+                {"thread_id": old_id, "reason": "inactivity_timeout"},
             )
 
     async def maybe_rotate(self, now_ts: float | None = None) -> None:
