@@ -1,0 +1,35 @@
+id: tracing
+name: Execution Tracing
+version: "1.0.0"
+
+entrypoint: main:TracingExtension
+
+description: |
+  Structured execution tracing for agent invocations. Records every
+  tool call, LLM step, and context enrichment as nested spans in SQLite.
+  Provides real-time EventBus notifications and self-inspection tools.
+
+depends_on: []
+
+config:
+  retention_days: 30
+  max_input_summary_len: 2000
+  max_output_summary_len: 2000
+  trace_context_enrichment: true
+  trace_tool_calls: true
+  trace_llm_calls: true
+
+schedules:
+  - name: trace_cleanup
+    cron: "30 4 * * *"
+    task: cleanup_old_traces
+    description: "Delete traces older than retention_days"
+
+events:
+  publishes:
+    - topic: trace.span.started
+      description: "A new tracing span has started"
+    - topic: trace.span.completed
+      description: "A tracing span has completed"
+
+enabled: true
