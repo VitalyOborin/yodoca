@@ -10,4 +10,4 @@ export {
   type CreateThreadRequest,
   type UpdateThreadRequest,
 } from './threads';
-export { runAgent, type ChatMessage } from './agent';
+export { runAgent, type ChatMessage, type RunAgentOptions } from './agent';

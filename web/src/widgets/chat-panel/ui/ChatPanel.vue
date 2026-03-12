@@ -73,17 +73,26 @@ async function handleSend(content: string) {
     const allMessages = messageStore.getThreadMessages(threadId);
     const chatMessages: ChatMessage[] = toChatMessages(allMessages);
 
+    // Add empty placeholder for the assistant response; we'll stream into it.
+    const assistantMsgId = messageStore.addMessage(threadId, 'assistant', '');
+
     try {
-      const assistantText = await agentStore.runAgent(threadId, chatMessages);
-      if (assistantText) {
-        messageStore.addMessage(threadId, 'assistant', assistantText);
-      }
-      await threadStore.loadThreads();
+      await agentStore.runAgent(threadId, chatMessages, {
+        onDelta: (delta) => {
+          messageStore.appendMessageDelta(assistantMsgId, delta);
+        },
+      });
     } catch {
-      // Phase already set to error in agentStore
+      // Phase already set to error in agentStore. Remove placeholder if empty.
+      const msg = messageStore.messages.find((m) => m.id === assistantMsgId);
+      if (msg && !msg.content) {
+        messageStore.messages.splice(messageStore.messages.indexOf(msg), 1);
+      }
     } finally {
       agentStore.resetPhase();
     }
+
+    await threadStore.loadThreads();
   } finally {
     isSending.value = false;
   }

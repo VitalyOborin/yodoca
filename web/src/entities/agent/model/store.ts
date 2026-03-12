@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { AgentPhase } from './types';
 import { runAgent as apiRunAgent } from '@/shared/api';
-import type { ChatMessage } from '@/shared/api';
+import type { ChatMessage, RunAgentOptions } from '@/shared/api';
 
 export const useAgentStore = defineStore('agent', () => {
   const phase = ref<AgentPhase>('idle');
@@ -13,10 +13,14 @@ export const useAgentStore = defineStore('agent', () => {
     if (step !== undefined) currentStep.value = step;
   }
 
-  async function runAgent(threadId: string, messages: ChatMessage[]): Promise<string> {
+  async function runAgent(
+    threadId: string,
+    messages: ChatMessage[],
+    options?: RunAgentOptions,
+  ): Promise<string> {
     setPhase('thinking', 'Processing your request...');
     try {
-      const text = await apiRunAgent(threadId, messages);
+      const text = await apiRunAgent(threadId, messages, options);
       setPhase('complete', 'Done');
       return text;
     } catch (e) {

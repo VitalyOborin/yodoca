@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import { Check, Pencil, Trash2, X } from 'lucide-vue-next';
+import { ref, watch, nextTick } from 'vue';
+import { Check, Pencil, Trash2 } from 'lucide-vue-next';
 import type { Thread } from '../model/types';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ const emit = defineEmits<{
 
 const isEditing = ref(false);
 const draftTitle = ref(props.thread.title ?? '');
+const inputEl = ref<HTMLInputElement | null>(null);
 
 watch(
   () => props.thread.title,
@@ -26,9 +27,12 @@ watch(
   },
 );
 
-function startEditing() {
-  isEditing.value = true;
+async function startEditing() {
   draftTitle.value = props.thread.title ?? '';
+  isEditing.value = true;
+  await nextTick();
+  inputEl.value?.focus();
+  inputEl.value?.select();
 }
 
 function cancelEditing() {
@@ -42,7 +46,6 @@ function saveTitle() {
     cancelEditing();
     return;
   }
-
   emit('rename', title);
   isEditing.value = false;
 }
@@ -61,8 +64,9 @@ function saveTitle() {
   >
     <div class="flex items-center justify-between gap-2">
       <div class="min-w-0 flex-1">
-        <div v-if="isEditing" class="flex items-center gap-1.5">
+        <div v-if="isEditing" class="flex items-center gap-1">
           <input
+            ref="inputEl"
             v-model="draftTitle"
             type="text"
             maxlength="80"
@@ -75,14 +79,11 @@ function saveTitle() {
             type="button"
             variant="ghost"
             size="icon-sm"
-            class="h-7 w-7"
+            class="h-7 w-7 shrink-0"
             :disabled="!draftTitle.trim()"
             @click.stop="saveTitle"
           >
             <Check class="h-4 w-4 text-[hsl(var(--success))]" />
-          </Button>
-          <Button type="button" variant="ghost" size="icon-sm" class="h-7 w-7" @click.stop="cancelEditing">
-            <X class="h-4 w-4 text-muted-foreground" />
           </Button>
         </div>
 
@@ -91,31 +92,23 @@ function saveTitle() {
         </button>
       </div>
 
-      <div class="flex items-center gap-1">
-        <div
-          :class="
-            cn(
-              'flex items-center gap-1 transition-opacity',
-              isEditing ? 'pointer-events-none opacity-0' : 'opacity-0 group-hover:opacity-100',
-            )
-          "
+      <div
+        v-if="!isEditing"
+        :class="cn('flex items-center gap-1 transition-opacity opacity-0 group-hover:opacity-100')"
+      >
+        <Button type="button" variant="ghost" size="icon-sm" class="h-7 w-7" @click.stop="startEditing">
+          <Pencil class="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          class="h-7 w-7 text-destructive hover:!bg-destructive hover:!text-white dark:hover:!bg-destructive"
+          @click.stop="$emit('delete')"
         >
-          <Button type="button" variant="ghost" size="icon-sm" class="h-7 w-7" @click.stop="startEditing">
-            <Pencil class="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            class="h-7 w-7 text-destructive hover:!bg-destructive hover:!text-white dark:hover:!bg-destructive"
-            @click.stop="$emit('delete')"
-          >
-            <Trash2 class="h-3.5 w-3.5" />
-          </Button>
-        </div>
+          <Trash2 class="h-3.5 w-3.5" />
+        </Button>
       </div>
     </div>
-
-    <p v-if="isEditing" class="mt-2 text-xs text-subtle-foreground">Enter to save, Esc to cancel.</p>
   </article>
 </template>

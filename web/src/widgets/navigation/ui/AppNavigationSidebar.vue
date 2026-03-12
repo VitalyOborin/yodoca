@@ -64,7 +64,7 @@ watch(expanded, (value) => {
               type="button"
               :class="[
                 'focus-ring flex h-10 items-center gap-3 rounded-lg px-2.5 text-sm transition-colors',
-                currentPath === item.path
+                currentPath.startsWith(item.path)
                   ? 'bg-black/45 text-white'
                   : 'text-foreground/80 hover:bg-white/10 hover:text-white',
                 expanded ? 'justify-start' : 'justify-center',

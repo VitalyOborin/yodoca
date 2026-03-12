@@ -63,14 +63,15 @@ function setThreadMessages(
   messages.value = [...existing, ...converted];
 }
 
-  function addMessage(threadId: string, role: Message['role'], content: string) {
-    messages.value.push({
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      threadId,
-      role,
-      content,
-      createdAt: new Date(),
-    });
+  function addMessage(threadId: string, role: Message['role'], content: string): string {
+    const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    messages.value.push({ id, threadId, role, content, createdAt: new Date() });
+    return id;
+  }
+
+  function appendMessageDelta(id: string, delta: string) {
+    const msg = messages.value.find((m) => m.id === id);
+    if (msg) msg.content += delta;
   }
 
   function clearThread(threadId: string) {
@@ -83,6 +84,7 @@ function setThreadMessages(
     getThreadMessages,
     setThreadMessages,
     addMessage,
+    appendMessageDelta,
     clearThread,
   };
 });
