@@ -11,7 +11,7 @@ Memory integrates via **two subscription mechanisms**:
 | Source | API | Backend | Purpose |
 |--------|-----|---------|---------|
 | MessageRouter | `context.subscribe(event, handler)` | In-memory `router._emit()` | User messages and agent responses (hot path) |
-| EventBus | `context.subscribe_event(topic, handler)` | SQLite journal | Session lifecycle (`session.completed`) |
+| EventBus | `context.subscribe_event(topic, handler)` | SQLite journal | Thread lifecycle (`thread.completed`) |
 
 **Important:** The Memory extension does **not** subscribe to EventBus `user.message` directly. User messages reach Memory indirectly: EventBus → Loader kernel handler → MessageRouter → Memory (via MessageRouter internal events).
 
@@ -38,7 +38,7 @@ Memory integrates via **two subscription mechanisms**:
 │                                                                                    │
 │   0. If event_id and already in user_message_processing → skip (idempotency)        │
 │   1. Check session timeout → _rotate_session() if inactivity exceeded               │
-│   2. _emit("user_message", {text, user_id, channel, session_id})  ──► Memory       │
+│   2. _emit("user_message", {text, user_id, channel, thread_id})  ──► Memory       │
 │   3. If channel is StreamingChannelProvider:                                       │
 │        channel.on_stream_start → invoke_agent_streamed(on_chunk, on_tool_call)      │
 │        → channel.on_stream_end(full_text)                                           │
@@ -61,7 +61,7 @@ Memory integrates via **two subscription mechanisms**:
 
 4. **Idempotency** — If `event_id` is set and the event is already recorded in `user_message_processing`, the router skips agent invocation, memory hooks, and channel delivery (prevents duplicate side effects on retry or crash recovery).
 
-5. **Session timeout** — `MessageRouter` checks if `(now - _last_message_at) > session_timeout`. If exceeded, it rotates the session: generates a new session ID, publishes `session.completed` via EventBus for the old session.
+5. **Thread timeout** — `MessageRouter` checks if `(now - _last_message_at) > session_timeout`. If exceeded, it rotates the session: generates a new session ID, publishes `thread.completed` via EventBus for the old session.
 
 6. **MessageRouter** — `handle_user_message()`:
    - Emits `user_message` to MessageRouter subscribers (in-memory, synchronous)
@@ -85,7 +85,7 @@ Memory integrates via **two subscription mechanisms**:
 
 ## 2. Context Injection (Memory → Agent)
 
-Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Each provider receives `TurnContext` (agent_id, channel_id, user_id, session_id). Built-in `_ActiveChannelContextProvider` (priority 0) injects current channel identity. Memory implements `ContextProvider` with `context_priority=50`.
+Before each agent invocation, the Loader wires a **ContextProvider** middleware chain into the MessageRouter. Each provider receives `TurnContext` (agent_id, channel_id, user_id, thread_id). Built-in `_ActiveChannelContextProvider` (priority 0) injects current channel identity. Memory implements `ContextProvider` with `context_priority=50`.
 
 ```
 MessageRouter.invoke_agent(prompt, turn_context)
@@ -125,30 +125,30 @@ Runner.run(agent, prompt, session=session)
 
 Consolidation extracts semantic facts, procedural patterns, and opinions from episodic nodes. It is triggered in two ways:
 
-### 3.1 Session change (reactive)
+### 3.1 Thread change (reactive)
 
 When the user starts a new session (either by session ID change or inactivity timeout), Memory triggers consolidation of the old session:
 
 ```python
 # Memory._on_user_message
-if session_id and session_id != self._current_session_id:
-    if self._current_session_id:
-        asyncio.create_task(self._consolidate_session(self._current_session_id))
-    self._current_session_id = session_id
-    self._storage.ensure_session(session_id)
+if thread_id and thread_id != self._current_thread_id:
+    if self._current_thread_id:
+        asyncio.create_task(self._consolidate_session(self._current_thread_id))
+    self._current_thread_id = thread_id
+    self._storage.ensure_thread(thread_id)
 ```
 
-### 3.2 Session rotation (MessageRouter)
+### 3.2 Thread rotation (MessageRouter)
 
-When inactivity exceeds `session.timeout_sec` (default 1800s), MessageRouter rotates the session and publishes `session.completed`:
+When inactivity exceeds `thread.timeout_sec` (default 1800s), MessageRouter rotates the thread and publishes `thread.completed`:
 
 ```python
 # MessageRouter.handle_user_message
 if (now - _last_message_at) > _session_timeout:
-    _rotate_session()  # publishes session.completed via EventBus
+    _rotate_session()  # publishes thread.completed via EventBus
 ```
 
-Memory subscribes to `session.completed` via `context.subscribe_event()` and triggers consolidation.
+Memory subscribes to `thread.completed` via `context.subscribe_event()` and triggers consolidation.
 
 ### 3.3 Nightly maintenance (scheduled)
 
@@ -156,7 +156,7 @@ The `memory` extension implements `SchedulerProvider`. At 03:00 daily:
 
 ```python
 # MemoryExtension.execute_task("run_nightly_maintenance")
-unconsolidated = await self._storage.get_unconsolidated_sessions()
+unconsolidated = await self._storage.get_unconsolidated_threads()
 for sid in unconsolidated:
     await self._consolidate_session(sid)
 ```
@@ -164,21 +164,21 @@ for sid in unconsolidated:
 ### 3.4 Write-path agent execution
 
 ```
-_consolidate_session(session_id)
+_consolidate_session(thread_id)
     │
     ▼
-MemoryAgent.consolidate_session(session_id)
+MemoryAgent.consolidate_session(thread_id)
     │
     ▼
 Runner.run(agent, task)  # agent uses write-path tools
     │
-    ├─ is_session_consolidated(session_id)          → skip if true
-    ├─ get_session_episodes(session_id, paginated)
+    ├─ is_session_consolidated(thread_id)          → skip if true
+    ├─ get_session_episodes(thread_id, paginated)
     ├─ [LLM] extract facts, procedures, opinions
     ├─ save_nodes_batch(nodes + source_episode_ids)  → derived_from edges + batch embed
     ├─ extract_and_link_entities(nodes + entities)   → resolve or create entity anchors
     ├─ detect_conflicts(fact) → resolve_conflict(old, new) if needed
-    └─ mark_session_consolidated(session_id)
+    └─ mark_session_consolidated(thread_id)
 ```
 
 The write-path agent is a private `Agent` instance inside the memory extension (not an `AgentProvider`). Its tools are internal and not exposed to the Orchestrator.
@@ -192,7 +192,7 @@ Beyond consolidation, the nightly task runs three additional stages:
 ```
 execute_task("run_nightly_maintenance")
     │
-    ├─ 1. Consolidate pending sessions (see §3.3)
+    ├─ 1. Consolidate pending threads (see §3.3)
     │
     ├─ 2. Ebbinghaus decay + pruning
     │     → DecayService.apply(storage)
@@ -262,3 +262,4 @@ All writes go through `MemoryStorage._write_queue` (asyncio.Queue) processed by 
 - [Memory System](memory.md)
 - [Event Bus](event_bus.md)
 - [Extensions](extensions.md)
+

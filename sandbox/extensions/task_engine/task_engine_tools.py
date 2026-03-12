@@ -3,7 +3,6 @@
 from typing import Any
 
 from agents import function_tool
-
 from models import (
     ActiveTasksResult,
     CancelTaskResult,

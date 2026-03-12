@@ -3,8 +3,8 @@
 Determines whether the application is sufficiently configured to start core.
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import yaml
 from dotenv import dotenv_values

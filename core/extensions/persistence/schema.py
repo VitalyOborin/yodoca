@@ -1,10 +1,10 @@
-"""Shared SQLite schema bootstrap for session and project persistence."""
+"""Shared SQLite schema bootstrap for thread and project persistence."""
 
 from pathlib import Path
 
 
-def ensure_session_schema(db_path: str) -> None:
-    """Create the shared session/project schema if it does not exist yet."""
+def ensure_thread_schema(db_path: str) -> None:
+    """Create the shared thread/project schema if it does not exist yet."""
     import sqlite3
 
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -29,8 +29,8 @@ def ensure_session_schema(db_path: str) -> None:
                 PRIMARY KEY (project_id, file_path)
             );
 
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS threads (
+                thread_id TEXT PRIMARY KEY,
                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
                 title TEXT,
                 channel_id TEXT NOT NULL DEFAULT 'unknown',
@@ -44,3 +44,4 @@ def ensure_session_schema(db_path: str) -> None:
         conn.commit()
     finally:
         conn.close()
+

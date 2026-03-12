@@ -48,7 +48,7 @@ The agent process bootstrap in `core/runner.py`:
 12. AgentRegistry + ModelCatalog
 13. create_orchestrator_agent()            — core + extension + delegation tools
     └─ router.set_agent()
-14. router.configure_session(...)          — default runtime session + persistence services
+14. router.configure_thread(...)          — default runtime thread + persistence services
 15. loader.wire_context_providers(router)
 16. event_bus.start()
 17. loader.start_all()
@@ -79,7 +79,7 @@ Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: 
 │  Loader   │ │  EventBus  │ │ MessageRouter │ │ ModelRouter │ │ Orchestrator │
 │ -discover │ │ -journal   │ │ -channels     │ │ -providers  │ │ -core tools  │
 │ -load     │ │ -dispatch  │ │ -invoke_agent │ │ -get_model  │ │ -ext tools   │
-│ -wire     │ │ -recovery  │ │ -sessions     │ │ -caching    │ │ -deleg tools │
+│ -wire     │ │ -recovery  │ │ -threads     │ │ -caching    │ │ -deleg tools │
 │ -lifecycle│ │            │ │ -delivery     │ │             │ │              │
 └───────────┘ └────────────┘ └───────────────┘ └─────────────┘ └──────────────┘
                                                       │
@@ -150,15 +150,15 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/extensions/routing/router.py`
 - **Role:** Routes user messages to the Orchestrator; delivers responses to channels. In-memory pub/sub for `user_message` and `agent_response`. ContextProvider middleware enriches prompts before agent invocation.
 - **Internal split:** `core/extensions/routing/` isolates agent invocation, approval coordination, response delivery, event wiring, scheduler wiring, and built-in context providers.
-- **Key details:** `AgentInvoker` serializes concurrent agent invocations; `SessionManager` owns runtime and named session pools; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
+- **Key details:** `AgentInvoker` serializes concurrent agent invocations; `ThreadManager` owns runtime and named session pools; `notify_user()` enables proactive messages. **user.message idempotency:** When invoked from EventBus with `event_id`, the router records completion in `user_message_processing`; duplicate replays skip agent execution, memory hooks, and channel delivery.
 - **Streaming:** If the channel implements `StreamingChannelProvider`, `handle_user_message()` uses `invoke_agent_streamed()` and calls the channel's stream lifecycle (`on_stream_start` → `on_stream_chunk` / `on_stream_status` → `on_stream_end`). Otherwise it uses `invoke_agent()` and `send_to_user()` as before. See [ADR 010](adr/010-streaming.md) and [channels.md](channels.md#streaming).
 
 ### Persistence Services
 
 - **Location:** `core/extensions/persistence/`
-- **Role:** Owns persistent session and project metadata outside hot-path routing logic.
-- **Key modules:** `SessionManager` manages runtime `SQLiteSession` objects plus persisted session rows; `ProjectService` coordinates project CRUD and session binding; `schema.py` centralizes SQLite DDL; `models.py` defines typed `SessionInfo` and `ProjectInfo`.
-- **Context access:** `ExtensionContext` now exposes session/project APIs directly (`list_sessions`, `create_session`, `list_projects`, `create_project`, etc.) instead of proxying them through `MessageRouter`. See [ADR 029](adr/029-refactor-core-extensions-boundaries.md).
+- **Role:** Owns persistent thread and project metadata outside hot-path routing logic.
+- **Key modules:** `ThreadManager` manages runtime `SQLiteThread` objects plus persisted thread rows; `ProjectService` coordinates project CRUD and thread binding; `schema.py` centralizes SQLite DDL; `models.py` defines typed `ThreadInfo` and `ProjectInfo`.
+- **Context access:** `ExtensionContext` now exposes thread/project APIs directly (`list_threads`, `create_thread`, `list_projects`, `create_project`, etc.) instead of proxying them through `MessageRouter`. See [ADR 029](adr/029-refactor-core-extensions-boundaries.md).
 
 ### Core Tools
 
@@ -215,7 +215,7 @@ EventBus  (journal → dispatch)
   ▼
 router.handle_user_message(text, user_id, channel, event_id=event.id)
   ├─ if event_id and already in user_message_processing → skip (idempotency)
-  ├─ if session_id passed by channel → SessionManager.get_or_create_session(session_id)
+  ├─ if thread_id passed by channel → ThreadManager.get_or_create_thread(thread_id)
   ├─ else → inactivity-based default session rotation
   ├─ _emit("user_message")                → Memory.save_episode (subscriber)
   ├─ if channel is StreamingChannelProvider:
@@ -227,7 +227,7 @@ router.handle_user_message(text, user_id, channel, event_id=event.id)
   ├─ else:
   │    ├─ invoke_agent(text)
   │    │    ├─ invoke_middleware(prompt)   → ContextProvider chain (Memory.get_context)
-  │    │    └─ Runner.run(agent, prompt, session=SQLiteSession)
+  │    │    └─ Runner.run(agent, prompt, session=SQLiteThread)
   │    └─ channel.send_to_user(user_id, response)
   ├─ _emit("agent_response")              → Memory.save_episode (subscriber)
   ├─ if event_id: record in user_message_processing (idempotency)
@@ -268,3 +268,4 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 - [ADR 024](adr/024-unified-inbox.md) — Unified Inbox Extension
 - [ADR 026](adr/026-web-channel.md) — Web Channel HTTP API
 - [ADR 029](adr/029-refactor-core-extensions-boundaries.md) — `core.extensions` Boundaries Refactor
+

@@ -1,11 +1,11 @@
-"""Project persistence stored in session.db alongside session metadata."""
+"""Project persistence stored in thread.db alongside thread metadata."""
 
 import json
 import sqlite3
 from typing import Any
 
 from core.extensions.persistence.models import ProjectInfo
-from core.extensions.persistence.schema import ensure_session_schema
+from core.extensions.persistence.schema import ensure_thread_schema
 from core.extensions.update_fields import UNSET, UnsetType
 
 
@@ -14,7 +14,7 @@ class ProjectRepository:
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
-        ensure_session_schema(db_path)
+        ensure_thread_schema(db_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)

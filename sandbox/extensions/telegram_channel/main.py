@@ -11,17 +11,16 @@ _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
-from formatting import escape_html, md_to_tg_html
-
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 from aiogram.utils.token import TokenValidationError, validate_token
+from formatting import escape_html, md_to_tg_html
 
 if TYPE_CHECKING:
-    from core.extensions.contract import TurnContext
     from core.extensions.context import ExtensionContext
+    from core.extensions.contract import TurnContext
 
 
 # Typing action is shown for 5 seconds; repeat every 4 seconds while agent is working.
@@ -48,7 +47,7 @@ class TelegramChannelExtension:
     """
 
     def __init__(self) -> None:
-        self._ctx: "ExtensionContext | None" = None
+        self._ctx: ExtensionContext | None = None
         self._kv: Any = None
         self._bot: Bot | None = None
         self._dp: Dispatcher | None = None

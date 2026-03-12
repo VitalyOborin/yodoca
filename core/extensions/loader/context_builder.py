@@ -9,7 +9,7 @@ from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.persistence.project_service import ProjectService
-from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.llm import ModelRouterProtocol
 
@@ -50,7 +50,7 @@ class ExtensionContextBuilder:
         ext_id: str,
         manifest: ExtensionManifest,
         router: MessageRouter,
-        session_manager: SessionManager,
+        thread_manager: ThreadManager,
         project_service: ProjectService | None,
     ) -> ExtensionContext:
         """Create ExtensionContext for ext_id and manifest."""
@@ -68,7 +68,7 @@ class ExtensionContextBuilder:
             config=config,
             logger=logging.getLogger(f"ext.{ext_id}"),
             router=router,
-            session_manager=session_manager,
+            thread_manager=thread_manager,
             project_service=project_service,
             get_extension=self._get_extension_for(ext_id),
             data_dir_path=data_dir_path,
@@ -104,3 +104,4 @@ class ExtensionContextBuilder:
             extension_dir=extension_dir,
             template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
         )
+

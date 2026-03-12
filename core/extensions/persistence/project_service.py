@@ -1,24 +1,24 @@
-"""Application service for project operations over sessions."""
+"""Application service for project operations over threads."""
 
 import uuid
 from typing import Any
 
-from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.persistence.project_repository import ProjectRepository
-from core.extensions.persistence.session_repository import SessionRepository
+from core.extensions.persistence.thread_repository import ThreadRepository
 from core.extensions.update_fields import UNSET, UnsetType
 
 
 class ProjectService:
-    """Coordinates project persistence and session binding rules."""
+    """Coordinates project persistence and thread binding rules."""
 
     def __init__(
         self,
         project_repository: ProjectRepository,
-        session_repository: SessionRepository,
+        thread_repository: ThreadRepository,
     ) -> None:
         self._projects = project_repository
-        self._sessions = session_repository
+        self._threads = thread_repository
 
     def create_project(
         self,
@@ -67,21 +67,22 @@ class ProjectService:
     def delete_project(self, project_id: str) -> bool:
         return self._projects.delete_project(project_id)
 
-    def bind_session(
-        self, session_id: str, project_id: str | None
-    ) -> SessionInfo | None:
+    def bind_thread(
+        self, thread_id: str, project_id: str | None
+    ) -> ThreadInfo | None:
         if project_id is not None and self._projects.get_project(project_id) is None:
             raise ValueError(f"Project {project_id} not found")
-        return self._sessions.update_session(session_id, project_id=project_id)
+        return self._threads.update_thread(thread_id, project_id=project_id)
 
-    def get_project_instructions(self, session_id: str) -> str | None:
-        session = self._sessions.get_session(session_id, include_archived=True)
-        if session is None or not session.project_id:
+    def get_project_instructions(self, thread_id: str) -> str | None:
+        thread_info = self._threads.get_thread(thread_id, include_archived=True)
+        if thread_info is None or not thread_info.project_id:
             return None
-        project = self._projects.get_project(session.project_id)
+        project = self._projects.get_project(thread_info.project_id)
         if project is None:
             return None
         instructions = project.instructions
         if isinstance(instructions, str) and instructions.strip():
             return instructions
         return None
+

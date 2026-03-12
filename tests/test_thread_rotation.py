@@ -1,4 +1,4 @@
-"""Tests for session rotation in MessageRouter."""
+"""Tests for thread rotation in MessageRouter."""
 
 import time
 from pathlib import Path
@@ -19,37 +19,37 @@ class MockChannel(ChannelProvider):
         pass
 
 
-class TestSessionRotation:
-    """Session rotation on inactivity timeout."""
+class TestThreadRotation:
+    """Thread rotation on inactivity timeout."""
 
     @pytest.mark.asyncio
-    async def test_rotate_session_publishes_session_completed(
+    async def test_rotate_thread_publishes_thread_completed(
         self, tmp_path: Path
     ) -> None:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
-        # Distinct values ensure configure_session and rotate_session use different IDs.
-        with patch("core.extensions.persistence.session_manager.time") as mock_time:
+        # Distinct values ensure configure_thread and rotate_thread use different IDs.
+        with patch("core.extensions.persistence.thread_manager.time") as mock_time:
             mock_time.time.side_effect = [1000.0, 1001.0]
-            router.configure_session(
-                session_db_path=str(tmp_path / "session.db"),
-                session_timeout=1800,
+            router.configure_thread(
+                thread_db_path=str(tmp_path / "thread.db"),
+                thread_timeout=1800,
                 event_bus=mock_event_bus,
             )
-        assert router._session_id is not None
-        old_id = router._session_id
+        assert router._thread_id is not None
+        old_id = router._thread_id
 
-        with patch("core.extensions.persistence.session_manager.time") as mock_time:
+        with patch("core.extensions.persistence.thread_manager.time") as mock_time:
             mock_time.time.return_value = 1002.0
-            await router._rotate_session()
+            await router._rotate_thread()
 
-        assert router._session_id != old_id
+        assert router._thread_id != old_id
         mock_event_bus.publish.assert_called_once()
         call_args = mock_event_bus.publish.call_args
-        assert call_args[0][0] == SystemTopics.SESSION_COMPLETED
+        assert call_args[0][0] == SystemTopics.THREAD_COMPLETED
         assert call_args[0][1] == "kernel"
-        assert call_args[0][2]["session_id"] == old_id
+        assert call_args[0][2]["thread_id"] == old_id
         assert call_args[0][2]["reason"] == "inactivity_timeout"
 
     @pytest.mark.asyncio
@@ -59,9 +59,9 @@ class TestSessionRotation:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
-        router.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=1,
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=1,
             event_bus=mock_event_bus,
         )
         router.set_agent(MagicMock())
@@ -89,9 +89,9 @@ class TestSessionRotation:
         router = MessageRouter()
         mock_event_bus = MagicMock()
         mock_event_bus.publish = AsyncMock(return_value=1)
-        router.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=60,
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=60,
             event_bus=mock_event_bus,
         )
         router.set_agent(MagicMock())
@@ -106,3 +106,6 @@ class TestSessionRotation:
             await router.handle_user_message("second", "u1", ch, "cli")
 
         assert mock_event_bus.publish.call_count == 0
+
+
+

@@ -15,7 +15,7 @@ from agent import ConsolidationResult, MemoryAgent, create_memory_agent
 
 
 class TestMemoryAgent:
-    """MemoryAgent.consolidate_thread with mocked Runner.run."""
+    """MemoryAgent thread consolidation with mocked Runner.run."""
 
     @pytest.mark.asyncio
     async def test_consolidate_thread_returns_completed(

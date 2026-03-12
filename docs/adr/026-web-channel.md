@@ -132,7 +132,7 @@ Accepts the standard Chat Completions request body:
 Processing:
 
 1. Extract the **last user message** from the `messages` array. The system maintains
-   its own conversation context (SQLiteSession + ContextProviders), so the full
+   its own conversation context (SQLiteThread + ContextProviders), so the full
    messages history sent by the client is acknowledged but not forwarded verbatim
    to the model.
 2. Route through the standard channel pipeline: emit `user.message` event → kernel
@@ -406,8 +406,8 @@ the OpenAI contract.
 | Method | Endpoint | Description | Data source |
 |--------|----------|-------------|-------------|
 | GET | `/api/health` | System health and uptime | Extension-local |
-| GET | `/api/conversations` | List recent conversation sessions | Session pool (§11) |
-| DELETE | `/api/conversations/{id}` | Delete a conversation session | Session pool (§11) |
+| GET | `/api/conversations` | List recent conversation threads | Thread pool (§11) |
+| DELETE | `/api/conversations/{id}` | Delete a conversation session | Thread pool (§11) |
 
 Phase 1 focuses on the minimum needed for a functional chat frontend. Conversation
 management is essential for multi-session UIs. Health check is standard.
@@ -464,7 +464,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-Session-Id"],
+    allow_headers=["Authorization", "Content-Type", "X-Thread-Id"],
 )
 ```
 
@@ -476,20 +476,20 @@ mask the bug.
 Default `cors_origins: ["*"]` is for local development convenience. Tighter origins
 should be set in production.
 
-### 9) Session management and conversation context
+### 9) Thread management and conversation context
 
 #### Message history
 
 OpenAI-compatible clients typically send the full message history in each request.
 The system, however, maintains its own conversation context:
 
-- **SQLiteSession** stores conversation history in the MessageRouter.
+- **SQLiteThread** stores conversation history in the MessageRouter.
 - **ContextProviders** (e.g., memory) inject relevant context before each invocation.
 
 The web channel uses only the **last user message** from the incoming `messages` /
 `input` array. The full message history sent by the client is not forwarded to the
 model — the system's own context pipeline provides continuity. The continuity works
-because SQLiteSession is per-session (not per-user), and the stable `user_id` (§5)
+because SQLiteThread is per-session (not per-user), and the stable `user_id` (§5)
 ensures consistent identity for memory and other subscribers.
 
 #### Stable user identity
@@ -509,23 +509,23 @@ Future extension: in a multi-user scenario, `user_id` could be derived from the
 API key (e.g., hash of the key) to separate per-user context without additional
 configuration.
 
-#### Multi-session support via `X-Session-Id` (Phase 1)
+#### Multi-session support via `X-Thread-Id` (Phase 1)
 
 Frontend applications (LibreChat, LobeChat, Open WebUI) manage multiple conversations
 and expect the backend to support session switching from day one. Without this,
 users cannot have parallel conversations or return to previous threads.
 
-The web channel supports session switching via the `X-Session-Id` request header:
+The web channel supports session switching via the `X-Thread-Id` request header:
 
-- If `X-Session-Id: <uuid>` is present, the web channel passes the session ID to
-  the router, which selects (or creates) a dedicated `SQLiteSession` for that ID.
+- If `X-Thread-Id: <uuid>` is present, the web channel passes the session ID to
+  the router, which selects (or creates) a dedicated `SQLiteThread` for that ID.
 - If absent, the default (global) session is used — matching the behavior of CLI
   and Telegram channels.
 
 This requires a **minor core enhancement** (see §11): `router.handle_user_message()`
-must accept an optional `session_id` parameter. When provided, the router uses a
+must accept an optional `thread_id` parameter. When provided, the router uses a
 session pool instead of the single global session. Backward compatibility is
-preserved — channels that do not pass `session_id` continue to use the default
+preserved — channels that do not pass `thread_id` continue to use the default
 session with no code changes.
 
 ### 10) Proactive message delivery
@@ -579,10 +579,10 @@ Phase 1 requires one **minor** core enhancement for multi-session support:
 
 | Change | Location | Description |
 |--------|----------|-------------|
-| Session pool | `core/extensions/router.py` | `handle_user_message()` accepts an optional `session_id` parameter. When provided, selects a `SQLiteSession` from a pool keyed by session ID instead of the single global session. Default behavior (no `session_id`) is unchanged — CLI, Telegram, and all existing channels are unaffected. |
+| Thread pool | `core/extensions/router.py` | `handle_user_message()` accepts an optional `thread_id` parameter. When provided, selects a `SQLiteThread` from a pool keyed by session ID instead of the single global session. Default behavior (no `thread_id`) is unchanged — CLI, Telegram, and all existing channels are unaffected. |
 
 This change is backward-compatible and benefits all channels (e.g., Telegram could
-later use `chat_id` as `session_id` for per-chat history).
+later use `chat_id` as `thread_id` for per-chat history).
 
 All other necessary `ExtensionContext` API already exists:
 
@@ -667,7 +667,7 @@ sandbox/extensions/web_channel/
 - FastAPI + uvicorn HTTP server via `ServiceProvider`
 - `ChannelProvider` + `StreamingChannelProvider` implementation
 - Stable `user_id` (`"web_user"`) with internal request correlation
-- `X-Session-Id` header for multi-session support
+- `X-Thread-Id` header for multi-session support
 - Minor core enhancement: session pool in `MessageRouter` (§11)
 - `GET /v1/models` — virtual model list
 - `POST /v1/chat/completions` — non-streaming and SSE streaming
@@ -733,3 +733,4 @@ sandbox/extensions/web_channel/
   `_active_stream` must be cleaned up on timeout and client disconnect. A guard
   in the HTTP handler ensures cleanup on any exit path (normal, timeout, or
   exception).
+

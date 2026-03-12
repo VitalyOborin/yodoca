@@ -72,7 +72,7 @@ System topics (always have kernel handlers):
 - system.agent.task — invoke Orchestrator, response goes to user (payload: prompt, channel_id, correlation_id).
 - system.agent.background — invoke Orchestrator silently (payload: prompt, correlation_id).
 
-Custom topics (used by extensions): user.message, reminder.due, memory.session_completed, etc.
+Custom topics (used by extensions): user.message, reminder.due, thread.completed, etc.
 
 For reminder/timer extensions: use the Scheduler extension's schedule_once tool (topic, payload_json, delay_seconds or at_iso) to schedule a one-shot event; create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
 

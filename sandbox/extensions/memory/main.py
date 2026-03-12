@@ -7,18 +7,17 @@ import time
 import uuid
 from pathlib import Path
 
-from core.extensions.contract import TurnContext
 from core.events.topics import SystemTopics
+from core.extensions.contract import TurnContext
 from core.llm.capabilities import EmbeddingCapability
 
 _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
-from agents import ModelSettings
-
 from agent import create_memory_agent
 from agent_tools import build_write_path_tools
+from agents import ModelSettings
 from decay import DecayService
 from retrieval import (
     EmbeddingIntentClassifier,
@@ -206,15 +205,15 @@ class MemoryExtension:
             decay_threshold=context.get_config("decay_threshold", 0.05),
         )
 
-        prev_thread = await self._storage.get_latest_thread_id()
-        if prev_thread:
-            self._current_thread_id = prev_thread
-            logger.info("Resumed previous thread: %s", prev_thread)
+        prev_thread_id = await self._storage.get_latest_thread_id()
+        if prev_thread_id:
+            self._current_thread_id = prev_thread_id
+            logger.info("Resumed previous thread: %s", prev_thread_id)
 
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
-            SystemTopics.SESSION_COMPLETED,
+            SystemTopics.THREAD_COMPLETED,
             self._on_thread_completed,
         )
 
@@ -242,8 +241,8 @@ class MemoryExtension:
                 return None
             logger.info("Nightly maintenance started")
             unconsolidated = await self._storage.get_unconsolidated_threads()
-            for tid in unconsolidated:
-                await self._consolidate_thread(tid)
+            for thread_id in unconsolidated:
+                await self._consolidate_thread(thread_id)
             n_consolidated = len(unconsolidated)
 
             decay_stats = {"decayed": 0, "pruned": 0}
@@ -315,15 +314,20 @@ class MemoryExtension:
 
         if thread_id and thread_id != self._current_thread_id:
             if self._current_thread_id:
-                prev_tid = self._current_thread_id
-                if prev_tid not in self._consolidation_pending:
-                    self._consolidation_pending.add(prev_tid)
+                prev_thread_id = self._current_thread_id
+                if prev_thread_id not in self._consolidation_pending:
+                    self._consolidation_pending.add(prev_thread_id)
                     logger.info(
-                        "Thread switch: scheduling consolidation for %s", prev_tid
+                        "Thread switch: scheduling consolidation for %s",
+                        prev_thread_id,
                     )
-                    task = asyncio.create_task(self._consolidate_thread(prev_tid))
+                    task = asyncio.create_task(
+                        self._consolidate_thread(prev_thread_id)
+                    )
                     task.add_done_callback(
-                        lambda _: self._consolidation_pending.discard(prev_tid)
+                        lambda _, tid=prev_thread_id: self._consolidation_pending.discard(
+                            tid
+                        )
                     )
             self._current_thread_id = thread_id
             self._storage.ensure_thread(thread_id)
@@ -433,19 +437,19 @@ class MemoryExtension:
             asyncio.create_task(self._slow_path(node_id, text))
 
     async def _on_thread_completed(self, event: object) -> None:
-        """EventBus: session.completed. Trigger thread consolidation."""
+        """EventBus: thread.completed. Trigger consolidation."""
         payload = getattr(event, "payload", {}) or {}
         thread_id = payload.get("thread_id")
         if thread_id:
             if thread_id in self._consolidation_pending:
                 logger.debug(
-                    "session.completed: consolidation already pending for %s",
+                    "thread.completed: consolidation already pending for %s",
                     thread_id,
                 )
                 return
             self._consolidation_pending.add(thread_id)
             logger.info(
-                "session.completed: scheduling consolidation for %s", thread_id
+                "thread.completed: scheduling consolidation for %s", thread_id
             )
             task = asyncio.create_task(self._consolidate_thread(thread_id))
             task.add_done_callback(

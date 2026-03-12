@@ -100,7 +100,7 @@ class TestMemoryStorage:
                 "created_at": now,
                 "valid_from": now,
                 "source_role": "user",
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         assert node_id is not None
@@ -117,7 +117,7 @@ class TestMemoryStorage:
         import time
 
         now = int(time.time())
-        storage.ensure_session("s1")
+        storage.ensure_thread("s1")
         await asyncio.sleep(0.2)
 
         n1 = storage.insert_node(
@@ -128,7 +128,7 @@ class TestMemoryStorage:
                 "created_at": now,
                 "valid_from": now,
                 "source_role": "user",
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         await asyncio.sleep(0.3)
@@ -144,7 +144,7 @@ class TestMemoryStorage:
                 "created_at": now + 1,
                 "valid_from": now + 1,
                 "source_role": "user",
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         storage.insert_edge(
@@ -199,7 +199,7 @@ class TestMemoryRetrieval:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         await asyncio.sleep(0.3)
@@ -389,6 +389,7 @@ class TestMemoryRetrievalRRF:
 
 def _tool_ctx(tool_name: str, args: dict) -> object:
     import json
+
     from agents.tool_context import ToolContext
 
     return ToolContext(
@@ -502,14 +503,14 @@ class TestRememberCorrectConfirmTools:
 
 
 class TestMemoryStoragePhase3:
-    """Phase 3: get_session_episodes, mark_session_consolidated, entity ops, get_unconsolidated_sessions."""
+    """Phase 3: thread episode/consolidation APIs, entity ops, unconsolidated threads."""
 
     @pytest.mark.asyncio
-    async def test_get_session_episodes_paginated(self, storage: MemoryStorage) -> None:
+    async def test_get_thread_episodes_paginated(self, storage: MemoryStorage) -> None:
         import time
 
         now = int(time.time())
-        storage.ensure_session("sess-ep")
+        storage.ensure_thread("sess-ep")
         await asyncio.sleep(0.2)
 
         for i in range(5):
@@ -521,31 +522,31 @@ class TestMemoryStoragePhase3:
                     "created_at": now + i,
                     "valid_from": now + i,
                     "source_role": "user",
-                    "session_id": "sess-ep",
+                    "thread_id": "sess-ep",
                 }
             )
         await asyncio.sleep(0.5)
 
-        page1 = await storage.get_session_episodes("sess-ep", limit=2, offset=0)
+        page1 = await storage.get_thread_episodes("sess-ep", limit=2, offset=0)
         assert len(page1) == 2
         assert page1[0]["content"] == "episode 0"
         assert page1[1]["content"] == "episode 1"
 
-        page2 = await storage.get_session_episodes("sess-ep", limit=2, offset=2)
+        page2 = await storage.get_thread_episodes("sess-ep", limit=2, offset=2)
         assert len(page2) == 2
         assert page2[0]["content"] == "episode 2"
 
     @pytest.mark.asyncio
-    async def test_mark_session_consolidated_roundtrip(
+    async def test_mark_thread_consolidated_roundtrip(
         self, storage: MemoryStorage
     ) -> None:
-        storage.ensure_session("sess-mark")
+        storage.ensure_thread("sess-mark")
         await asyncio.sleep(0.2)
 
-        assert await storage.is_session_consolidated("sess-mark") is False
-        await storage.mark_session_consolidated("sess-mark")
+        assert await storage.is_thread_consolidated("sess-mark") is False
+        await storage.mark_thread_consolidated("sess-mark")
         await asyncio.sleep(0.2)
-        assert await storage.is_session_consolidated("sess-mark") is True
+        assert await storage.is_thread_consolidated("sess-mark") is True
 
     @pytest.mark.asyncio
     async def test_insert_entity_get_by_name_link_node(
@@ -587,17 +588,17 @@ class TestMemoryStoragePhase3:
         assert alias_found["canonical_name"] == "Alice"
 
     @pytest.mark.asyncio
-    async def test_get_unconsolidated_sessions(self, storage: MemoryStorage) -> None:
-        storage.ensure_session("u1")
-        storage.ensure_session("u2")
+    async def test_get_unconsolidated_threads(self, storage: MemoryStorage) -> None:
+        storage.ensure_thread("u1")
+        storage.ensure_thread("u2")
         await asyncio.sleep(0.2)
 
-        uncons = await storage.get_unconsolidated_sessions()
+        uncons = await storage.get_unconsolidated_threads()
         assert set(uncons) >= {"u1", "u2"}
 
-        await storage.mark_session_consolidated("u1")
+        await storage.mark_thread_consolidated("u1")
         await asyncio.sleep(0.2)
-        uncons2 = await storage.get_unconsolidated_sessions()
+        uncons2 = await storage.get_unconsolidated_threads()
         assert "u1" not in uncons2
         assert "u2" in uncons2
 
@@ -619,7 +620,7 @@ class TestWritePathTools:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         ep2 = storage.insert_node(
@@ -629,7 +630,7 @@ class TestWritePathTools:
                 "event_time": now + 1,
                 "created_at": now + 1,
                 "valid_from": now + 1,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         await asyncio.sleep(0.5)
@@ -766,51 +767,51 @@ class TestWritePathTools:
         assert old_node is None
 
 
-class TestConsolidateSessionIdempotency:
-    """_consolidate_session skips already-consolidated sessions."""
+class TestConsolidateThreadIdempotency:
+    """Thread consolidation is idempotent for already consolidated threads."""
 
     @pytest.mark.asyncio
     async def test_consolidate_skips_when_already_done(
         self, storage: MemoryStorage
     ) -> None:
-        storage.ensure_session("sess-idem")
-        await storage.mark_session_consolidated("sess-idem")
+        storage.ensure_thread("sess-idem")
+        await storage.mark_thread_consolidated("sess-idem")
         await asyncio.sleep(0.2)
 
         ext = MemoryExtension()
         ext._storage = storage
         ext._write_agent = AsyncMock()
-        ext._write_agent.consolidate_session = AsyncMock()
+        ext._write_agent.consolidate_thread = AsyncMock()
 
-        await ext._consolidate_session("sess-idem")
+        await ext._consolidate_thread("sess-idem")
 
-        ext._write_agent.consolidate_session.assert_not_called()
+        ext._write_agent.consolidate_thread.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_double_trigger_invokes_agent_once(
         self, storage: MemoryStorage
     ) -> None:
-        """Session ID change + session.completed both targeting same session: agent invoked once."""
-        storage.ensure_session("sess-dedup")
+        """Thread ID change + thread.completed for the same thread: agent invoked once."""
+        storage.ensure_thread("sess-dedup")
         await asyncio.sleep(0.2)
 
         ext = MemoryExtension()
         ext._storage = storage
-        ext._current_session_id = "sess-dedup"
+        ext._current_thread_id = "sess-dedup"
         ext._write_agent = AsyncMock()
-        ext._write_agent.consolidate_session = AsyncMock(return_value="ok")
+        ext._write_agent.consolidate_thread = AsyncMock(return_value="ok")
 
-        # Simulate: user switches to new session (triggers consolidate for sess-dedup)
-        await ext._on_user_message({"text": "hi", "session_id": "sess-new"})
-        # Simulate: session.completed for sess-dedup (should NOT schedule, already pending)
+        # Simulate: user switches to a new thread (triggers consolidate for sess-dedup)
+        await ext._on_user_message({"text": "hi", "thread_id": "sess-new"})
+        # Simulate: thread.completed for sess-dedup (should NOT schedule, already pending)
         event = MagicMock()
-        event.payload = {"session_id": "sess-dedup"}
-        await ext._on_session_completed(event)
+        event.payload = {"thread_id": "sess-dedup"}
+        await ext._on_thread_completed(event)
 
         # Allow background consolidation task to run
         await asyncio.sleep(2.0)
 
-        ext._write_agent.consolidate_session.assert_called_once_with("sess-dedup")
+        ext._write_agent.consolidate_thread.assert_called_once_with("sess-dedup")
 
 
 class TestMemoryStoragePhase4:
@@ -821,7 +822,7 @@ class TestMemoryStoragePhase4:
         import time
 
         now = int(time.time())
-        storage.ensure_session("s1")
+        storage.ensure_thread("s1")
         await asyncio.sleep(0.2)
         ids = []
         for i in range(4):
@@ -832,7 +833,7 @@ class TestMemoryStoragePhase4:
                     "event_time": now + i,
                     "created_at": now + i,
                     "valid_from": now + i,
-                    "session_id": "s1",
+                    "thread_id": "s1",
                 }
             )
             ids.append(nid)
@@ -1079,7 +1080,7 @@ class TestDecayService:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
                 "decay_rate": 0.1,
             }
         )
@@ -1217,7 +1218,7 @@ class TestCausalEdgeInference:
     @pytest.mark.asyncio
     async def test_get_consecutive_episode_pairs(self, storage: MemoryStorage) -> None:
         now = int(time.time())
-        storage.ensure_session("causal-sess")
+        storage.ensure_thread("causal-sess")
         await asyncio.sleep(0.2)
         ids = []
         for i in range(3):
@@ -1228,7 +1229,7 @@ class TestCausalEdgeInference:
                     "event_time": now + i,
                     "created_at": now + i,
                     "valid_from": now + i,
-                    "session_id": "causal-sess",
+                    "thread_id": "causal-sess",
                 }
             )
             ids.append(nid)
@@ -1250,7 +1251,7 @@ class TestCausalEdgeInference:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         b = storage.insert_node(
@@ -1260,7 +1261,7 @@ class TestCausalEdgeInference:
                 "event_time": now + 1,
                 "created_at": now + 1,
                 "valid_from": now + 1,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         await asyncio.sleep(0.3)
@@ -1294,7 +1295,7 @@ class TestCausalEdgeInference:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        storage.ensure_session("excl-sess")
+        storage.ensure_thread("excl-sess")
         await asyncio.sleep(0.2)
         a = storage.insert_node(
             {
@@ -1303,7 +1304,7 @@ class TestCausalEdgeInference:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "excl-sess",
+                "thread_id": "excl-sess",
             }
         )
         b = storage.insert_node(
@@ -1313,7 +1314,7 @@ class TestCausalEdgeInference:
                 "event_time": now + 1,
                 "created_at": now + 1,
                 "valid_from": now + 1,
-                "session_id": "excl-sess",
+                "thread_id": "excl-sess",
             }
         )
         storage.insert_edge(
@@ -1338,7 +1339,7 @@ class TestNightlyMaintenance:
     async def test_execute_task_runs_pipeline(
         self, storage: MemoryStorage, tmp_db
     ) -> None:
-        storage.ensure_session("nightly-sess")
+        storage.ensure_thread("nightly-sess")
         await asyncio.sleep(0.2)
 
         ext = MemoryExtension()
@@ -1381,7 +1382,7 @@ class TestGraphStats:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         storage.insert_node(
@@ -1441,7 +1442,7 @@ class TestGraphStats:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         b = storage.insert_node(
@@ -1451,7 +1452,7 @@ class TestGraphStats:
                 "event_time": now + 1,
                 "created_at": now + 1,
                 "valid_from": now + 1,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         storage.insert_edge(
@@ -1512,7 +1513,7 @@ class TestMemoryStatsTool:
         assert "entities=" in out
         assert "orphan_nodes=" in out
         assert "storage_size_mb=" in out
-        assert "unconsolidated_sessions=" in out
+        assert "unconsolidated_threads=" in out
 
 
 class TestExplainFactTool:
@@ -1530,7 +1531,7 @@ class TestExplainFactTool:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         ep2 = storage.insert_node(
@@ -1540,7 +1541,7 @@ class TestExplainFactTool:
                 "event_time": now + 1,
                 "created_at": now + 1,
                 "valid_from": now + 1,
-                "session_id": "s1",
+                "thread_id": "s1",
             }
         )
         fact_id = storage.insert_node(
@@ -1723,7 +1724,7 @@ class TestWeakFactsTool:
                 "event_time": now,
                 "created_at": now,
                 "valid_from": now,
-                "session_id": "s1",
+                "thread_id": "s1",
                 "confidence": 0.1,
             }
         )
@@ -1950,3 +1951,4 @@ class TestSearchMemoryTimestampEnrichment:
         data = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(data, dict) and "count" in data and "results" in data:
             assert data["count"] == len(data["results"])
+

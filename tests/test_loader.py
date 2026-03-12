@@ -1,9 +1,8 @@
 """Tests for Loader: dependency order, discover, protocol detection, lifecycle."""
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,14 +15,11 @@ from core.extensions.contract import (
     AgentResponse,
     ChannelProvider,
     Extension,
-    ServiceProvider,
-    ToolProvider,
 )
-from core.extensions.routing.event_wiring import EventWiringManager
-from core.extensions.loader import Loader, ExtensionState
+from core.extensions.loader import ExtensionState, Loader
 from core.extensions.manifest import ExtensionManifest
+from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.router import MessageRouter
-
 
 _EMPTY_SETTINGS: dict = {"extensions": {}}
 

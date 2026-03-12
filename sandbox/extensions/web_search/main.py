@@ -12,9 +12,9 @@ _ext_dir = Path(__file__).resolve().parent
 if str(_ext_dir) not in sys.path:
     sys.path.insert(0, str(_ext_dir))
 
-from agents import function_tool
 from urllib.parse import urlparse
 
+from agents import function_tool
 from interfaces import (
     OpenPageToolResult,
     PageResult,

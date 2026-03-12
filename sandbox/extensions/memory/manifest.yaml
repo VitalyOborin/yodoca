@@ -40,3 +40,4 @@ schedules:
     description: "Consolidate pending threads, apply decay, enrich entities"
 
 enabled: true
+

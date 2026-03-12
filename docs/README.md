@@ -58,8 +58,8 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
 | [025](adr/025-mail-extension.md) | Mail Extension (Source Extension for Email Ingestion) |
 | [026](adr/026-web-channel.md) | Web Channel: HTTP API Extension for Frontend Applications |
-| [027](adr/027-session-project-domain-model.md) | Session and Project Domain Model in `session.db` |
-| [028](adr/028-unified-sessions-table.md) | Unified Sessions Table |
+| [027](adr/027-session-project-domain-model.md) | Thread and Project Domain Model in `session.db` |
+| [028](adr/028-unified-threads-table.md) | Unified Threads Table |
 | [029](adr/029-refactor-core-extensions-boundaries.md) | Refactor `core.extensions` Boundaries |
 
 ---
@@ -70,3 +70,10 @@ Documentation for the Yodoca AI agent platform (assistant4).
 - **Extensions:** `sandbox/extensions/<id>/`
 - **Config:** `config/settings.yaml`
 - **Core:** `core/` (`runner`, `events`, `llm`, `agents`, `extensions/{loader,routing,persistence}`)
+
+## Upgrade Note (Thread Rename)
+
+- The domain identifier was renamed from `session_id` to `thread_id`.
+- This release expects a clean data directory (no in-place migration).
+- Before first run, remove runtime SQLite data under `sandbox/data/` (hard reset).
+

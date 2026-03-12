@@ -3,7 +3,8 @@
 import logging
 import time
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from agents import function_tool
 from pydantic import BaseModel, Field
@@ -387,3 +388,4 @@ def build_write_path_tools(
         save_causal_edges,
         update_entity_summary,
     ]
+

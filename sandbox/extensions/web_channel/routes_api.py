@@ -1,4 +1,4 @@
-"""Custom API routes for health, sessions, projects, and notifications."""
+"""Custom API routes for health, threads, projects, and notifications."""
 
 import time
 import uuid
@@ -6,18 +6,18 @@ import uuid
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse
 
-from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.update_fields import UNSET
 from sandbox.extensions.web_channel.models import (
     CreateProjectRequest,
-    CreateSessionRequest,
+    CreateThreadRequest,
     HealthResponse,
     NotificationsResponse,
     Project,
-    Session,
-    SessionDetailResponse,
+    Thread,
+    ThreadDetailResponse,
     UpdateProjectRequest,
-    UpdateSessionRequest,
+    UpdateThreadRequest,
 )
 
 router = APIRouter(include_in_schema=True)
@@ -27,8 +27,8 @@ def _get_extension(request: Request):
     return request.app.state.extension
 
 
-def _session_model(data: SessionInfo | dict) -> Session:
-    return Session.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
+def _thread_model(data: ThreadInfo | dict) -> Thread:
+    return Thread.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
 
 
 def _project_model(data: ProjectInfo | dict) -> Project:
@@ -46,25 +46,25 @@ async def get_health(request: Request) -> HealthResponse:
     return HealthResponse(status="ok", uptime_seconds=int(uptime))
 
 
-@router.get("/sessions")
-async def get_sessions(request: Request) -> JSONResponse:
-    """List session metadata from the persistent repository."""
+@router.get("/threads")
+async def get_threads(request: Request) -> JSONResponse:
+    """List thread metadata from the persistent repository."""
     ext = _get_extension(request)
     ctx = ext._context
-    sessions = await ctx.list_sessions()
-    data = {"sessions": [_session_model(session).model_dump() for session in sessions]}
+    threads = await ctx.list_threads()
+    data = {"threads": [_thread_model(thread).model_dump() for thread in threads]}
     return JSONResponse(content=data)
 
 
-@router.post("/sessions")
-async def create_session(request: Request) -> JSONResponse:
-    """Create a persistent session row before any messages are sent."""
+@router.post("/threads")
+async def create_thread(request: Request) -> JSONResponse:
+    """Create a persistent thread row before any messages are sent."""
     ext = _get_extension(request)
     ctx = ext._context
-    payload = CreateSessionRequest.model_validate(await request.json())
+    payload = CreateThreadRequest.model_validate(await request.json())
     try:
-        session = await ctx.create_session(
-            session_id=payload.id or f"sess_{uuid.uuid4().hex}",
+        thread = await ctx.create_thread(
+            thread_id=payload.id or f"thread_{uuid.uuid4().hex}",
             channel_id=ext._channel_id,
             project_id=payload.project_id,
             title=payload.title,
@@ -80,43 +80,43 @@ async def create_session(request: Request) -> JSONResponse:
                 }
             },
         )
-    return JSONResponse(content={"session": _session_model(session).model_dump()})
+    return JSONResponse(content={"thread": _thread_model(thread).model_dump()})
 
 
-@router.get("/sessions/{session_id}")
-async def get_session(request: Request, session_id: str) -> JSONResponse:
-    """Return one session metadata record and stored history."""
+@router.get("/threads/{thread_id}")
+async def get_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Return one thread metadata record and stored history."""
     ext = _get_extension(request)
     ctx = ext._context
-    session = await ctx.get_session(session_id, include_archived=True)
-    history = await ctx.get_session_history(session_id)
-    if session is None or history is None:
+    thread = await ctx.get_thread(thread_id, include_archived=True)
+    history = await ctx.get_thread_history(thread_id)
+    if thread is None or history is None:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
-    response = SessionDetailResponse(
-        session=_session_model(session),
+    response = ThreadDetailResponse(
+        thread=_thread_model(thread),
         history=history,
     )
     return JSONResponse(content=response.model_dump())
 
 
-@router.patch("/sessions/{session_id}")
-async def patch_session(request: Request, session_id: str) -> JSONResponse:
-    """Update title, project binding, or archive state for a session."""
+@router.patch("/threads/{thread_id}")
+async def patch_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Update title, project binding, or archive state for a thread."""
     ext = _get_extension(request)
     ctx = ext._context
-    payload = UpdateSessionRequest.model_validate(await request.json())
+    payload = UpdateThreadRequest.model_validate(await request.json())
     try:
-        session = await ctx.update_session(
-            session_id,
+        thread = await ctx.update_thread(
+            thread_id,
             title=payload.title if "title" in payload.model_fields_set else UNSET,
             project_id=payload.project_id
             if "project_id" in payload.model_fields_set
@@ -136,34 +136,34 @@ async def patch_session(request: Request, session_id: str) -> JSONResponse:
                 }
             },
         )
-    if session is None:
+    if thread is None:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
-    return JSONResponse(content={"session": _session_model(session).model_dump()})
+    return JSONResponse(content={"thread": _thread_model(thread).model_dump()})
 
 
-@router.delete("/sessions/{session_id}")
-async def delete_session(request: Request, session_id: str) -> JSONResponse:
-    """Soft-archive a session without deleting its history."""
+@router.delete("/threads/{thread_id}")
+async def delete_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Soft-archive a thread without deleting its history."""
     ext = _get_extension(request)
     ctx = ext._context
-    archived = await ctx.archive_session(session_id)
+    archived = await ctx.archive_thread(thread_id)
     if not archived:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
@@ -171,7 +171,7 @@ async def delete_session(request: Request, session_id: str) -> JSONResponse:
         content={
             "success": True,
             "message": (
-                "Session archived. Restore it with PATCH /api/sessions/{id} "
+                "Thread archived. Restore it with PATCH /api/threads/{id} "
                 "and is_archived=false."
             ),
         }
@@ -180,7 +180,7 @@ async def delete_session(request: Request, session_id: str) -> JSONResponse:
 
 @router.get("/projects")
 async def get_projects(request: Request) -> JSONResponse:
-    """List project metadata without embedded sessions."""
+    """List project metadata without embedded threads."""
     ext = _get_extension(request)
     ctx = ext._context
     projects = await ctx.list_projects()
@@ -256,7 +256,7 @@ async def patch_project(request: Request, project_id: str) -> JSONResponse:
 
 @router.delete("/projects/{project_id}")
 async def delete_project(request: Request, project_id: str) -> JSONResponse:
-    """Delete a project. Bound sessions are unlinked via foreign-key rules."""
+    """Delete a project. Bound threads are unlinked via foreign-key rules."""
     ext = _get_extension(request)
     ctx = ext._context
     deleted = await ctx.delete_project(project_id)
@@ -274,7 +274,7 @@ async def delete_project(request: Request, project_id: str) -> JSONResponse:
     return JSONResponse(
         content={
             "success": True,
-            "message": "Project deleted and bound sessions were unlinked.",
+            "message": "Project deleted and bound threads were unlinked.",
         }
     )
 
@@ -292,3 +292,4 @@ async def get_notifications(request: Request) -> NotificationsResponse:
         timeout = 30
     notifications = await bridge.wait_notification(timeout=float(timeout))
     return NotificationsResponse(notifications=notifications)
+

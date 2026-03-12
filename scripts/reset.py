@@ -4,9 +4,9 @@ Reset AI agent state by removing persistent storage files, logs, and saved secre
 Run from project root or any directory; paths are resolved relative to this script.
 """
 
-from pathlib import Path
-import sys
 import shutil
+import sys
+from pathlib import Path
 
 import yaml
 

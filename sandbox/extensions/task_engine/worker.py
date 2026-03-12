@@ -6,14 +6,15 @@ import logging
 import random
 import re
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
-
-from core.extensions.contract import AgentInvocationContext, AgentProvider
+from typing import Any
 
 from models import StepRecord, TaskRecord
 from state import TaskState, json_dumps_unicode
+
+from core.extensions.contract import AgentInvocationContext, AgentProvider
 
 logger = logging.getLogger(__name__)
 

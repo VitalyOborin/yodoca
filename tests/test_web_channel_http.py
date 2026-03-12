@@ -11,7 +11,7 @@ from sandbox.extensions.web_channel.main import WebChannelExtension
 
 @pytest.fixture
 def mock_context():
-    """Mock ExtensionContext with session/project CRUD helpers."""
+    """Mock ExtensionContext with thread/project CRUD helpers."""
     ctx = MagicMock()
     ctx.get_config = MagicMock(
         side_effect=lambda k, d=None: {
@@ -26,8 +26,8 @@ def mock_context():
     )
     ctx.get_secret = AsyncMock(return_value=None)
     ctx.emit = AsyncMock()
-    ctx.list_sessions = AsyncMock(return_value=[])
-    ctx.create_session = AsyncMock(
+    ctx.list_threads = AsyncMock(return_value=[])
+    ctx.create_thread = AsyncMock(
         return_value={
             "id": "sess_1",
             "project_id": None,
@@ -38,10 +38,10 @@ def mock_context():
             "is_archived": False,
         }
     )
-    ctx.get_session = AsyncMock(return_value=None)
-    ctx.update_session = AsyncMock(return_value=None)
-    ctx.archive_session = AsyncMock(return_value=False)
-    ctx.get_session_history = AsyncMock(return_value=None)
+    ctx.get_thread = AsyncMock(return_value=None)
+    ctx.update_thread = AsyncMock(return_value=None)
+    ctx.archive_thread = AsyncMock(return_value=False)
+    ctx.get_thread_history = AsyncMock(return_value=None)
     ctx.list_projects = AsyncMock(return_value=[])
     ctx.get_project = AsyncMock(return_value=None)
     ctx.create_project = AsyncMock(
@@ -99,8 +99,8 @@ def test_get_health(web_channel_app):
     assert "uptime_seconds" in data
 
 
-def test_get_sessions(web_channel_app, mock_context):
-    mock_context.list_sessions.return_value = [
+def test_get_threads(web_channel_app, mock_context):
+    mock_context.list_threads.return_value = [
         {
             "id": "sess_1",
             "project_id": None,
@@ -121,24 +121,24 @@ def test_get_sessions(web_channel_app, mock_context):
         },
     ]
     client = TestClient(web_channel_app)
-    resp = client.get("/api/sessions")
+    resp = client.get("/api/threads")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["sessions"]) == 2
-    assert data["sessions"][0]["last_active_at"] == 1773096583
+    assert len(data["threads"]) == 2
+    assert data["threads"][0]["last_active_at"] == 1773096583
 
 
-def test_post_sessions(web_channel_app):
+def test_post_threads(web_channel_app):
     client = TestClient(web_channel_app)
-    resp = client.post("/api/sessions", json={"title": "New session"})
+    resp = client.post("/api/threads", json={"title": "New thread"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["session"]["id"] == "sess_1"
-    assert data["session"]["channel_id"] == "web_channel"
+    assert data["thread"]["id"] == "sess_1"
+    assert data["thread"]["channel_id"] == "web_channel"
 
 
-def test_get_session_detail_ok(web_channel_app, mock_context):
-    mock_context.get_session.return_value = {
+def test_get_thread_detail_ok(web_channel_app, mock_context):
+    mock_context.get_thread.return_value = {
         "id": "sess_1",
         "project_id": None,
         "title": "Saved",
@@ -147,29 +147,29 @@ def test_get_session_detail_ok(web_channel_app, mock_context):
         "last_active_at": 1773096583,
         "is_archived": False,
     }
-    mock_context.get_session_history.return_value = [
+    mock_context.get_thread_history.return_value = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi!"},
     ]
     client = TestClient(web_channel_app)
-    resp = client.get("/api/sessions/sess_1")
+    resp = client.get("/api/threads/sess_1")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["session"]["id"] == "sess_1"
+    assert data["thread"]["id"] == "sess_1"
     assert len(data["history"]) == 2
 
 
-def test_get_session_detail_not_found(web_channel_app, mock_context):
-    mock_context.get_session.return_value = None
-    mock_context.get_session_history.return_value = None
+def test_get_thread_detail_not_found(web_channel_app, mock_context):
+    mock_context.get_thread.return_value = None
+    mock_context.get_thread_history.return_value = None
     client = TestClient(web_channel_app)
-    resp = client.get("/api/sessions/missing_id")
+    resp = client.get("/api/threads/missing_id")
     assert resp.status_code == 404
-    assert resp.json()["error"]["code"] == "session_not_found"
+    assert resp.json()["error"]["code"] == "thread_not_found"
 
 
-def test_patch_session_ok(web_channel_app, mock_context):
-    mock_context.update_session.return_value = {
+def test_patch_thread_ok(web_channel_app, mock_context):
+    mock_context.update_thread.return_value = {
         "id": "sess_1",
         "project_id": "proj_1",
         "title": "Renamed",
@@ -180,20 +180,20 @@ def test_patch_session_ok(web_channel_app, mock_context):
     }
     client = TestClient(web_channel_app)
     resp = client.patch(
-        "/api/sessions/sess_1",
+        "/api/threads/sess_1",
         json={
             "title": "Renamed",
             "project_id": "proj_1",
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["session"]["project_id"] == "proj_1"
+    assert resp.json()["thread"]["project_id"] == "proj_1"
 
 
-def test_delete_session_archives(web_channel_app, mock_context):
-    mock_context.archive_session.return_value = True
+def test_delete_thread_archives(web_channel_app, mock_context):
+    mock_context.archive_thread.return_value = True
     client = TestClient(web_channel_app)
-    resp = client.delete("/api/sessions/sess_1")
+    resp = client.delete("/api/threads/sess_1")
     assert resp.status_code == 200
     assert resp.json()["success"] is True
 
@@ -339,3 +339,4 @@ def test_post_responses_non_stream_when_router_uses_stream_callbacks(
     data = resp.json()
     assert data["status"] == "completed"
     assert data["output"][0]["content"][0]["text"] == "Hello"
+

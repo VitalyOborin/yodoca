@@ -19,7 +19,7 @@ class CliChannelExtension:
     _RESPONSE_TIMEOUT_SEC = 120
 
     def __init__(self) -> None:
-        self.context: "ExtensionContext | None" = None
+        self.context: ExtensionContext | None = None
         self._input_task: asyncio.Task[Any] | None = None
         self._streaming_enabled = True
         self._stream_buffer = ""
@@ -118,7 +118,7 @@ class CliChannelExtension:
                 self._response_complete.wait(),
                 timeout=self._RESPONSE_TIMEOUT_SEC,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Timed out waiting for agent response")
             self._response_complete.set()
         await asyncio.sleep(0.05)

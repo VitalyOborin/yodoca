@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 # --- OpenAI Chat Completions ---
 
@@ -115,8 +115,8 @@ class HealthResponse(BaseModel):
     uptime_seconds: int
 
 
-class Session(BaseModel):
-    """Persisted session metadata."""
+class Thread(BaseModel):
+    """Persisted thread metadata."""
 
     id: str
     project_id: str | None = None
@@ -127,23 +127,23 @@ class Session(BaseModel):
     is_archived: bool = False
 
 
-class SessionDetailResponse(BaseModel):
-    """GET /api/sessions/{id} response."""
+class ThreadDetailResponse(BaseModel):
+    """GET /api/threads/{id} response."""
 
-    session: Session
+    thread: Thread
     history: list[dict[str, Any]]
 
 
-class CreateSessionRequest(BaseModel):
-    """POST /api/sessions request."""
+class CreateThreadRequest(BaseModel):
+    """POST /api/threads request."""
 
     id: str | None = None
     project_id: str | None = None
     title: str | None = None
 
 
-class UpdateSessionRequest(BaseModel):
-    """PATCH /api/sessions/{id} request."""
+class UpdateThreadRequest(BaseModel):
+    """PATCH /api/threads/{id} request."""
 
     title: str | None = None
     project_id: str | None = None
@@ -201,7 +201,29 @@ class OperationResult(BaseModel):
     message: str | None = None
 
 
+# --- AG-UI (Agent-User Interaction Protocol) ---
+
+
+class AgUIRunRequest(BaseModel):
+    """POST /agent request (AG-UI RunAgentInput shape).
+
+    Accepts camelCase over the wire for AG-UI client compatibility.
+    """
+
+    thread_id: str = Field(..., alias="threadId")
+    run_id: str = Field(..., alias="runId")
+    parent_run_id: str | None = Field(None, alias="parentRunId")
+    messages: list[dict[str, Any]] = Field(default_factory=list, alias="messages")
+    tools: list[dict[str, Any]] = Field(default_factory=list, alias="tools")
+    context: list[dict[str, Any]] = Field(default_factory=list, alias="context")
+    state: Any = Field(default=None, alias="state")
+    forwarded_props: Any = Field(default=None, alias="forwardedProps")
+
+    model_config = {"populate_by_name": True}
+
+
 class ErrorResponse(BaseModel):
     """Error response body."""
 
     error: dict[str, Any]
+

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agents import Agent, Runner, ModelSettings
+from agents import Agent, ModelSettings, Runner
 
 from core.extensions.instructions import resolve_instructions
 
@@ -162,3 +162,4 @@ def create_memory_agent(
         causal_instructions=causal_instructions,
         model_settings=model_settings,
     )
+

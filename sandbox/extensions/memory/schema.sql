@@ -90,8 +90,8 @@ CREATE TABLE IF NOT EXISTS maintenance_metadata (
 -- ==========================================================================
 -- Thread consolidation tracking
 -- ==========================================================================
-CREATE TABLE IF NOT EXISTS threads_consolidations (
-    thread_id        TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS thread_consolidations (
+    thread_id       TEXT PRIMARY KEY,
     first_seen_at    INTEGER NOT NULL,
     consolidated_at  INTEGER
 );
@@ -148,3 +148,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
     entity_id TEXT PRIMARY KEY,
     embedding float[256]
 );
+

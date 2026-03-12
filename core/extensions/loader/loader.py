@@ -240,7 +240,7 @@ class Loader:
             ext_id,
             manifest,
             router,
-            router.session_manager,
+            router.thread_manager,
             router.project_service,
         )
 

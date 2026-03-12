@@ -123,11 +123,11 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 
 - Runs FastAPI on uvicorn inside `run_background()`
 - Accepts OpenAI-compatible requests on `/v1/models`, `/v1/chat/completions`, `/v1/responses`
-- Exposes custom REST endpoints on `/api/health`, `/api/sessions`, `/api/projects`, `/api/notifications`
+- Exposes custom REST endpoints on `/api/health`, `/api/threads`, `/api/projects`, `/api/notifications`
 - Uses `RequestBridge` to translate HTTP request/response flow into channel callbacks
 - Returns SSE for streaming requests and long-polls proactive notifications on `/api/notifications`
 - Enforces a single active request with a busy guard; concurrent requests receive `503` with `Retry-After: 5`
-- Supports `X-Session-Id` so web frontends can bind requests to named runtime sessions
+- Supports `X-Thread-Id` so web frontends can bind requests to named runtime threads
 - Uses a stable logical user identity (`default_user_id`, default `web_user`) for memory/context continuity
 
 **Configuration:**
@@ -146,7 +146,7 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 
 - Bearer token auth via `Authorization: Bearer <key>`
 - If `config.api_key` is empty, the extension also tries secret `web_channel.api_key`
-- CORS allows `Authorization`, `Content-Type`, and `X-Session-Id`
+- CORS allows `Authorization`, `Content-Type`, and `X-Thread-Id`
 - Streaming uses `text/event-stream`
 
 ---
@@ -238,3 +238,4 @@ User types in CLI, sends Telegram message, or POSTs to web_channel
 - [ADR 007](adr/007-user-channel-selector.md) — Agent-driven channel selection
 - [ADR 010](adr/010-streaming.md) — Streaming response delivery (protocol, router, channels)
 - [ADR 026](adr/026-web-channel.md) — Web channel HTTP API
+

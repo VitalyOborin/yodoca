@@ -67,10 +67,10 @@ class MockStreamingChannel(MockChannel, StreamingChannelProvider):
         self.stream_ended.append((user_id, full_text))
 
 
-def _configure_router_session(router: MessageRouter, tmp_path: Path) -> None:
-    router.configure_session(
-        session_db_path=str(tmp_path / "session.db"),
-        session_timeout=1800,
+def _configure_router_thread(router: MessageRouter, tmp_path: Path) -> None:
+    router.configure_thread(
+        thread_db_path=str(tmp_path / "thread.db"),
+        thread_timeout=1800,
     )
 
 
@@ -182,10 +182,10 @@ class TestInvokeAgent:
     async def test_invoke_agent_middleware_receives_turn_context(
         self, tmp_path: Path
     ) -> None:
-        """Middleware should receive channel, user, and session IDs."""
+        """Middleware should receive channel, user, and thread IDs."""
         router = MessageRouter()
         router.set_channel_descriptions({"cli": "CLI Channel"})
-        _configure_router_session(router, tmp_path)
+        _configure_router_thread(router, tmp_path)
         received_context: list[TurnContext] = []
 
         async def middleware(prompt: str, turn_context: TurnContext) -> str:
@@ -205,7 +205,7 @@ class TestInvokeAgent:
         assert len(received_context) == 1
         assert received_context[0].channel_id == "cli"
         assert received_context[0].user_id == "user1"
-        assert received_context[0].session_id is not None
+        assert received_context[0].thread_id is not None
 
     @pytest.mark.asyncio
     async def test_invoke_agent_with_middleware_empty_context_no_clone(self) -> None:
@@ -263,7 +263,7 @@ class TestSubscribeAndEmit:
         self, tmp_path: Path
     ) -> None:
         router = MessageRouter()
-        _configure_router_session(router, tmp_path)
+        _configure_router_thread(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         events_received: list[tuple[str, object]] = []
@@ -303,7 +303,7 @@ class TestStreamingInvocation:
     @pytest.mark.asyncio
     async def test_handle_user_message_streaming_channel(self, tmp_path: Path) -> None:
         router = MessageRouter()
-        _configure_router_session(router, tmp_path)
+        _configure_router_thread(router, tmp_path)
         ch = MockStreamingChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
@@ -344,7 +344,7 @@ class TestStreamingInvocation:
         self, tmp_path: Path
     ) -> None:
         router = MessageRouter()
-        _configure_router_session(router, tmp_path)
+        _configure_router_thread(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
@@ -463,9 +463,9 @@ class TestInvokeAgentBackgroundLockSplit:
         """Background and user invocations use separate locks; they run concurrently."""
         router = MessageRouter()
         router.set_agent(MagicMock())
-        router.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=60,
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=60,
         )
 
         user_done = asyncio.Event()
@@ -519,9 +519,9 @@ class TestUserMessageDeduplication:
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
-        router.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=1800,
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=1800,
             event_bus=event_bus,
         )
 
@@ -551,9 +551,9 @@ class TestUserMessageDeduplication:
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
-        router.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=1800,
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=1800,
             event_bus=event_bus,
         )
 
@@ -587,7 +587,7 @@ class TestUserMessageDeduplication:
     async def test_no_event_id_processes_normally(self, tmp_path: Path) -> None:
         """When event_id is None, processing runs normally (no dedup)."""
         router = MessageRouter()
-        _configure_router_session(router, tmp_path)
+        _configure_router_thread(router, tmp_path)
         ch = MockChannel()
         router.register_channel("cli", ch)
         router.set_agent(MagicMock())
@@ -602,3 +602,5 @@ class TestUserMessageDeduplication:
             await router.handle_user_message("hi", "user1", ch, "cli")
 
         assert ch.sent == [("user1", "reply"), ("user1", "reply")]
+
+

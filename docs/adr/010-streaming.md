@@ -141,7 +141,7 @@ async def invoke_agent_streamed(
 
 ```python
 async def handle_user_message(self, text, user_id, channel):
-    # Session rotation (unchanged)
+    # Thread rotation (unchanged)
     now = time.time()
     if self._last_message_at and (now - self._last_message_at) > self._session_timeout:
         await self._rotate_session()
@@ -303,7 +303,7 @@ Users see text appearing in ~500ms–1s bursts. Not token-by-token smooth like b
 | Event | Payload | When emitted | Change |
 |---|---|---|---|
 | `user_message` | `{text, user_id, channel_id}` | Before agent invocation | None |
-| `agent_response` | `{text, user_id, channel, session_id, agent_id}` | After complete response | None — emitted after streaming finishes |
+| `agent_response` | `{text, user_id, channel, thread_id, agent_id}` | After complete response | None — emitted after streaming finishes |
 
 Streaming is a transport optimization between kernel and channel. The event bus carries the complete response for all subscribers (memory consolidation, logging, analytics, etc.). No `agent_response_chunk` event is introduced in v1 — it would add complexity without clear consumers.
 
@@ -338,3 +338,4 @@ Errors during streaming require special handling because partial output may have
 - **Event contract is stable.** All existing event subscribers (memory, logging, etc.) continue to receive the complete `agent_response` after streaming finishes. No partial-event mechanism is introduced.
 - **Multi-user ready.** Telegram channel's `StreamState` is keyed by `user_id` from day one, avoiding a refactor when multi-user support is added.
 - **Future extensibility.** The `on_stream_status()` method can be extended to carry structured data (tool name, progress percentage) when needed. The `StreamingChannelProvider` protocol can gain additional lifecycle methods (e.g., `on_stream_cancel()`) without breaking existing implementations. The callback API in `ExtensionContext` enables proactive extensions (heartbeat, scheduler-triggered agents) to stream responses through channels.
+

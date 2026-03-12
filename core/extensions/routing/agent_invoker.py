@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from core.extensions.contract import TurnContext
-from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 
 logger = logging.getLogger(__name__)
@@ -27,10 +27,10 @@ class AgentInvoker:
     def __init__(
         self,
         approval_coordinator: ApprovalCoordinator,
-        session_manager: SessionManager,
+        thread_manager: ThreadManager,
     ) -> None:
         self._approval = approval_coordinator
-        self._sessions = session_manager
+        self._threads = thread_manager
         self._agent: Any = None
         self._agent_id: str = "orchestrator"
         self._user_lock = asyncio.Lock()
@@ -99,12 +99,15 @@ class AgentInvoker:
         self,
         prompt: str,
         turn_context: TurnContext | None = None,
+        thread: Any = None,
         session: Any = None,
     ) -> str:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        sess = session if session is not None else self._sessions.session
+        sess = session if session is not None else thread
+        if sess is None:
+            sess = self._threads.thread
         async with self._user_lock:
             try:
                 channel_id = turn_context.channel_id if turn_context else None
@@ -162,7 +165,7 @@ class AgentInvoker:
         self,
         agent: Any,
         stripped: str,
-        session: Any,
+        thread: Any,
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None,
         use_background_lock: bool,
@@ -173,7 +176,7 @@ class AgentInvoker:
             try:
                 from agents import Runner
 
-                result = Runner.run_streamed(agent, stripped, session=session)
+                result = Runner.run_streamed(agent, stripped, session=thread)
                 full_text, stream_error = await self._consume_stream_events(
                     result=result,
                     on_chunk=on_chunk,
@@ -200,16 +203,19 @@ class AgentInvoker:
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
         turn_context: TurnContext | None = None,
+        thread: Any = None,
         session: Any = None,
     ) -> str:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        sess = session if session is not None else self._sessions.session
+        sess = session if session is not None else thread
+        if sess is None:
+            sess = self._threads.thread
         return await self._run_streamed_invoke(
             agent=agent,
             stripped=stripped,
-            session=sess,
+            thread=sess,
             on_chunk=on_chunk,
             on_tool_call=on_tool_call,
             use_background_lock=False,
@@ -223,7 +229,7 @@ class AgentInvoker:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        session = self._sessions.get_background_session()
+        session = self._threads.get_background_thread()
         async with self._background_lock:
             try:
                 channel_id = turn_context.channel_id if turn_context else None
@@ -248,12 +254,13 @@ class AgentInvoker:
         if not self._agent:
             return "(No agent configured.)"
         agent, stripped = await self._prepare_agent(prompt, turn_context)
-        session = self._sessions.get_background_session()
+        session = self._threads.get_background_thread()
         return await self._run_streamed_invoke(
             agent=agent,
             stripped=stripped,
-            session=session,
+            thread=session,
             on_chunk=on_chunk,
             on_tool_call=on_tool_call,
             use_background_lock=True,
         )
+
