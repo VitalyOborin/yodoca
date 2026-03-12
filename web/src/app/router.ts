@@ -13,6 +13,11 @@ const router = createRouter({
       component: () => import('@/pages/chat/ChatPage.vue'),
     },
     {
+      path: '/chat/:threadId',
+      name: 'chat-thread',
+      component: () => import('@/pages/chat/ChatPage.vue'),
+    },
+    {
       path: '/inbox',
       name: 'inbox',
       component: () => import('@/pages/inbox/InboxPage.vue'),

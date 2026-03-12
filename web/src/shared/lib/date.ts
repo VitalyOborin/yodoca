@@ -1,3 +1,8 @@
+/** Format Unix timestamp (seconds) as relative time. */
+export function formatRelativeTimeFromEpoch(ts: number): string {
+  return formatRelativeTime(new Date(ts * 1000));
+}
+
 export function formatRelativeTime(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();

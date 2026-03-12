@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { onMounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import { MessageSquarePlus, Search } from 'lucide-vue-next';
 import { useThreadStore, ThreadItem } from '@/entities/thread';
 import type { Thread } from '@/entities/thread';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
+const router = useRouter();
 const threadStore = useThreadStore();
 
+function startNewThread() {
+  threadStore.selectThread(null);
+  router.push({ name: 'chat' });
+}
+
 const groupedThreads = computed(() => {
-  const now = Date.now();
+  const now = Math.floor(Date.now() / 1000);
   const groups = [
     { label: 'Today', items: [] as Thread[] },
     { label: 'Yesterday', items: [] as Thread[] },
@@ -17,14 +24,14 @@ const groupedThreads = computed(() => {
   ];
 
   for (const thread of threadStore.sortedThreads) {
-    const diff = now - thread.updatedAt.getTime();
+    const diff = now - thread.last_active_at;
 
-    if (diff < 86_400_000) {
+    if (diff < 86_400) {
       groups[0]?.items.push(thread);
       continue;
     }
 
-    if (diff < 172_800_000) {
+    if (diff < 172_800) {
       groups[1]?.items.push(thread);
       continue;
     }
@@ -33,6 +40,10 @@ const groupedThreads = computed(() => {
   }
 
   return groups.filter((group) => group.items.length > 0);
+});
+
+onMounted(() => {
+  threadStore.loadThreads();
 });
 </script>
 
@@ -47,7 +58,7 @@ const groupedThreads = computed(() => {
           size="icon"
           class="focus-ring"
           aria-label="New thread"
-          @click="threadStore.createThread()"
+          @click="startNewThread"
         >
           <MessageSquarePlus class="h-4 w-4" />
         </Button>
@@ -60,7 +71,10 @@ const groupedThreads = computed(() => {
     </div>
 
     <ScrollArea class="min-h-0 flex-1 px-3 py-3">
-      <nav class="space-y-4">
+      <div v-if="threadStore.loading" class="px-3 py-4 text-center text-sm text-muted-foreground">
+        Loading threads...
+      </div>
+      <nav v-else class="space-y-4">
         <section v-for="group in groupedThreads" :key="group.label" class="space-y-2">
           <p class="px-1 text-[10px] uppercase tracking-[0.22em] text-subtle-foreground">{{ group.label }}</p>
 
@@ -71,7 +85,7 @@ const groupedThreads = computed(() => {
             :active="thread.id === threadStore.activeThreadId"
             @select="threadStore.selectThread(thread.id)"
             @rename="threadStore.renameThread(thread.id, $event)"
-            @delete="threadStore.deleteThread(thread.id)"
+            @delete="threadStore.removeThread(thread.id)"
           />
         </section>
       </nav>

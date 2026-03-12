@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onClickOutside } from '@vueuse/core';
-import { AlertCircle, CheckCircle2, Ellipsis, LoaderCircle, PauseCircle } from 'lucide-vue-next';
+import { AlertCircle, CheckCircle2, Ellipsis, LoaderCircle } from 'lucide-vue-next';
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
 import { useAgentStore } from '@/entities/agent';
 import { SendMessageForm } from '@/features/send-message';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import type { ChatMessage } from '@/shared/api';
 
 const threadStore = useThreadStore();
 const messageStore = useMessageStore();
@@ -17,7 +18,8 @@ const composerFooter = ref<HTMLElement | null>(null);
 const menuRef = ref<HTMLElement | null>(null);
 const menuOpen = ref(false);
 const messagesBottomInset = ref(176);
-const pendingTimers = new Set<number>();
+const loadingHistory = ref(false);
+const isSending = ref(false);
 let footerResizeObserver: ResizeObserver | null = null;
 
 const currentMessages = computed(() => {
@@ -25,21 +27,13 @@ const currentMessages = computed(() => {
   return messageStore.getThreadMessages(threadStore.activeThreadId);
 });
 
-function queueTimeout(callback: () => void, delay: number): Promise<void> {
-  return new Promise((resolve) => {
-    const id = window.setTimeout(() => {
-      pendingTimers.delete(id);
-      callback();
-      resolve();
-    }, delay);
-    pendingTimers.add(id);
-  });
-}
-
 function scrollToBottom() {
   nextTick(() => {
     const el = scrollContainer.value;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const viewport = el.closest('[data-slot="scroll-area-viewport"]') as HTMLElement | null;
+    const target = viewport ?? el;
+    target.scrollTop = target.scrollHeight;
   });
 }
 
@@ -48,20 +42,51 @@ function updateMessagesInset() {
   messagesBottomInset.value = Math.max(176, footerHeight + 16);
 }
 
-function archiveCurrentThread() {
+async function archiveCurrentThread() {
   const activeThread = threadStore.activeThread;
   if (!activeThread) return;
-
-  if (!activeThread.title.startsWith('Archived: ')) {
-    threadStore.renameThread(activeThread.id, `Archived: ${activeThread.title}`);
-  }
+  await threadStore.archiveThread(activeThread.id);
   menuOpen.value = false;
 }
 
-function deleteCurrentThread() {
+async function deleteCurrentThread() {
   if (!threadStore.activeThreadId) return;
-  threadStore.deleteThread(threadStore.activeThreadId);
+  await threadStore.removeThread(threadStore.activeThreadId);
   menuOpen.value = false;
+}
+
+function toChatMessages(msgs: { id: string; role: string; content: string }[]): ChatMessage[] {
+  return msgs.map((m) => ({
+    id: m.id,
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+  }));
+}
+
+async function handleSend(content: string) {
+  isSending.value = true;
+  try {
+    const threadId = await threadStore.ensureThread();
+
+    messageStore.addMessage(threadId, 'user', content);
+
+    const allMessages = messageStore.getThreadMessages(threadId);
+    const chatMessages: ChatMessage[] = toChatMessages(allMessages);
+
+    try {
+      const assistantText = await agentStore.runAgent(threadId, chatMessages);
+      if (assistantText) {
+        messageStore.addMessage(threadId, 'assistant', assistantText);
+      }
+      await threadStore.loadThreads();
+    } catch {
+      // Phase already set to error in agentStore
+    } finally {
+      agentStore.resetPhase();
+    }
+  } finally {
+    isSending.value = false;
+  }
 }
 
 onClickOutside(menuRef, () => {
@@ -78,55 +103,25 @@ watch(
   () => scrollToBottom(),
 );
 
-async function handleSend(content: string) {
-  if (!threadStore.activeThreadId) return;
-
-  messageStore.addMessage(threadStore.activeThreadId, 'user', content);
-  threadStore.touchThread(threadStore.activeThreadId, content);
-  agentStore.startRun(content);
-
-  await queueTimeout(() => {
-    agentStore.beginExecution();
-  }, 420);
-
-  const failRequest = /error|ошибк|fail/i.test(content);
-  if (failRequest) {
-    await queueTimeout(() => {
-      agentStore.failRun('Не удалось завершить действие: конфликт валидации данных.');
-      if (!threadStore.activeThreadId) return;
-      messageStore.addMessage(
-        threadStore.activeThreadId,
-        'agent',
-        'Не удалось завершить действие из-за конфликта данных. Проверьте входные параметры и повторите.',
-      );
-      threadStore.touchThread(
-        threadStore.activeThreadId,
-        'Не удалось завершить действие из-за конфликта данных.',
-      );
-    }, 700);
-    return;
-  }
-
-  await queueTimeout(() => {
-    if (!threadStore.activeThreadId) return;
-    messageStore.addMessage(
-      threadStore.activeThreadId,
-      'agent',
-      'Готово. Я сформировал план, обновил action log и подготовил черновик для подтверждения в правой панели.',
-    );
-    threadStore.touchThread(
-      threadStore.activeThreadId,
-      'Готово. Я сформировал план, обновил action log и подготовил черновик.',
-    );
-    agentStore.completeRun('Ответ отправлен в чат, workspace обновлен.');
-  }, 760);
-}
+watch(
+  () => threadStore.activeThreadId,
+  async (id) => {
+    if (!id || isSending.value) return;
+    loadingHistory.value = true;
+    try {
+      const { history } = await threadStore.loadThread(id);
+      messageStore.setThreadMessages(id, history);
+    } catch {
+      messageStore.setThreadMessages(id, []);
+    } finally {
+      loadingHistory.value = false;
+      scrollToBottom();
+    }
+  },
+  { immediate: true },
+);
 
 onBeforeUnmount(() => {
-  for (const timer of pendingTimers) {
-    clearTimeout(timer);
-  }
-  pendingTimers.clear();
   footerResizeObserver?.disconnect();
   footerResizeObserver = null;
 });
@@ -150,11 +145,11 @@ onMounted(() => {
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="min-w-0">
           <h1 class="truncate text-lg font-semibold text-foreground">
-            {{ threadStore.activeThread?.title ?? 'Select a conversation' }}
+            {{ threadStore.activeThread?.title ?? 'New conversation' }}
           </h1>
         </div>
 
-        <div ref="menuRef" class="relative">
+        <div v-if="threadStore.activeThreadId" ref="menuRef" class="relative">
           <button
             type="button"
             class="focus-ring inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground/80 transition-colors hover:bg-white/10 hover:text-white"
@@ -173,14 +168,14 @@ onMounted(() => {
               class="focus-ring block w-full rounded-md px-3 py-2 text-left text-sm text-foreground/85 transition-colors hover:bg-white/10 hover:text-white"
               @click="archiveCurrentThread"
             >
-              Архивировать
+              Archive
             </button>
             <button
               type="button"
               class="focus-ring block w-full rounded-md px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/15"
               @click="deleteCurrentThread"
             >
-              Удалить
+              Delete
             </button>
           </div>
         </div>
@@ -194,13 +189,22 @@ onMounted(() => {
         :style="{ paddingBottom: `${messagesBottomInset}px` }"
       >
         <div
-          v-if="currentMessages.length === 0"
+          v-if="loadingHistory"
           class="rounded-xl border border-border bg-secondary/40 px-4 py-6 text-center"
         >
-          <p class="text-sm text-muted-foreground">Начните диалог. Агент покажет intent preview и audit trail справа.</p>
+          <p class="text-sm text-muted-foreground">Loading conversation...</p>
         </div>
 
-        <section aria-live="polite" aria-atomic="false">
+        <div
+          v-else-if="currentMessages.length === 0"
+          class="rounded-xl border border-border bg-secondary/40 px-4 py-6 text-center"
+        >
+          <p class="text-sm text-muted-foreground">
+            {{ threadStore.activeThreadId ? 'Start the conversation. Type your message below.' : 'Type your message below to start a new conversation.' }}
+          </p>
+        </div>
+
+        <section v-else aria-live="polite" aria-atomic="false">
           <MessageBubble v-for="message in currentMessages" :key="message.id" :message="message" />
         </section>
       </div>
@@ -209,13 +213,12 @@ onMounted(() => {
     <footer ref="composerFooter" class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
       <div class="pointer-events-auto mx-auto w-full max-w-[760px]">
         <div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-          <LoaderCircle v-if="agentStore.phase === 'thinking' || agentStore.phase === 'acting'" class="h-3.5 w-3.5 animate-spin" />
-          <PauseCircle v-else-if="agentStore.phase === 'waiting_input'" class="h-3.5 w-3.5 text-[hsl(var(--warning))]" />
+          <LoaderCircle v-if="agentStore.phase === 'thinking'" class="h-3.5 w-3.5 animate-spin" />
           <AlertCircle v-else-if="agentStore.phase === 'error'" class="h-3.5 w-3.5 text-destructive" />
           <CheckCircle2 v-else-if="agentStore.phase === 'complete'" class="h-3.5 w-3.5 text-[hsl(var(--success))]" />
           <span v-if="agentStore.currentStep">{{ agentStore.currentStep }}</span>
         </div>
-        <SendMessageForm :disabled="agentStore.phase === 'thinking' || agentStore.phase === 'acting'" @send="handleSend" />
+        <SendMessageForm :disabled="agentStore.phase === 'thinking'" @send="handleSend" />
       </div>
     </footer>
   </main>

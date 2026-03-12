@@ -2,7 +2,6 @@
 import { ref, watch } from 'vue';
 import { Check, Pencil, Trash2, X } from 'lucide-vue-next';
 import type { Thread } from '../model/types';
-import { formatRelativeTime } from '@/shared/lib';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -18,23 +17,23 @@ const emit = defineEmits<{
 }>();
 
 const isEditing = ref(false);
-const draftTitle = ref(props.thread.title);
+const draftTitle = ref(props.thread.title ?? '');
 
 watch(
   () => props.thread.title,
   (title) => {
-    if (!isEditing.value) draftTitle.value = title;
+    if (!isEditing.value) draftTitle.value = title ?? '';
   },
 );
 
 function startEditing() {
   isEditing.value = true;
-  draftTitle.value = props.thread.title;
+  draftTitle.value = props.thread.title ?? '';
 }
 
 function cancelEditing() {
   isEditing.value = false;
-  draftTitle.value = props.thread.title;
+  draftTitle.value = props.thread.title ?? '';
 }
 
 function saveTitle() {
@@ -60,7 +59,7 @@ function saveTitle() {
       )
     "
   >
-    <div class="flex items-start justify-between gap-2">
+    <div class="flex items-center justify-between gap-2">
       <div class="min-w-0 flex-1">
         <div v-if="isEditing" class="flex items-center gap-1.5">
           <input
@@ -88,12 +87,11 @@ function saveTitle() {
         </div>
 
         <button v-else type="button" class="block w-full cursor-pointer text-left" @click="$emit('select')">
-          <p class="truncate text-sm font-medium text-foreground">{{ thread.title }}</p>
-          <p class="mt-1 text-xs text-subtle-foreground">{{ formatRelativeTime(thread.updatedAt) }}</p>
+          <p class="truncate text-sm font-medium text-foreground">{{ thread.title ?? 'New conversation' }}</p>
         </button>
       </div>
 
-      <div class="flex items-start gap-1">
+      <div class="flex items-center gap-1">
         <div
           :class="
             cn(
@@ -118,9 +116,6 @@ function saveTitle() {
       </div>
     </div>
 
-    <button v-if="!isEditing" type="button" class="mt-2 block w-full cursor-pointer text-left" @click="$emit('select')">
-      <p class="line-clamp-2 text-xs leading-5 text-muted-foreground">{{ thread.lastMessagePreview || 'No messages yet' }}</p>
-    </button>
-    <p v-else class="mt-2 text-xs text-subtle-foreground">Enter to save, Esc to cancel.</p>
+    <p v-if="isEditing" class="mt-2 text-xs text-subtle-foreground">Enter to save, Esc to cancel.</p>
   </article>
 </template>

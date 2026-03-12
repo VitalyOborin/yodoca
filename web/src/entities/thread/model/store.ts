@@ -1,102 +1,87 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { Thread } from './types';
-
-const MOCK_THREADS: Thread[] = [
-  {
-    id: 'thread-1',
-    title: 'Project architecture review',
-    lastMessagePreview: 'I recommend splitting the module into smaller services...',
-    updatedAt: new Date(Date.now() - 300_000),
-    messageCount: 12,
-  },
-  {
-    id: 'thread-2',
-    title: 'Debug: memory leak in worker',
-    lastMessagePreview: 'The issue is in the event listener cleanup...',
-    updatedAt: new Date(Date.now() - 3_600_000),
-    messageCount: 8,
-  },
-  {
-    id: 'thread-3',
-    title: 'Write unit tests for auth',
-    lastMessagePreview: 'Here are the test cases for the login flow...',
-    updatedAt: new Date(Date.now() - 86_400_000),
-    messageCount: 5,
-  },
-  {
-    id: 'thread-4',
-    title: 'Deploy pipeline setup',
-    lastMessagePreview: 'The CI config should include these stages...',
-    updatedAt: new Date(Date.now() - 172_800_000),
-    messageCount: 15,
-  },
-  {
-    id: 'thread-5',
-    title: 'API design discussion',
-    lastMessagePreview: 'REST vs GraphQL — here are the trade-offs...',
-    updatedAt: new Date(Date.now() - 604_800_000),
-    messageCount: 22,
-  },
-];
+import {
+  fetchThreads,
+  fetchThread,
+  createThread as apiCreateThread,
+  updateThread,
+  deleteThread as apiDeleteThread,
+} from '@/shared/api';
 
 export const useThreadStore = defineStore('threads', () => {
-  const threads = ref<Thread[]>(MOCK_THREADS);
-  const activeThreadId = ref<string | null>('thread-1');
+  const threads = ref<Thread[]>([]);
+  const activeThreadId = ref<string | null>(null);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
 
-  const activeThread = computed(() => threads.value.find((t) => t.id === activeThreadId.value));
-
-  const sortedThreads = computed(() =>
-    [...threads.value].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()),
+  const activeThread = computed(() =>
+    threads.value.find((t) => t.id === activeThreadId.value),
   );
 
-  function selectThread(id: string) {
-    if (!threads.value.some((thread) => thread.id === id)) return;
+  const sortedThreads = computed(() =>
+    [...threads.value]
+      .filter((t) => !t.is_archived)
+      .sort((a, b) => b.last_active_at - a.last_active_at),
+  );
+
+  async function loadThreads() {
+    loading.value = true;
+    error.value = null;
+    try {
+      threads.value = await fetchThreads();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to load threads';
+      threads.value = [];
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function loadThread(id: string) {
+    return fetchThread(id);
+  }
+
+  function selectThread(id: string | null) {
     activeThreadId.value = id;
   }
 
-  function createThread() {
-    const newThread: Thread = {
-      id: `thread-${Date.now()}`,
-      title: 'New conversation',
-      lastMessagePreview: '',
-      updatedAt: new Date(),
-      messageCount: 0,
-    };
-    threads.value.unshift(newThread);
-    activeThreadId.value = newThread.id;
+  async function createThread(): Promise<Thread> {
+    const thread = await apiCreateThread();
+    threads.value.unshift(thread);
+    activeThreadId.value = thread.id;
+    return thread;
   }
 
-  function renameThread(id: string, title: string) {
+  async function ensureThread(): Promise<string> {
+    if (activeThreadId.value) return activeThreadId.value;
+    const thread = await createThread();
+    return thread.id;
+  }
+
+  async function renameThread(id: string, title: string) {
     const normalizedTitle = title.trim();
     if (!normalizedTitle) return;
 
-    const thread = threads.value.find((item) => item.id === id);
-    if (!thread) return;
-
-    thread.title = normalizedTitle;
-    thread.updatedAt = new Date();
+    const updated = await updateThread(id, { title: normalizedTitle });
+    const idx = threads.value.findIndex((t) => t.id === id);
+    if (idx >= 0) threads.value[idx] = updated;
   }
 
-  function deleteThread(id: string) {
-    const index = threads.value.findIndex((thread) => thread.id === id);
-    if (index === -1) return;
-
-    threads.value.splice(index, 1);
-
-    if (activeThreadId.value !== id) return;
-
-    const nextActiveThread = sortedThreads.value[0] ?? null;
-    activeThreadId.value = nextActiveThread?.id ?? null;
+  async function archiveThread(id: string) {
+    await updateThread(id, { is_archived: true });
+    const t = threads.value.find((x) => x.id === id);
+    if (t) t.is_archived = true;
   }
 
-  function touchThread(id: string, preview: string) {
-    const thread = threads.value.find((item) => item.id === id);
-    if (!thread) return;
-
-    thread.lastMessagePreview = preview;
-    thread.messageCount += 1;
-    thread.updatedAt = new Date();
+  async function removeThread(id: string) {
+    await apiDeleteThread(id);
+    const index = threads.value.findIndex((t) => t.id === id);
+    if (index >= 0) threads.value.splice(index, 1);
+    if (activeThreadId.value === id) {
+      const next = sortedThreads.value[0];
+      activeThreadId.value = next?.id ?? null;
+    }
   }
 
   return {
@@ -104,10 +89,15 @@ export const useThreadStore = defineStore('threads', () => {
     activeThreadId,
     activeThread,
     sortedThreads,
+    loading,
+    error,
+    loadThreads,
+    loadThread,
     selectThread,
     createThread,
+    ensureThread,
     renameThread,
-    deleteThread,
-    touchThread,
+    archiveThread,
+    removeThread,
   };
 });

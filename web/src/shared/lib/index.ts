@@ -1,2 +1,2 @@
-export { formatRelativeTime, formatMessageTime } from './date';
+export { formatRelativeTime, formatRelativeTimeFromEpoch, formatMessageTime } from './date';
 export { renderMarkdown } from './markdown';
