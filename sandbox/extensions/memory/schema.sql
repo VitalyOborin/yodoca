@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS maintenance_metadata (
 -- ==========================================================================
 -- Thread consolidation tracking
 -- ==========================================================================
-CREATE TABLE IF NOT EXISTS thread_consolidations (
+CREATE TABLE IF NOT EXISTS threads_consolidations (
     thread_id       TEXT PRIMARY KEY,
     first_seen_at    INTEGER NOT NULL,
     consolidated_at  INTEGER

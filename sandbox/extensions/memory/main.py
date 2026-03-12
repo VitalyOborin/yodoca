@@ -437,19 +437,19 @@ class MemoryExtension:
             asyncio.create_task(self._slow_path(node_id, text))
 
     async def _on_thread_completed(self, event: object) -> None:
-        """EventBus: thread.completed. Trigger consolidation."""
+        """EventBus: session.completed with thread payload. Trigger consolidation."""
         payload = getattr(event, "payload", {}) or {}
         thread_id = payload.get("thread_id")
         if thread_id:
             if thread_id in self._consolidation_pending:
                 logger.debug(
-                    "thread.completed: consolidation already pending for %s",
+                    "session.completed(thread): consolidation already pending for %s",
                     thread_id,
                 )
                 return
             self._consolidation_pending.add(thread_id)
             logger.info(
-                "thread.completed: scheduling consolidation for %s", thread_id
+                "session.completed(thread): scheduling consolidation for %s", thread_id
             )
             task = asyncio.create_task(self._consolidate_thread(thread_id))
             task.add_done_callback(

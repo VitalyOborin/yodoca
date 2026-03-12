@@ -645,12 +645,12 @@ class MemoryStorage:
         }
 
     def ensure_thread(self, thread_id: str) -> None:
-        """Upsert thread into thread_consolidations. Fire-and-forget."""
+        """Upsert thread into threads_consolidations. Fire-and-forget."""
         import time
 
         now = int(time.time())
         sql = """
-            INSERT INTO thread_consolidations (thread_id, first_seen_at, consolidated_at)
+            INSERT INTO threads_consolidations (thread_id, first_seen_at, consolidated_at)
             VALUES (?, ?, NULL)
             ON CONFLICT(thread_id) DO NOTHING
         """
@@ -661,7 +661,7 @@ class MemoryStorage:
         if self._read_conn is None:
             return False
         cursor = await self._read_conn.execute(
-            "SELECT consolidated_at FROM thread_consolidations WHERE thread_id = ?",
+            "SELECT consolidated_at FROM threads_consolidations WHERE thread_id = ?",
             (thread_id,),
         )
         row = await cursor.fetchone()
@@ -705,7 +705,7 @@ class MemoryStorage:
         """Mark thread as consolidated. Awaitable via write queue."""
         now = int(time.time())
         future = self._submit_write(
-            "UPDATE thread_consolidations SET consolidated_at = ? WHERE thread_id = ?",
+            "UPDATE threads_consolidations SET consolidated_at = ? WHERE thread_id = ?",
             (now, thread_id),
             wait=True,
         )
@@ -718,7 +718,7 @@ class MemoryStorage:
         if self._read_conn is None:
             return []
         cursor = await self._read_conn.execute(
-            "SELECT thread_id FROM thread_consolidations WHERE consolidated_at IS NULL"
+            "SELECT thread_id FROM threads_consolidations WHERE consolidated_at IS NULL"
         )
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
@@ -767,7 +767,7 @@ class MemoryStorage:
         if self._read_conn is None:
             return None
         cursor = await self._read_conn.execute(
-            "SELECT thread_id FROM thread_consolidations ORDER BY first_seen_at DESC LIMIT 1"
+            "SELECT thread_id FROM threads_consolidations ORDER BY first_seen_at DESC LIMIT 1"
         )
         row = await cursor.fetchone()
         return row[0] if row else None
