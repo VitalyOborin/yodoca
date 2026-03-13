@@ -3,11 +3,9 @@
  * Uses relative URLs (Vite proxy handles /api and /agent in dev).
  */
 
-const API_BASE = '';
+import { getAuthToken } from './auth';
 
-function getAuthToken(): string {
-  return import.meta.env.VITE_API_KEY ?? '';
-}
+const API_BASE = '';
 
 export interface ApiError {
   message: string;

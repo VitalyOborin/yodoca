@@ -198,7 +198,7 @@ class ThreadRepository:
             key_col = self._agent_messages_thread_column(conn)
             rows = conn.execute(
                 f"""
-                SELECT message_data
+                SELECT message_data, created_at
                 FROM agent_messages
                 WHERE {key_col} = ?
                 ORDER BY id ASC
@@ -212,6 +212,13 @@ class ThreadRepository:
             except json.JSONDecodeError:
                 parsed = {"raw": row["message_data"]}
             if isinstance(parsed, dict):
+                if "created_at" not in parsed:
+                    raw_created_at = row["created_at"]
+                    if raw_created_at is not None:
+                        try:
+                            parsed["created_at"] = self._parse_created_at(raw_created_at)
+                        except (ValueError, TypeError):
+                            pass
                 history.append(parsed)
             else:
                 history.append({"value": parsed})

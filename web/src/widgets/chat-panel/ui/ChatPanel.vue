@@ -20,6 +20,8 @@ const menuOpen = ref(false);
 const messagesBottomInset = ref(176);
 const loadingHistory = ref(false);
 const isSending = ref(false);
+const pendingHistoryThreadId = ref<string | null>(null);
+let latestHistoryRequestId = 0;
 let footerResizeObserver: ResizeObserver | null = null;
 
 const currentMessages = computed(() => {
@@ -63,7 +65,39 @@ function toChatMessages(msgs: { id: string; role: string; content: string }[]): 
   }));
 }
 
+async function loadThreadHistory(threadId: string) {
+  const requestId = ++latestHistoryRequestId;
+  loadingHistory.value = true;
+
+  try {
+    const { history } = await threadStore.loadThread(threadId);
+    if (requestId !== latestHistoryRequestId || threadStore.activeThreadId !== threadId) {
+      return;
+    }
+    messageStore.setThreadMessages(threadId, history);
+  } catch {
+    if (requestId !== latestHistoryRequestId || threadStore.activeThreadId !== threadId) {
+      return;
+    }
+    messageStore.setThreadMessages(threadId, []);
+  } finally {
+    if (requestId === latestHistoryRequestId) {
+      loadingHistory.value = false;
+      scrollToBottom();
+    }
+  }
+}
+
+function flushPendingHistoryLoad() {
+  const threadId = pendingHistoryThreadId.value;
+  if (!threadId || isSending.value) return;
+
+  pendingHistoryThreadId.value = null;
+  void loadThreadHistory(threadId);
+}
+
 async function handleSend(content: string) {
+  agentStore.resetPhase();
   isSending.value = true;
   try {
     const threadId = await threadStore.ensureThread();
@@ -88,13 +122,12 @@ async function handleSend(content: string) {
       if (msg && !msg.content) {
         messageStore.messages.splice(messageStore.messages.indexOf(msg), 1);
       }
-    } finally {
-      agentStore.resetPhase();
     }
 
     await threadStore.loadThreads();
   } finally {
     isSending.value = false;
+    flushPendingHistoryLoad();
   }
 }
 
@@ -114,18 +147,10 @@ watch(
 
 watch(
   () => threadStore.activeThreadId,
-  async (id) => {
-    if (!id || isSending.value) return;
-    loadingHistory.value = true;
-    try {
-      const { history } = await threadStore.loadThread(id);
-      messageStore.setThreadMessages(id, history);
-    } catch {
-      messageStore.setThreadMessages(id, []);
-    } finally {
-      loadingHistory.value = false;
-      scrollToBottom();
-    }
+  (id) => {
+    if (!id) return;
+    pendingHistoryThreadId.value = id;
+    flushPendingHistoryLoad();
   },
   { immediate: true },
 );

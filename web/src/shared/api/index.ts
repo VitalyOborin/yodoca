@@ -1,4 +1,5 @@
 export { apiFetch, ApiRequestError, type ApiError } from './http';
+export { getAuthToken } from './auth';
 export {
   fetchThreads,
   fetchThread,

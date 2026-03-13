@@ -72,7 +72,12 @@ def test_thread_repository_get_thread_history(tmp_path: Path) -> None:
     _seed_agent_messages(db_path, "sess_1", '{"role":"user","content":"hello"}')
 
     history = repo.get_thread_history("sess_1")
-    assert history == [{"role": "user", "content": "hello"}]
+    assert history is not None
+    assert len(history) == 1
+    first = history[0]
+    assert first["role"] == "user"
+    assert first["content"] == "hello"
+    assert isinstance(first.get("created_at"), int)
 
 
 @pytest.mark.asyncio

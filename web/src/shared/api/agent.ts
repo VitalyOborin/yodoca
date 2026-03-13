@@ -8,13 +8,10 @@ import { HttpAgent } from '@ag-ui/client';
 import { EventType } from '@ag-ui/core';
 import type { Message } from '@ag-ui/core';
 import { lastValueFrom } from 'rxjs';
-import { tap, filter, finalize } from 'rxjs/operators';
+import { tap, finalize } from 'rxjs/operators';
+import { getAuthToken } from './auth';
 
 const AGENT_URL = '/agent';
-
-function getAuthToken(): string {
-  return import.meta.env.VITE_API_KEY ?? '';
-}
 
 function randomUUID(): string {
   return crypto.randomUUID?.() ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -61,6 +58,7 @@ export function runAgent(
   });
 
   let accumulated = '';
+  let hasRunFinished = false;
 
   const events$ = agent.run({
     threadId,
@@ -80,10 +78,17 @@ export function runAgent(
       if (event.type === EventType.RUN_ERROR) {
         throw new Error((event as { message?: string }).message ?? 'Agent run failed');
       }
+      if (event.type === EventType.RUN_FINISHED) {
+        hasRunFinished = true;
+      }
     }),
-    filter((event) => event.type === EventType.RUN_FINISHED),
     finalize(() => onDone?.()),
   );
 
-  return lastValueFrom(stream$, { defaultValue: null }).then(() => accumulated);
+  return lastValueFrom(stream$).then(() => {
+    if (!hasRunFinished) {
+      throw new Error('Agent stream interrupted before completion');
+    }
+    return accumulated;
+  });
 }

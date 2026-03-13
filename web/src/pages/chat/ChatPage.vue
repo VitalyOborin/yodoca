@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch, onMounted } from 'vue';
+import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ThreadSidebar } from '@/widgets/sidebar';
 import { ChatPanel } from '@/widgets/chat-panel';
@@ -10,27 +10,42 @@ const route = useRoute();
 const router = useRouter();
 const threadStore = useThreadStore();
 
-onMounted(() => {
+const routeThreadId = computed(() => {
   const param = route.params.threadId;
-  const id = Array.isArray(param) ? param[0] : param;
-  if (id) {
-    threadStore.selectThread(id);
-  }
+  return Array.isArray(param) ? (param[0] ?? null) : (param ?? null);
 });
+
+watch(
+  routeThreadId,
+  (id) => {
+    if (id !== threadStore.activeThreadId) {
+      threadStore.selectThread(id);
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => route.name,
+  (name) => {
+    if (name === 'chat' && threadStore.activeThreadId !== null) {
+      threadStore.selectThread(null);
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   () => threadStore.activeThreadId,
   (id) => {
-    const currentParam = Array.isArray(route.params.threadId)
-      ? route.params.threadId[0]
-      : route.params.threadId;
+    const currentParam = routeThreadId.value;
 
     if (id && id !== currentParam) {
       router.replace({ name: 'chat-thread', params: { threadId: id } });
     } else if (!id && route.name !== 'chat') {
       router.replace({ name: 'chat' });
     }
-  },
+  }
 );
 </script>
 
