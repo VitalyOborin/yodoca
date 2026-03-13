@@ -194,9 +194,8 @@ def _collect_lm_studio(state: WizardState) -> bool:
     if base_url is None:
         return False
 
-    api_key = questionary.text(
-        "Local model API key (optional, default: dummy):",
-        default="dummy",
+    api_key = questionary.password(
+        "Local model API key (hidden; press Enter for dummy):",
         style=STYLE,
     ).ask()
     if api_key is None:
