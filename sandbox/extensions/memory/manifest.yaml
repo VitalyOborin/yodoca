@@ -14,7 +14,6 @@ depends_on: []
 
 config:
   embedding_model: text-embedding-3-large
-  embedding_dimensions: 256
   decay_threshold: 0.05
   decay_rate_default: 0.1
   entity_enrichment_min_mentions: 3

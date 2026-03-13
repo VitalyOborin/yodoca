@@ -221,7 +221,7 @@ CREATE TABLE thread_consolidations (
 | Table | Purpose |
 |---|---|
 | `nodes_fts` | FTS5 full-text search on `nodes.content`. Kept in sync by INSERT/UPDATE/DELETE triggers. |
-| `vec_nodes` | sqlite-vec KNN search. 256-dimensional float32 embeddings keyed by `node_id`. |
+| `vec_nodes` | sqlite-vec KNN search. Float32 embeddings keyed by `node_id`, using the embedding model's native dimension. |
 | `vec_entities` | sqlite-vec KNN search for entity embeddings. |
 
 ---
@@ -376,7 +376,6 @@ All configuration is in `sandbox/extensions/memory/manifest.yaml`:
 
 | Key | Default | Description |
 |---|---|---|
-| `embedding_dimensions` | 256 | Vector embedding dimensions |
 | `decay_threshold` | 0.05 | Prune nodes below this confidence |
 | `decay_rate_default` | 0.1 | Default λ in decay formula |
 | `entity_enrichment_min_mentions` | 3 | Min mentions before entity enrichment |
@@ -392,7 +391,9 @@ All configuration is in `sandbox/extensions/memory/manifest.yaml`:
 
 ## Embedding integration
 
-The `embedding` extension provides vector embeddings used by memory for semantic search. Uses `text-embedding-3-large` with 256-dimensional Matryoshka reduction.
+The `embedding` extension provides vector embeddings used by memory for semantic search. Memory stores embeddings at the model's native dimension and does not apply Matryoshka reduction or request reduced dimensions from providers.
+
+At startup, memory probes the configured embedding model once to detect the native vector size. The active dimension is persisted in `maintenance_metadata` and used to create sqlite-vec tables only when the dimension changes.
 
 The memory extension calls embedding at several points:
 

@@ -107,10 +107,12 @@ class EmbeddingIntentClassifier(IntentClassifier):
         *,
         embed_batch_fn: Callable[..., Any] | None = None,
         cache_dir: Path | None = None,
+        model_name: str | None = None,
     ) -> None:
         self._embed_fn = embed_fn
         self._embed_batch_fn = embed_batch_fn
         self._cache_dir = cache_dir
+        self._model_name = model_name or "unknown-model"
         self._threshold = threshold
         self._intent_embeddings: dict[str, list[list[float]]] = {}
 
@@ -119,7 +121,10 @@ class EmbeddingIntentClassifier(IntentClassifier):
         if not self._cache_dir:
             return None
         canonical = json.dumps(
-            {k: sorted(v) for k, v in sorted(self.EXEMPLARS.items())},
+            {
+                "model_name": self._model_name,
+                "exemplars": {k: sorted(v) for k, v in sorted(self.EXEMPLARS.items())},
+            },
             sort_keys=True,
             ensure_ascii=False,
         )

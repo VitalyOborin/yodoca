@@ -136,16 +136,3 @@ CREATE TRIGGER IF NOT EXISTS nodes_fts_delete AFTER DELETE ON nodes BEGIN
         VALUES ('delete', old.rowid, old.content);
 END;
 
--- ==========================================================================
--- Vector search (sqlite-vec, optional)
--- ==========================================================================
-CREATE VIRTUAL TABLE IF NOT EXISTS vec_nodes USING vec0(
-    node_id TEXT PRIMARY KEY,
-    embedding float[256]
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
-    entity_id TEXT PRIMARY KEY,
-    embedding float[256]
-);
-

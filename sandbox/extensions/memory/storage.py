@@ -36,9 +36,9 @@ def _escape_fts5_query(q: str) -> str:
 class MemoryStorage:
     """SQLite-backed memory store with async writer queue. WAL mode, single writer."""
 
-    def __init__(self, db_path: Path, *, embedding_dimensions: int = 256) -> None:
+    def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
-        self._embedding_dimensions = embedding_dimensions
+        self._embedding_dimensions: int | None = None
         self._write_conn: aiosqlite.Connection | None = None
         self._read_conn: aiosqlite.Connection | None = None
         self._write_queue: asyncio.Queue[WriteOp] = asyncio.Queue()
@@ -82,6 +82,133 @@ class MemoryStorage:
         self._writer_task = asyncio.create_task(self._writer_loop())
         self._closed = False
         logger.info("MemoryStorage initialized: %s", self._db_path)
+
+    async def ensure_vec_tables(self, probed_dim: int | None) -> int | None:
+        """Ensure sqlite-vec tables match the active embedding dimension."""
+        stored_dim = await self._get_stored_embedding_dim()
+        tables_exist = await self._vec_tables_exist()
+
+        if probed_dim is None:
+            if stored_dim is None:
+                self._embedding_dimensions = None
+                logger.info(
+                    "Vector search disabled: no embedding dimension is available"
+                )
+                return None
+            self._embedding_dimensions = stored_dim
+            if not tables_exist:
+                await self._create_vec_tables(stored_dim)
+            logger.info("Using stored embedding dimension: %d", stored_dim)
+            return stored_dim
+
+        if stored_dim == probed_dim and tables_exist:
+            self._embedding_dimensions = probed_dim
+            logger.info("Using embedding dimension: %d", probed_dim)
+            return probed_dim
+
+        if stored_dim != probed_dim:
+            logger.warning(
+                "Embedding dimension changed: stored=%s probed=%d. "
+                "Recreating vector tables and clearing stored embeddings.",
+                stored_dim,
+                probed_dim,
+            )
+            await self._clear_embedding_blobs()
+
+        await self._drop_vec_tables()
+        await self._create_vec_tables(probed_dim)
+        await self._set_stored_embedding_dim(probed_dim)
+        self._embedding_dimensions = probed_dim
+        logger.info("Using embedding dimension: %d", probed_dim)
+        return probed_dim
+
+    async def _get_stored_embedding_dim(self) -> int | None:
+        """Load the active embedding dimension from metadata."""
+        if self._read_conn is None:
+            return None
+        cursor = await self._read_conn.execute(
+            "SELECT value FROM maintenance_metadata WHERE key = 'embedding_dim'"
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid stored embedding_dim metadata: %r", row[0])
+            return None
+
+    async def _set_stored_embedding_dim(self, embedding_dim: int) -> None:
+        """Persist the active embedding dimension in metadata."""
+        if self._write_conn is None:
+            return
+        await self._write_conn.execute(
+            "INSERT INTO maintenance_metadata (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("embedding_dim", str(embedding_dim)),
+        )
+        await self._write_conn.commit()
+
+    async def _vec_tables_exist(self) -> bool:
+        """Return True when both sqlite-vec tables are present."""
+        if self._read_conn is None:
+            return False
+        cursor = await self._read_conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name IN ('vec_nodes', 'vec_entities')
+            """
+        )
+        rows = await cursor.fetchall()
+        return {row[0] for row in rows} == {"vec_nodes", "vec_entities"}
+
+    async def _drop_vec_tables(self) -> None:
+        """Drop vector tables if they exist."""
+        if self._write_conn is None:
+            return
+        await self._write_conn.executescript(
+            """
+            DROP TABLE IF EXISTS vec_nodes;
+            DROP TABLE IF EXISTS vec_entities;
+            """
+        )
+        await self._write_conn.commit()
+
+    async def _create_vec_tables(self, embedding_dim: int) -> None:
+        """Create sqlite-vec tables for the given embedding dimension."""
+        if self._write_conn is None:
+            return
+        if embedding_dim <= 0:
+            raise ValueError(
+                f"Embedding dimension must be positive, got {embedding_dim}"
+            )
+        await self._write_conn.executescript(
+            f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_nodes USING vec0(
+                node_id TEXT PRIMARY KEY,
+                embedding float[{embedding_dim}]
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
+                entity_id TEXT PRIMARY KEY,
+                embedding float[{embedding_dim}]
+            );
+            """
+        )
+        await self._write_conn.commit()
+
+    async def _clear_embedding_blobs(self) -> None:
+        """Clear stored embedding BLOBs after a dimension change."""
+        if self._write_conn is None:
+            return
+        await self._write_conn.executescript(
+            """
+            UPDATE nodes SET embedding = NULL;
+            UPDATE entities SET embedding = NULL;
+            """
+        )
+        await self._write_conn.commit()
 
     async def _reset_incompatible_schema(self) -> None:
         """Drop legacy memory tables when schema uses session_id instead of thread_id."""
@@ -509,21 +636,11 @@ class MemoryStorage:
         ]
 
     def _serialize_embedding(self, embedding: list[float]) -> bytes:
-        """Serialize float list to BLOB for sqlite-vec. Applies defensive truncation
-        (Matryoshka) when the provider returns more dimensions than expected (e.g.
-        LM Studio ignoring dimensions=256 and returning 1024).
-        """
+        """Serialize float list to BLOB for sqlite-vec."""
         expected_dim = self._embedding_dimensions
-        if len(embedding) > expected_dim:
-            logger.warning(
-                "Embedding dimension mismatch: provider returned %d, expected %d. "
-                "Truncating to %d (Matryoshka). Check provider 'dimensions' parameter support.",
-                len(embedding),
-                expected_dim,
-                expected_dim,
-            )
-            embedding = embedding[:expected_dim]
-        elif len(embedding) < expected_dim:
+        if expected_dim is None:
+            raise ValueError("Embedding dimension is not initialized")
+        if len(embedding) != expected_dim:
             raise ValueError(
                 f"Dimension mismatch: expected {expected_dim}, got {len(embedding)}"
             )
@@ -581,7 +698,7 @@ class MemoryStorage:
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         """KNN search via vec_nodes MATCH. Returns same shape as fts_search plus distance."""
-        if self._read_conn is None:
+        if self._read_conn is None or self._embedding_dimensions is None:
             return []
         blob = self._serialize_embedding(query_embedding)
         type_filter = ""

@@ -35,22 +35,36 @@ logger = logging.getLogger(__name__)
 def _build_embed_fns_from_capability(
     embedder: EmbeddingCapability,
     model: str,
-    dims: int,
 ) -> tuple[object, object]:
     """Build embed_fn and embed_batch_fn from EmbeddingCapability."""
 
     async def embed_fn(text: str) -> list[float] | None:
-        results = await embedder.embed_batch(
-            [text], model=model, dimensions=dims
-        )
+        results = await embedder.embed_batch([text], model=model)
         return results[0] if results else None
 
     async def embed_batch_fn(texts: list[str]) -> list[list[float] | None]:
-        return await embedder.embed_batch(
-            texts, model=model, dimensions=dims
-        )
+        return await embedder.embed_batch(texts, model=model)
 
     return embed_fn, embed_batch_fn
+
+
+async def _probe_embedding_dimension(
+    embedder: EmbeddingCapability | None,
+    model: str,
+) -> int | None:
+    """Probe the model once to determine its native embedding dimension."""
+    if embedder is None:
+        return None
+    try:
+        results = await embedder.embed_batch(["dimension probe"], model=model)
+    except Exception as e:
+        logger.warning("Embedding dimension probe failed for model %s: %s", model, e)
+        return None
+
+    if not results or not results[0]:
+        logger.warning("Embedding dimension probe returned no data for model %s", model)
+        return None
+    return len(results[0])
 
 
 class MemoryExtension:
@@ -142,8 +156,7 @@ class MemoryExtension:
             "remember_fact_dedup_threshold", 0.92
         )
         db_path = context.data_dir / "memory.db"
-        embedding_dims = context.get_config("embedding_dimensions", 256)
-        self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
+        self._storage = MemoryStorage(db_path)
         await self._storage.initialize()
 
         embedding_model = context.get_config(
@@ -156,17 +169,36 @@ class MemoryExtension:
         )
         self._embed_fn = None
         embed_batch_fn = None
+        active_embedding_dim = await self._storage.ensure_vec_tables(
+            await _probe_embedding_dimension(embedder, embedding_model)
+        )
+        if active_embedding_dim is not None:
+            logger.info(
+                "Memory embedding dimension active: %d (model=%s)",
+                active_embedding_dim,
+                embedding_model,
+            )
+        else:
+            logger.info(
+                "Memory vector search disabled: no active embedding dimension "
+                "(model=%s)",
+                embedding_model,
+            )
         if embedder:
             self._embed_fn, embed_batch_fn = _build_embed_fns_from_capability(
-                embedder, embedding_model, embedding_dims
+                embedder, embedding_model
             )
+        if active_embedding_dim is None:
+            self._embed_fn = None
+            embed_batch_fn = None
 
-        if self._embed_fn:
+        if self._embed_fn and active_embedding_dim is not None:
             classifier = EmbeddingIntentClassifier(
                 embed_fn=self._embed_fn,
                 threshold=context.get_config("intent_similarity_threshold", 0.45),
                 embed_batch_fn=embed_batch_fn,
                 cache_dir=context.data_dir,
+                model_name=embedding_model,
             )
             await classifier.initialize()
         else:
