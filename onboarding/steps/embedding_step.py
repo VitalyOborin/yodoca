@@ -11,7 +11,7 @@ from onboarding.state import WizardState
 from onboarding.steps.provider_step import (
     _ask_until_nonempty,
     add_provider_credentials_only,
-    get_provider_choices_not_in_state,
+    get_provider_choices,
 )
 from onboarding.ui import STYLE
 
@@ -89,7 +89,7 @@ def _choose_or_add_embedding_provider(
 ) -> str | None:
     """Let user pick an existing embedding-capable provider or add a new one. Returns provider_id or None."""
     choices: list[Choice] = [Choice(_label(p), p) for p in embedding_capable]
-    remaining = get_provider_choices_not_in_state(state)
+    remaining = get_provider_choices()
     # Only show "Add new provider" for types that support embeddings
     remaining_embedding = [
         (lbl, pid) for lbl, pid in remaining if pid in _EMBEDDING_MODELS

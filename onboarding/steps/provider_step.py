@@ -42,18 +42,12 @@ def run_provider_step(state: WizardState) -> bool:
     print("\nWelcome to Yodoca setup!\n")
 
     while True:
-        remaining = [
-            Choice(label, pid)
-            for label, pid in _ALL_PROVIDERS
-            if pid not in state.providers
-        ]
-        if not remaining:
-            break
+        all_choices = [Choice(label, pid) for label, pid in _ALL_PROVIDERS]
 
         prompt = (
             "Select a provider:" if not state.providers else "Select another provider:"
         )
-        choice = questionary.select(prompt, choices=remaining, style=STYLE).ask()
+        choice = questionary.select(prompt, choices=all_choices, style=STYLE).ask()
         if choice is None:
             return False
 
@@ -85,9 +79,9 @@ def add_provider_credentials_only(state: WizardState, provider_id: str) -> bool:
     return collector(state)
 
 
-def get_provider_choices_not_in_state(state: WizardState) -> list[tuple[str, str]]:
-    """Return providers not yet in state for the "Add new provider" menu."""
-    return [(label, pid) for label, pid in _ALL_PROVIDERS if pid not in state.providers]
+def get_provider_choices() -> list[tuple[str, str]]:
+    """Return all available provider choices."""
+    return list(_ALL_PROVIDERS)
 
 
 def _add_provider(state: WizardState, provider_id: str) -> bool:
