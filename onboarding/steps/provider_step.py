@@ -1,6 +1,7 @@
 """Provider selection and credential collection step.
 
-Sequential add-one-at-a-time flow: select provider -> credentials -> model -> add another?
+Sequential add-one-at-a-time flow:
+select provider -> credentials -> model -> add another?
 """
 
 from collections.abc import Callable
@@ -85,7 +86,7 @@ def add_provider_credentials_only(state: WizardState, provider_id: str) -> bool:
 
 
 def get_provider_choices_not_in_state(state: WizardState) -> list[tuple[str, str]]:
-    """Return (label, provider_id) for providers not yet in state. For 'Add new provider' menu."""
+    """Return providers not yet in state for the "Add new provider" menu."""
     return [(label, pid) for label, pid in _ALL_PROVIDERS if pid not in state.providers]
 
 
@@ -184,7 +185,7 @@ def _collect_openrouter(state: WizardState) -> bool:
 
 
 def _collect_lm_studio(state: WizardState) -> bool:
-    """Collect LM Studio base URL. Returns False if user cancelled."""
+    """Collect LM Studio base URL and API key. Returns False if user cancelled."""
     base_url = questionary.text(
         "LM Studio / local API base URL:",
         default="http://127.0.0.1:1234/v1",
@@ -192,11 +193,21 @@ def _collect_lm_studio(state: WizardState) -> bool:
     ).ask()
     if base_url is None:
         return False
+
+    api_key = questionary.text(
+        "Local model API key (optional, default: dummy):",
+        default="dummy",
+        style=STYLE,
+    ).ask()
+    if api_key is None:
+        return False
+
+    state.env_vars["LM_STUDIO_API_KEY"] = api_key.strip() or "dummy"
     if base_url.strip():
         state.providers["lm_studio"] = {
             "type": "openai_compatible",
             "base_url": base_url.strip().rstrip("/"),
-            "api_key_literal": "lm-studio",
+            "api_key_secret": "LM_STUDIO_API_KEY",
             "supports_hosted_tools": False,
         }
     return True

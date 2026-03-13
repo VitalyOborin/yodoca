@@ -58,6 +58,7 @@ class EventJournal:
     async def _ensure_conn(self) -> aiosqlite.Connection:
         async with self._conn_lock:
             if self._conn is None:
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
                 self._conn = await aiosqlite.connect(str(self._db_path))
                 await self._conn.execute("PRAGMA journal_mode=WAL")
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
