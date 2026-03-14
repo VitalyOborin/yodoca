@@ -20,8 +20,12 @@ const messagesBottomInset = ref(176);
 const loadingHistory = ref(false);
 const isSending = ref(false);
 const pendingHistoryThreadId = ref<string | null>(null);
+const isPinnedToBottom = ref(true);
 let latestHistoryRequestId = 0;
 let footerResizeObserver: ResizeObserver | null = null;
+let scrollViewport: HTMLElement | null = null;
+
+const SCROLL_BOTTOM_THRESHOLD_PX = 24;
 
 const currentMessages = computed(() => {
   if (!threadStore.activeThreadId) return [];
@@ -30,12 +34,36 @@ const currentMessages = computed(() => {
 
 function scrollToBottom() {
   nextTick(() => {
-    const el = scrollContainer.value;
-    if (!el) return;
-    const viewport = el.closest('[data-slot="scroll-area-viewport"]') as HTMLElement | null;
-    const target = viewport ?? el;
+    const target = getScrollViewport();
+    if (!target) return;
     target.scrollTop = target.scrollHeight;
+    isPinnedToBottom.value = true;
   });
+}
+
+function getScrollViewport() {
+  if (scrollViewport?.isConnected) return scrollViewport;
+
+  const el = scrollContainer.value;
+  if (!el) return null;
+
+  scrollViewport =
+    (el.closest('[data-slot="scroll-area-viewport"]') as HTMLElement | null) ?? el;
+  return scrollViewport;
+}
+
+function updatePinnedToBottom() {
+  const viewport = getScrollViewport();
+  if (!viewport) return;
+
+  const distanceToBottom =
+    viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+  isPinnedToBottom.value = distanceToBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function maybeScrollToBottom() {
+  if (!isPinnedToBottom.value) return;
+  scrollToBottom();
 }
 
 function updateMessagesInset() {
@@ -125,7 +153,12 @@ onClickOutside(menuRef, () => {
 
 watch(
   () => currentMessages.value.length,
-  () => scrollToBottom(),
+  () => maybeScrollToBottom(),
+);
+
+watch(
+  () => currentMessages.value.map((message) => `${message.id}:${message.content.length}`).join('|'),
+  () => maybeScrollToBottom(),
 );
 
 watch(
@@ -146,11 +179,18 @@ watch(
 onBeforeUnmount(() => {
   footerResizeObserver?.disconnect();
   footerResizeObserver = null;
+  scrollViewport?.removeEventListener('scroll', updatePinnedToBottom);
+  scrollViewport = null;
 });
 
 onMounted(() => {
   nextTick(() => {
     updateMessagesInset();
+    scrollViewport = getScrollViewport();
+    scrollViewport?.addEventListener('scroll', updatePinnedToBottom, {
+      passive: true,
+    });
+    updatePinnedToBottom();
     if (!composerFooter.value) return;
 
     footerResizeObserver = new ResizeObserver(() => {
