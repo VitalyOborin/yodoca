@@ -65,9 +65,17 @@ async function loadThreadHistory(threadId: string) {
     if (requestId !== latestHistoryRequestId || threadStore.activeThreadId !== threadId) {
       return;
     }
+    const localMessages = messageStore.getThreadMessages(threadId);
+    if (history.length === 0 && localMessages.length > 0) {
+      return;
+    }
     messageStore.setThreadMessages(threadId, history);
   } catch {
     if (requestId !== latestHistoryRequestId || threadStore.activeThreadId !== threadId) {
+      return;
+    }
+    const localMessages = messageStore.getThreadMessages(threadId);
+    if (localMessages.length > 0) {
       return;
     }
     messageStore.setThreadMessages(threadId, []);
@@ -82,6 +90,14 @@ async function loadThreadHistory(threadId: string) {
 function flushPendingHistoryLoad() {
   const threadId = pendingHistoryThreadId.value;
   if (!threadId || isSending.value) return;
+  if (
+    agentStore.phase === 'thinking' &&
+    messageStore.getThreadMessages(threadId).length > 0
+  ) {
+    pendingHistoryThreadId.value = null;
+    loadingHistory.value = false;
+    return;
+  }
 
   pendingHistoryThreadId.value = null;
   void loadThreadHistory(threadId);
