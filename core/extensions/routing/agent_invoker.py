@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -127,23 +128,31 @@ class AgentInvoker:
         result: Any,
         on_chunk: Callable[[str], Awaitable[None]],
         on_tool_call: Callable[[str], Awaitable[None]] | None,
-    ) -> tuple[str, BaseException | None]:
+    ) -> tuple[str, BaseException | None, int | None, int, int]:
         full_text = ""
+        first_delta_ms: int | None = None
+        delta_count = 0
+        tool_call_count = 0
+        started_at = time.perf_counter()
         try:
             response_delta_type = _get_response_delta_type()
             async for event in result.stream_events():
                 delta = self._extract_stream_delta(event, response_delta_type)
                 if delta is not None:
+                    delta_count += 1
+                    if first_delta_ms is None:
+                        first_delta_ms = int((time.perf_counter() - started_at) * 1000)
                     full_text += delta
                     await on_chunk(delta)
                 elif event.type == "run_item_stream_event":
                     item = getattr(event, "item", None)
                     if getattr(item, "type", None) == "tool_call_item" and on_tool_call:
+                        tool_call_count += 1
                         raw_item = getattr(item, "raw_item", None)
                         await on_tool_call(str(getattr(raw_item, "name", "tool")))
-            return full_text, None
+            return full_text, None, first_delta_ms, delta_count, tool_call_count
         except BaseException as e:
-            return full_text, e
+            return full_text, e, first_delta_ms, delta_count, tool_call_count
 
     def _extract_stream_delta(
         self,
@@ -173,17 +182,33 @@ class AgentInvoker:
         lock = self._background_lock if use_background_lock else self._user_lock
         async with lock:
             full_text = ""
+            started_at = time.perf_counter()
             try:
                 from agents import Runner
 
                 result = Runner.run_streamed(agent, stripped, session=thread)
-                full_text, stream_error = await self._consume_stream_events(
+                (
+                    full_text,
+                    stream_error,
+                    first_delta_ms,
+                    delta_count,
+                    tool_call_count,
+                ) = await self._consume_stream_events(
                     result=result,
                     on_chunk=on_chunk,
                     on_tool_call=on_tool_call,
                 )
                 if stream_error is not None:
                     raise stream_error
+                logger.info(
+                    "Agent stream completed: first_delta_ms=%s duration_ms=%d "
+                    "delta_count=%d tool_call_count=%d prompt_len=%d",
+                    first_delta_ms,
+                    int((time.perf_counter() - started_at) * 1000),
+                    delta_count,
+                    tool_call_count,
+                    len(stripped),
+                )
                 return result.final_output or full_text
             except Exception as e:
                 logger.exception("Agent streaming invocation failed: %s", e)
