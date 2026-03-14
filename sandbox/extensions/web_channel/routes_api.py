@@ -216,22 +216,29 @@ async def create_project(request: Request) -> JSONResponse:
     payload = CreateProjectRequest.model_validate(await request.json())
     project = await ctx.create_project(
         name=payload.name,
+        description=payload.description,
+        icon=payload.icon,
         instructions=payload.instructions,
         agent_config=payload.agent_config,
         files=payload.files,
+        links=payload.links,
     )
     return JSONResponse(content={"project": _project_model(project).model_dump()})
 
 
 @router.patch("/projects/{project_id}")
 async def patch_project(request: Request, project_id: str) -> JSONResponse:
-    """Update project metadata and replace file attachments when provided."""
+    """Update project metadata and replace file/link attachments when provided."""
     ext = _get_extension(request)
     ctx = ext._context
     payload = UpdateProjectRequest.model_validate(await request.json())
     project = await ctx.update_project(
         project_id,
         name=payload.name if "name" in payload.model_fields_set else UNSET,
+        description=payload.description
+        if "description" in payload.model_fields_set
+        else UNSET,
+        icon=payload.icon if "icon" in payload.model_fields_set else UNSET,
         instructions=payload.instructions
         if "instructions" in payload.model_fields_set
         else UNSET,
@@ -239,6 +246,7 @@ async def patch_project(request: Request, project_id: str) -> JSONResponse:
         if "agent_config" in payload.model_fields_set
         else UNSET,
         files=payload.files if "files" in payload.model_fields_set else UNSET,
+        links=payload.links if "links" in payload.model_fields_set else UNSET,
     )
     if project is None:
         return JSONResponse(

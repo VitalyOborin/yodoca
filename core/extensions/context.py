@@ -269,9 +269,12 @@ class ExtensionContext:
         self,
         *,
         name: str,
+        description: str | None = None,
+        icon: str | None = None,
         instructions: str | None = None,
         agent_config: dict[str, Any] | None = None,
         files: list[str] | None = None,
+        links: list[str] | None = None,
     ) -> ProjectInfo:
         """Create a project in thread.db."""
         if self._projects is None:
@@ -279,9 +282,12 @@ class ExtensionContext:
         return await asyncio.to_thread(
             self._projects.create_project,
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files or [],
+            links=links or [],
             now_ts=int(time.time()),
         )
 
@@ -290,9 +296,12 @@ class ExtensionContext:
         project_id: str,
         *,
         name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon: str | None | UnsetType = UNSET,
         instructions: str | None | UnsetType = UNSET,
         agent_config: dict[str, Any] | None | UnsetType = UNSET,
         files: list[str] | UnsetType = UNSET,
+        links: list[str] | UnsetType = UNSET,
     ) -> ProjectInfo | None:
         """Update selected project metadata fields."""
         if self._projects is None:
@@ -301,9 +310,12 @@ class ExtensionContext:
             self._projects.update_project,
             project_id,
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files,
+            links=links,
             now_ts=int(time.time()),
         )
 

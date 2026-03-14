@@ -352,8 +352,9 @@ paths:
       tags: [projects]
       summary: Update project
       description: >
-        Replaces `files` when the field is provided. If no fields are supplied,
-        the project is returned unchanged and `updated_at` is not modified.
+        Replaces `files` and `links` when those fields are provided. If no
+        fields are supplied, the project is returned unchanged and `updated_at`
+        is not modified.
       security:
         - bearerAuth: []
       parameters:
@@ -648,6 +649,8 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
+        description: { type: string, nullable: true }
+        icon: { type: string, nullable: true }
         instructions: { type: string, nullable: true }
         agent_config:
           type: object
@@ -657,11 +660,16 @@ components:
         files:
           type: array
           items: { type: string }
-      required: [id, name, agent_config, created_at, updated_at, files]
+        links:
+          type: array
+          items: { type: string }
+      required: [id, name, agent_config, created_at, updated_at, files, links]
     CreateProjectRequest:
       type: object
       properties:
         name: { type: string }
+        description: { type: string, nullable: true }
+        icon: { type: string, nullable: true }
         instructions: { type: string, nullable: true }
         agent_config:
           type: object
@@ -670,17 +678,26 @@ components:
         files:
           type: array
           items: { type: string }
+        links:
+          type: array
+          items: { type: string }
       required: [name]
     UpdateProjectRequest:
       type: object
       properties:
         name: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        icon: { type: string, nullable: true }
         instructions: { type: string, nullable: true }
         agent_config:
           type: object
           additionalProperties: true
           nullable: true
         files:
+          type: array
+          items: { type: string }
+          nullable: true
+        links:
           type: array
           items: { type: string }
           nullable: true

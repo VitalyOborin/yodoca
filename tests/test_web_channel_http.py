@@ -48,22 +48,28 @@ def mock_context():
         return_value={
             "id": "proj_1",
             "name": "Alpha",
+            "description": "Alpha description",
+            "icon": "🚀",
             "instructions": "Use strict mode.",
             "agent_config": {"model": "gpt-5"},
             "created_at": 1773096500,
             "updated_at": 1773096583,
             "files": ["README.md"],
+            "links": ["https://example.com/spec"],
         }
     )
     ctx.update_project = AsyncMock(
         return_value={
             "id": "proj_1",
             "name": "Alpha 2",
+            "description": "Updated description",
+            "icon": "🧠",
             "instructions": "Use safe mode.",
             "agent_config": {"model": "gpt-5-mini"},
             "created_at": 1773096500,
             "updated_at": 1773096600,
             "files": ["docs/guide.md"],
+            "links": ["https://example.com/guide"],
         }
     )
     ctx.delete_project = AsyncMock(return_value=False)
@@ -203,11 +209,14 @@ def test_get_projects(web_channel_app, mock_context):
         {
             "id": "proj_1",
             "name": "Alpha",
+            "description": "Alpha description",
+            "icon": "🚀",
             "instructions": "Use strict mode.",
             "agent_config": {"model": "gpt-5"},
             "created_at": 1773096500,
             "updated_at": 1773096583,
             "files": ["README.md"],
+            "links": ["https://example.com/spec"],
         }
     ]
     client = TestClient(web_channel_app)
@@ -215,22 +224,29 @@ def test_get_projects(web_channel_app, mock_context):
     assert resp.status_code == 200
     data = resp.json()
     assert data["projects"][0]["name"] == "Alpha"
+    assert data["projects"][0]["description"] == "Alpha description"
+    assert data["projects"][0]["icon"] == "🚀"
+    assert data["projects"][0]["links"] == ["https://example.com/spec"]
 
 
 def test_get_project_ok(web_channel_app, mock_context):
     mock_context.get_project.return_value = {
         "id": "proj_1",
         "name": "Alpha",
+        "description": "Alpha description",
+        "icon": "🚀",
         "instructions": "Use strict mode.",
         "agent_config": {"model": "gpt-5"},
         "created_at": 1773096500,
         "updated_at": 1773096583,
         "files": ["README.md"],
+        "links": ["https://example.com/spec"],
     }
     client = TestClient(web_channel_app)
     resp = client.get("/api/projects/proj_1")
     assert resp.status_code == 200
     assert resp.json()["project"]["id"] == "proj_1"
+    assert resp.json()["project"]["icon"] == "🚀"
 
 
 def test_post_projects(web_channel_app):
@@ -239,13 +255,17 @@ def test_post_projects(web_channel_app):
         "/api/projects",
         json={
             "name": "Alpha",
+            "description": "Alpha description",
+            "icon": "🚀",
             "instructions": "Use strict mode.",
             "agent_config": {"model": "gpt-5"},
             "files": ["README.md"],
+            "links": ["https://example.com/spec"],
         },
     )
     assert resp.status_code == 200
     assert resp.json()["project"]["id"] == "proj_1"
+    assert resp.json()["project"]["links"] == ["https://example.com/spec"]
 
 
 def test_patch_projects(web_channel_app):
@@ -254,13 +274,33 @@ def test_patch_projects(web_channel_app):
         "/api/projects/proj_1",
         json={
             "name": "Alpha 2",
+            "description": "Updated description",
+            "icon": "🧠",
             "instructions": "Use safe mode.",
             "agent_config": {"model": "gpt-5-mini"},
             "files": ["docs/guide.md"],
+            "links": ["https://example.com/guide"],
         },
     )
     assert resp.status_code == 200
     assert resp.json()["project"]["name"] == "Alpha 2"
+    assert resp.json()["project"]["icon"] == "🧠"
+
+
+def test_patch_projects_partial_does_not_clear_links(web_channel_app, mock_context):
+    client = TestClient(web_channel_app)
+    resp = client.patch(
+        "/api/projects/proj_1",
+        json={
+            "description": "Only description changed",
+            "icon": "📌",
+        },
+    )
+    assert resp.status_code == 200
+    kwargs = mock_context.update_project.await_args.kwargs
+    assert kwargs["description"] == "Only description changed"
+    assert kwargs["icon"] == "📌"
+    assert "links" in kwargs
 
 
 def test_delete_projects(web_channel_app, mock_context):

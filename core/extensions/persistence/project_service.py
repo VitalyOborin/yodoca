@@ -24,18 +24,24 @@ class ProjectService:
         self,
         *,
         name: str,
+        description: str | None,
+        icon: str | None,
         instructions: str | None,
         agent_config: dict[str, Any] | None,
         files: list[str] | None,
+        links: list[str] | None,
         now_ts: int,
         project_id: str | None = None,
     ) -> ProjectInfo:
         return self._projects.create_project(
             project_id=project_id or f"proj_{uuid.uuid4().hex}",
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files or [],
+            links=links or [],
             now_ts=now_ts,
         )
 
@@ -50,17 +56,23 @@ class ProjectService:
         project_id: str,
         *,
         name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon: str | None | UnsetType = UNSET,
         instructions: str | None | UnsetType = UNSET,
         agent_config: dict[str, Any] | None | UnsetType = UNSET,
         files: list[str] | UnsetType = UNSET,
+        links: list[str] | UnsetType = UNSET,
         now_ts: int,
     ) -> ProjectInfo | None:
         return self._projects.update_project(
             project_id,
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files,
+            links=links,
             now_ts=now_ts,
         )
 

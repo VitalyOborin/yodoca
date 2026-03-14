@@ -155,29 +155,38 @@ class Project(BaseModel):
 
     id: str
     name: str
+    description: str | None = None
+    icon: str | None = None
     instructions: str | None = None
     agent_config: dict[str, Any]
     created_at: int
     updated_at: int
     files: list[str]
+    links: list[str]
 
 
 class CreateProjectRequest(BaseModel):
     """POST /api/projects request."""
 
     name: str
+    description: str | None = None
+    icon: str | None = None
     instructions: str | None = None
     agent_config: dict[str, Any] | None = None
-    files: list[str] = []
+    files: list[str] = Field(default_factory=list)
+    links: list[str] = Field(default_factory=list)
 
 
 class UpdateProjectRequest(BaseModel):
     """PATCH /api/projects/{id} request."""
 
     name: str | None = None
+    description: str | None = None
+    icon: str | None = None
     instructions: str | None = None
     agent_config: dict[str, Any] | None = None
     files: list[str] | None = None
+    links: list[str] | None = None
 
 
 class Notification(BaseModel):

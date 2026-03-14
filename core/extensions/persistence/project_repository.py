@@ -27,9 +27,12 @@ class ProjectRepository:
         *,
         project_id: str,
         name: str,
+        description: str | None,
+        icon: str | None,
         instructions: str | None,
         agent_config: dict[str, Any] | None,
         files: list[str],
+        links: list[str],
         now_ts: int,
     ) -> ProjectInfo:
         payload = json.dumps(agent_config or {}, ensure_ascii=False)
@@ -37,13 +40,24 @@ class ProjectRepository:
             conn.execute(
                 """
                 INSERT INTO projects (
-                    id, name, instructions, agent_config, created_at, updated_at
+                    id, name, description, icon, instructions, agent_config,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (project_id, name, instructions, payload, now_ts, now_ts),
+                (
+                    project_id,
+                    name,
+                    description,
+                    icon,
+                    instructions,
+                    payload,
+                    now_ts,
+                    now_ts,
+                ),
             )
             self._replace_files(conn, project_id=project_id, files=files, now_ts=now_ts)
+            self._replace_links(conn, project_id=project_id, links=links, now_ts=now_ts)
             conn.commit()
         project = self.get_project(project_id)
         if project is None:
@@ -57,16 +71,25 @@ class ProjectRepository:
                 SELECT
                     p.id,
                     p.name,
+                    p.description,
+                    p.icon,
                     p.instructions,
                     p.agent_config,
                     p.created_at,
                     p.updated_at,
-                    pf.file_path
+                    pf.file_path,
+                    pl.url
                 FROM projects AS p
                 LEFT JOIN project_files AS pf
                     ON pf.project_id = p.id
+                LEFT JOIN project_links AS pl
+                    ON pl.project_id = p.id
                 WHERE p.id = ?
-                ORDER BY pf.added_at ASC, pf.file_path ASC
+                ORDER BY
+                    COALESCE(pf.added_at, 0) ASC,
+                    pf.file_path ASC,
+                    COALESCE(pl.added_at, 0) ASC,
+                    pl.url ASC
                 """,
                 (project_id,),
             ).fetchall()
@@ -80,14 +103,19 @@ class ProjectRepository:
                 SELECT
                     p.id,
                     p.name,
+                    p.description,
+                    p.icon,
                     p.instructions,
                     p.agent_config,
                     p.created_at,
                     p.updated_at,
-                    pf.file_path
+                    pf.file_path,
+                    pl.url
                 FROM projects AS p
                 LEFT JOIN project_files AS pf
                     ON pf.project_id = p.id
+                LEFT JOIN project_links AS pl
+                    ON pl.project_id = p.id
                 ORDER BY p.updated_at DESC, p.created_at DESC, p.id DESC
                 """
             ).fetchall()
@@ -98,16 +126,22 @@ class ProjectRepository:
         project_id: str,
         *,
         name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon: str | None | UnsetType = UNSET,
         instructions: str | None | UnsetType = UNSET,
         agent_config: dict[str, Any] | None | UnsetType = UNSET,
         files: list[str] | UnsetType = UNSET,
+        links: list[str] | UnsetType = UNSET,
         now_ts: int,
     ) -> ProjectInfo | None:
         if (
             name is UNSET
+            and description is UNSET
+            and icon is UNSET
             and instructions is UNSET
             and agent_config is UNSET
             and files is UNSET
+            and links is UNSET
         ):
             return self.get_project(project_id)
 
@@ -116,6 +150,12 @@ class ProjectRepository:
         if name is not UNSET:
             assignments.append("name = ?")
             params.append(name)
+        if description is not UNSET:
+            assignments.append("description = ?")
+            params.append(description)
+        if icon is not UNSET:
+            assignments.append("icon = ?")
+            params.append(icon)
         if instructions is not UNSET:
             assignments.append("instructions = ?")
             params.append(instructions)
@@ -136,6 +176,13 @@ class ProjectRepository:
                     conn,
                     project_id=project_id,
                     files=files,
+                    now_ts=now_ts,
+                )
+            if links is not UNSET:
+                self._replace_links(
+                    conn,
+                    project_id=project_id,
+                    links=links,
                     now_ts=now_ts,
                 )
             conn.commit()
@@ -165,6 +212,24 @@ class ProjectRepository:
                 (project_id, file_path, now_ts),
             )
 
+    def _replace_links(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        project_id: str,
+        links: list[str],
+        now_ts: int,
+    ) -> None:
+        conn.execute("DELETE FROM project_links WHERE project_id = ?", (project_id,))
+        for url in links:
+            conn.execute(
+                """
+                INSERT INTO project_links (project_id, url, added_at)
+                VALUES (?, ?, ?)
+                """,
+                (project_id, url, now_ts),
+            )
+
     def _rows_to_projects(self, rows: list[sqlite3.Row]) -> list[ProjectInfo]:
         projects: dict[str, dict[str, Any]] = {}
         order: list[str] = []
@@ -174,25 +239,34 @@ class ProjectRepository:
                 projects[project_id] = {
                     "id": project_id,
                     "name": row["name"],
+                    "description": row["description"],
+                    "icon": row["icon"],
                     "instructions": row["instructions"],
                     "agent_config": json.loads(row["agent_config"] or "{}"),
                     "created_at": int(row["created_at"]),
                     "updated_at": int(row["updated_at"]),
                     "files": [],
+                    "links": [],
                 }
                 order.append(project_id)
             file_path = row["file_path"]
-            if isinstance(file_path, str):
+            if isinstance(file_path, str) and file_path not in projects[project_id]["files"]:
                 projects[project_id]["files"].append(file_path)
+            link_url = row["url"]
+            if isinstance(link_url, str) and link_url not in projects[project_id]["links"]:
+                projects[project_id]["links"].append(link_url)
         return [
             ProjectInfo(
                 id=projects[project_id]["id"],
                 name=projects[project_id]["name"],
+                description=projects[project_id]["description"],
+                icon=projects[project_id]["icon"],
                 instructions=projects[project_id]["instructions"],
                 agent_config=projects[project_id]["agent_config"],
                 created_at=projects[project_id]["created_at"],
                 updated_at=projects[project_id]["updated_at"],
                 files=projects[project_id]["files"],
+                links=projects[project_id]["links"],
             )
             for project_id in order
         ]

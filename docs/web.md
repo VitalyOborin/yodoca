@@ -287,8 +287,8 @@ The `X-Thread-Id` header binds requests to named threads for multi-session suppo
 | GET | `/api/threads/{id}` | Get thread with message history |
 | PATCH | `/api/threads/{id}` | Update thread (rename, etc.) |
 | DELETE | `/api/threads/{id}` | Archive thread |
-| GET | `/api/projects` | List projects |
-| POST | `/api/projects` | Create project |
+| GET | `/api/projects` | List projects including `description`, `icon`, `files`, and `links` |
+| POST | `/api/projects` | Create project with metadata, file paths, and project links |
 | GET | `/api/projects/{id}` | Get project |
 | PATCH | `/api/projects/{id}` | Update project |
 | DELETE | `/api/projects/{id}` | Delete project |

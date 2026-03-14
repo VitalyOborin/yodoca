@@ -7,6 +7,20 @@ def ensure_thread_schema(db_path: str) -> None:
     """Create the shared thread/project schema if it does not exist yet."""
     import sqlite3
 
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        column: str,
+        ddl: str,
+    ) -> None:
+        existing = {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
@@ -16,6 +30,8 @@ def ensure_thread_schema(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                description TEXT,
+                icon TEXT,
                 instructions TEXT,
                 agent_config TEXT,
                 created_at INTEGER NOT NULL,
@@ -29,6 +45,13 @@ def ensure_thread_schema(db_path: str) -> None:
                 PRIMARY KEY (project_id, file_path)
             );
 
+            CREATE TABLE IF NOT EXISTS project_links (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                url TEXT NOT NULL,
+                added_at INTEGER NOT NULL,
+                PRIMARY KEY (project_id, url)
+            );
+
             CREATE TABLE IF NOT EXISTS threads (
                 thread_id TEXT PRIMARY KEY,
                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
@@ -40,6 +63,18 @@ def ensure_thread_schema(db_path: str) -> None:
                 is_archived INTEGER NOT NULL DEFAULT 0
             );
             """
+        )
+        _ensure_column(
+            conn,
+            table="projects",
+            column="description",
+            ddl="description TEXT",
+        )
+        _ensure_column(
+            conn,
+            table="projects",
+            column="icon",
+            ddl="icon TEXT",
         )
         conn.commit()
     finally:

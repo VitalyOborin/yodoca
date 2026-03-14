@@ -237,9 +237,12 @@ async def test_project_api_with_service_delegates(tmp_path: Path) -> None:
     project = ProjectInfo(
         id="p1",
         name="Alpha",
+        description="Alpha description",
+        icon="🚀",
         instructions=None,
         agent_config={},
         files=[],
+        links=["https://example.com"],
         created_at=100,
         updated_at=100,
     )
