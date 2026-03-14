@@ -261,30 +261,3 @@ class TestMakeConfigureExtensionTool:
         assert result.success is True
         assert calls >= 3
         mock_ext.apply_config.assert_called_once_with("token", "resolved-token")
-
-    @pytest.mark.asyncio
-    async def test_success_requests_restart_when_callback_provided(self) -> None:
-        mock_ext = MagicMock(spec=SetupProvider)
-        mock_ext.apply_config = AsyncMock()
-        mock_ext.on_setup_complete = AsyncMock(return_value=(True, "OK"))
-        restart_called = False
-
-        def fake_request_restart() -> None:
-            nonlocal restart_called
-            restart_called = True
-
-        tool = make_configure_extension_tool(
-            {"my_ext": mock_ext},
-            request_restart=fake_request_restart,
-        )
-        args = json.dumps(
-            {
-                "extension_id": "my_ext",
-                "param_name": "token",
-                "value": "abc",
-            }
-        )
-        result = await tool.on_invoke_tool(_make_tool_ctx(tool.name, args), args)
-        assert result.success is True
-        assert restart_called is True
-        assert "Restart requested automatically" in result.message

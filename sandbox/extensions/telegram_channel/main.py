@@ -121,6 +121,7 @@ class TelegramChannelExtension:
             )
             if value:
                 await self._ctx.set_secret(token_key, value)
+                await self._activate_token(value)
             return
         kv = self._ctx.get_extension("kv")
         if not kv:
@@ -156,6 +157,66 @@ class TelegramChannelExtension:
         except Exception:
             return False, "Telegram API rejected the token"
 
+    async def _load_chat_id(self) -> None:
+        if not self._ctx or not self._kv:
+            return
+        chat_id_raw = await self._kv.get(f"{self._ctx.extension_id}.chat_id")
+        self._chat_id = str(chat_id_raw).strip() if chat_id_raw else None
+
+    def _wire_dispatcher(self) -> None:
+        if not self._ctx or not self._kv:
+            return
+        self._dp = Dispatcher()
+        ctx = self._ctx
+        ext_id = ctx.extension_id
+        kv = self._kv
+
+        async def on_message(message: Message) -> None:
+            if not message.text:
+                return
+            chat = message.chat
+            if not chat:
+                return
+            msg_chat_id = str(chat.id)
+            if self._chat_id is None:
+                self._chat_id = msg_chat_id
+                await kv.set(f"{ext_id}.chat_id", msg_chat_id)
+                ctx.logger.info("Telegram channel: auto-saved chat_id=%s", msg_chat_id)
+            if msg_chat_id != self._chat_id:
+                return
+            await ctx.emit(
+                "user.message",
+                {"text": message.text, "user_id": msg_chat_id, "channel_id": ext_id},
+            )
+
+        self._dp.message.register(on_message)
+
+    async def _activate_token(self, token: str) -> None:
+        if not self._ctx:
+            return
+        token = token.strip()
+        if not token:
+            self._token = None
+            self._bot = None
+            self._dp = None
+            return
+        try:
+            validate_token(token)
+        except TokenValidationError as e:
+            self._ctx.logger.warning("Telegram token format is invalid: %s", e)
+            self._token = None
+            self._bot = None
+            self._dp = None
+            return
+
+        self._token = token
+        self._bot = Bot(
+            token=self._token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        self._wire_dispatcher()
+        await self._load_chat_id()
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                             #
     # ------------------------------------------------------------------ #
@@ -177,13 +238,10 @@ class TelegramChannelExtension:
         token = await context.get_secret(token_key)
         if not token:
             token = await self._kv.get(f"{context.extension_id}.token")
-        if token:
-            token = token.strip()
-
+        token = token.strip() if token else ""
         if not token:
             context.logger.info(
-                "Telegram channel: no token. Use request_secure_input for secret '%s', "
-                "then request_restart().",
+                "Telegram channel: no token. Use request_secure_input for secret '%s'.",
                 token_key,
             )
             self._token = None
@@ -192,51 +250,15 @@ class TelegramChannelExtension:
             self._dp = None
             return
 
-        try:
-            validate_token(token)
-        except TokenValidationError as e:
-            raise RuntimeError(f"Invalid Telegram bot token: {e}") from e
-
-        chat_id_raw = await self._kv.get(f"{context.extension_id}.chat_id")
-        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
-
-        self._token = token
-        self._chat_id = chat_id
-
-        self._bot = Bot(
-            token=self._token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
-        self._dp = Dispatcher()
-
-        ctx = context
-        ext_id = context.extension_id
-        kv = self._kv
-
-        async def on_message(message: Message) -> None:
-            if not message.text:
-                return
-            chat = message.chat
-            if not chat:
-                return
-            msg_chat_id = str(chat.id)
-
-            if self._chat_id is None:
-                self._chat_id = msg_chat_id
-                await kv.set(f"{ext_id}.chat_id", msg_chat_id)
-                ctx.logger.info("Telegram channel: auto-saved chat_id=%s", msg_chat_id)
-
-            if msg_chat_id != self._chat_id:
-                return
-            await ctx.emit(
-                "user.message",
-                {"text": message.text, "user_id": msg_chat_id, "channel_id": ext_id},
+        await self._activate_token(token)
+        if not self._token:
+            context.logger.warning(
+                "Telegram channel: stored token is invalid. Awaiting reconfiguration."
             )
-
-        self._dp.message.register(on_message)
-        if chat_id:
+            return
+        if self._chat_id:
             context.logger.info(
-                "Telegram channel initialized (polling, chat_id=%s)", chat_id
+                "Telegram channel initialized (polling, chat_id=%s)", self._chat_id
             )
         else:
             context.logger.info(
@@ -269,23 +291,23 @@ class TelegramChannelExtension:
 
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""
-        if not self._bot or not self._dp or not self._token:
-            return
-        try:
-            await self._dp.start_polling(
-                self._bot,
-                handle_signals=False,
-                polling_timeout=self._polling_timeout,
-                allowed_updates=["message"],
-            )
-        except asyncio.CancelledError:
-            raise
-        finally:
-            if self._bot:
-                try:
-                    await self._bot.session.close()
-                except Exception:
-                    pass
+        while True:
+            try:
+                if not self._bot or not self._dp or not self._token:
+                    await asyncio.sleep(0.5)
+                    continue
+                await self._dp.start_polling(
+                    self._bot,
+                    handle_signals=False,
+                    polling_timeout=self._polling_timeout,
+                    allowed_updates=["message"],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._ctx:
+                    self._ctx.logger.exception("Telegram polling failed: %s", e)
+                await asyncio.sleep(1.0)
 
     # ------------------------------------------------------------------ #
     # Streaming helpers                                                     #

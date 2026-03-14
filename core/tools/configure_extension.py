@@ -54,7 +54,6 @@ def _looks_like_secret_id(value: str) -> bool:
 def make_configure_extension_tool(
     extensions: dict[str, Any],
     secret_resolver: Callable[[str], Awaitable[str | None]] | None = None,
-    request_restart: Callable[[], None] | None = None,
 ) -> Any:
     """Create configure_extension tool bound to the given extensions dict.
 
@@ -109,14 +108,6 @@ def make_configure_extension_tool(
         try:
             ok, msg = await ext.on_setup_complete()
             if ok:
-                if request_restart:
-                    try:
-                        request_restart()
-                        msg = (
-                            f"{msg} Restart requested automatically to apply changes."
-                        )
-                    except Exception:
-                        pass
                 return ConfigureExtensionResult(success=True, message=msg)
             return ConfigureExtensionResult(success=False, error=msg)
         except Exception as e:
