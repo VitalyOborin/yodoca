@@ -1,6 +1,16 @@
 export { apiFetch, ApiRequestError, type ApiError } from './http';
 export { getAuthToken } from './auth';
 export {
+  fetchProjects,
+  fetchProject,
+  createProject,
+  updateProject,
+  deleteProject,
+  type Project,
+  type CreateProjectRequest,
+  type UpdateProjectRequest,
+} from './projects';
+export {
   fetchThreads,
   fetchThread,
   createThread,

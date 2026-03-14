@@ -41,9 +41,9 @@ watch(
     const currentParam = routeThreadId.value;
 
     if (id && id !== currentParam) {
-      router.replace({ name: 'chat-thread', params: { threadId: id } });
+      void router.replace({ name: 'chat-thread', params: { threadId: id } });
     } else if (!id && route.name !== 'chat') {
-      router.replace({ name: 'chat' });
+      void router.replace({ name: 'chat' });
     }
   }
 );

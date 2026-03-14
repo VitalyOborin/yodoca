@@ -7,6 +7,7 @@ import {
   createThread as apiCreateThread,
   updateThread,
   deleteThread as apiDeleteThread,
+  type CreateThreadRequest,
 } from '@/shared/api';
 
 export const useThreadStore = defineStore('threads', () => {
@@ -46,16 +47,16 @@ export const useThreadStore = defineStore('threads', () => {
     activeThreadId.value = id;
   }
 
-  async function createThread(): Promise<Thread> {
-    const thread = await apiCreateThread();
+  async function createThread(opts?: CreateThreadRequest): Promise<Thread> {
+    const thread = await apiCreateThread(opts);
     threads.value.unshift(thread);
     activeThreadId.value = thread.id;
     return thread;
   }
 
-  async function ensureThread(): Promise<string> {
+  async function ensureThread(opts?: CreateThreadRequest): Promise<string> {
     if (activeThreadId.value) return activeThreadId.value;
-    const thread = await createThread();
+    const thread = await createThread(opts);
     return thread.id;
   }
 

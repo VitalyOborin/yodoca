@@ -12,7 +12,7 @@ const threadStore = useThreadStore();
 
 function startNewThread() {
   threadStore.selectThread(null);
-  router.push({ name: 'chat' });
+  void router.push({ name: 'chat' });
 }
 
 const groupedThreads = computed(() => {
@@ -43,7 +43,7 @@ const groupedThreads = computed(() => {
 });
 
 onMounted(() => {
-  threadStore.loadThreads();
+  void threadStore.loadThreads();
 });
 </script>
 

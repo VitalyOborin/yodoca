@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 
 defineProps<{
   disabled?: boolean;
+  placeholder?: string;
+  chips?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -13,7 +15,7 @@ const emit = defineEmits<{
 
 const inputText = ref('');
 const textareaEl = ref<HTMLTextAreaElement | null>(null);
-const settingChips = ['Думаю', 'Средний', 'Контекст IDE'];
+const defaultChips = ['Думаю', 'Средний', 'Контекст IDE'];
 
 function handleSend() {
   const text = inputText.value.trim();
@@ -45,7 +47,7 @@ function handleInput() {
         <textarea
           ref="textareaEl"
           v-model="inputText"
-          placeholder="Опишите задачу для агента..."
+          :placeholder="placeholder ?? 'Опишите задачу для агента...'"
           rows="1"
           class="app-scrollbar max-h-[180px] min-h-[64px] w-full resize-none border-0 bg-transparent px-3 pt-3 pb-2 text-sm leading-6 text-foreground outline-none placeholder:text-subtle-foreground"
           @keydown="handleKeydown"
@@ -58,7 +60,7 @@ function handleInput() {
             </Button>
             <div class="flex min-w-0 items-center gap-1.5 overflow-x-auto">
               <button
-                v-for="chip in settingChips"
+                v-for="chip in chips?.length ? chips : defaultChips"
                 :key="chip"
                 type="button"
                 class="focus-ring shrink-0 rounded-full border border-border/70 bg-secondary/35 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"

@@ -5,9 +5,8 @@ import { AlertCircle, CheckCircle2, Ellipsis, LoaderCircle } from 'lucide-vue-ne
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
 import { useAgentStore } from '@/entities/agent';
-import { SendMessageForm } from '@/features/send-message';
+import { SendMessageForm, sendPromptToThread } from '@/features/send-message';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import type { ChatMessage } from '@/shared/api';
 
 const threadStore = useThreadStore();
 const messageStore = useMessageStore();
@@ -57,14 +56,6 @@ async function deleteCurrentThread() {
   menuOpen.value = false;
 }
 
-function toChatMessages(msgs: { id: string; role: string; content: string }[]): ChatMessage[] {
-  return msgs.map((m) => ({
-    id: m.id,
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-  }));
-}
-
 async function loadThreadHistory(threadId: string) {
   const requestId = ++latestHistoryRequestId;
   loadingHistory.value = true;
@@ -100,31 +91,12 @@ async function handleSend(content: string) {
   agentStore.resetPhase();
   isSending.value = true;
   try {
-    const threadId = await threadStore.ensureThread();
-
-    messageStore.addMessage(threadId, 'user', content);
-
-    const allMessages = messageStore.getThreadMessages(threadId);
-    const chatMessages: ChatMessage[] = toChatMessages(allMessages);
-
-    // Add empty placeholder for the assistant response; we'll stream into it.
-    const assistantMsgId = messageStore.addMessage(threadId, 'assistant', '');
-
-    try {
-      await agentStore.runAgent(threadId, chatMessages, {
-        onDelta: (delta) => {
-          messageStore.appendMessageDelta(assistantMsgId, delta);
-        },
-      });
-    } catch {
-      // Phase already set to error in agentStore. Remove placeholder if empty.
-      const msg = messageStore.messages.find((m) => m.id === assistantMsgId);
-      if (msg && !msg.content) {
-        messageStore.messages.splice(messageStore.messages.indexOf(msg), 1);
-      }
-    }
-
-    await threadStore.loadThreads();
+    await sendPromptToThread({
+      threadStore,
+      messageStore,
+      agentStore,
+      content,
+    });
   } finally {
     isSending.value = false;
     flushPendingHistoryLoad();
