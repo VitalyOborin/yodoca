@@ -7,6 +7,9 @@ const props = defineProps<{
   message: Message;
 }>();
 
+const isPendingAssistantMessage = computed(
+  () => props.message.role === 'assistant' && !props.message.content,
+);
 const renderedMarkdown = computed(() => renderMarkdown(props.message.content));
 </script>
 
@@ -23,8 +26,18 @@ const renderedMarkdown = computed(() => renderMarkdown(props.message.content));
       v-else
       class="max-w-full px-0 py-1 text-card-foreground"
     >
-      <!-- eslint-disable-next-line vue/no-v-html -->
-      <div class="chat-markdown leading-6 text-foreground" v-html="renderedMarkdown" />
+      <div
+        v-if="isPendingAssistantMessage"
+        class="flex min-h-6 items-center"
+        aria-hidden="true"
+      >
+        <span class="agent-pending-caret" />
+      </div>
+      <div
+        v-else
+        class="chat-markdown leading-6 text-foreground"
+        v-html="renderedMarkdown"
+      />
     </article>
   </div>
 </template>
