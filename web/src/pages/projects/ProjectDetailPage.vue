@@ -12,7 +12,7 @@ import { useAgentStore } from '@/entities/agent';
 import { useMessageStore } from '@/entities/message';
 import { useProjectStore } from '@/entities/project';
 import { useThreadStore } from '@/entities/thread';
-import { SendMessageForm, sendPromptToThread } from '@/features/send-message';
+import { ThreadComposer, sendPromptToThread } from '@/features/send-message';
 import { formatRelativeTimeFromEpoch } from '@/shared/lib';
 import { AppNavigationSidebar } from '@/widgets/navigation';
 import { Button } from '@/components/ui/button';
@@ -437,10 +437,10 @@ onMounted(() => {
                     <p class="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-subtle-foreground">
                       Start a new thread
                     </p>
-                    <SendMessageForm
+                    <ThreadComposer
                       :disabled="isLaunching || agentStore.phase === 'thinking'"
-                      placeholder="Ask something in the context of this project..."
-                      :chips="['Project context', 'New thread', 'Reusable instructions']"
+                      :phase="agentStore.phase"
+                      :current-step="agentStore.currentStep"
                       @send="startProjectThread"
                     />
                     <p v-if="launchError" class="mt-3 text-sm text-destructive">

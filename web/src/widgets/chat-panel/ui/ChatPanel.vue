@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onClickOutside } from '@vueuse/core';
-import { AlertCircle, CheckCircle2, Ellipsis, LoaderCircle } from 'lucide-vue-next';
+import { Ellipsis } from 'lucide-vue-next';
 import { useThreadStore } from '@/entities/thread';
 import { useMessageStore, MessageBubble } from '@/entities/message';
 import { useAgentStore } from '@/entities/agent';
-import { SendMessageForm, sendPromptToThread } from '@/features/send-message';
+import { ThreadComposer, sendPromptToThread } from '@/features/send-message';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 const threadStore = useThreadStore();
@@ -234,13 +234,12 @@ onMounted(() => {
 
     <footer ref="composerFooter" class="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4">
       <div class="pointer-events-auto mx-auto w-full max-w-[760px]">
-        <div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-          <LoaderCircle v-if="agentStore.phase === 'thinking'" class="h-3.5 w-3.5 animate-spin" />
-          <AlertCircle v-else-if="agentStore.phase === 'error'" class="h-3.5 w-3.5 text-destructive" />
-          <CheckCircle2 v-else-if="agentStore.phase === 'complete'" class="h-3.5 w-3.5 text-[hsl(var(--success))]" />
-          <span v-if="agentStore.currentStep">{{ agentStore.currentStep }}</span>
-        </div>
-        <SendMessageForm :disabled="agentStore.phase === 'thinking'" @send="handleSend" />
+        <ThreadComposer
+          :disabled="agentStore.phase === 'thinking'"
+          :phase="agentStore.phase"
+          :current-step="agentStore.currentStep"
+          @send="handleSend"
+        />
       </div>
     </footer>
   </main>
