@@ -42,6 +42,7 @@ describe('ProjectsPage', () => {
   beforeEach(() => {
     push.mockReset();
     projectStore.loadProjects.mockReset();
+    projectStore.createProject.mockReset();
   });
 
   it('loads projects and navigates on card click', async () => {
@@ -62,6 +63,30 @@ describe('ProjectsPage', () => {
     expect(push).toHaveBeenCalledWith({
       name: 'project-detail',
       params: { projectId: 'proj_1' },
+    });
+  });
+
+  it('creates a blank project immediately from the toolbar button', async () => {
+    projectStore.createProject.mockResolvedValue({ id: 'proj_new' });
+
+    const wrapper = mount(ProjectsPage, {
+      global: {
+        stubs: {
+          AppNavigationSidebar: { template: '<div />' },
+          ScrollArea: { template: '<div><slot /></div>' },
+          Button: { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+        },
+      },
+    });
+
+    await wrapper.findAll('button')[0]?.trigger('click');
+
+    expect(projectStore.createProject).toHaveBeenCalledWith({
+      name: 'Новый проект',
+    });
+    expect(push).toHaveBeenCalledWith({
+      name: 'project-detail',
+      params: { projectId: 'proj_new' },
     });
   });
 });

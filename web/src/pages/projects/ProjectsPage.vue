@@ -1,101 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import {
-  Clock3,
-  FileText,
-  FolderOpen,
-  Link2,
-  Plus,
-  Sparkles,
-} from 'lucide-vue-next';
+import { Clock3, FileText, FolderOpen, Link2, Plus, Sparkles } from 'lucide-vue-next';
 import { useProjectStore } from '@/entities/project';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { formatRelativeTimeFromEpoch } from '@/shared/lib';
 import { AppNavigationSidebar } from '@/widgets/navigation';
 
-interface CreateProjectDraft {
-  name: string;
-  description: string;
-  icon: string;
-  instructions: string;
-  files: string;
-  links: string;
-  agentConfig: string;
-}
-
 const router = useRouter();
 const projectStore = useProjectStore();
 
-const showCreateDialog = ref(false);
 const createError = ref<string | null>(null);
-
-const draft = reactive<CreateProjectDraft>({
-  name: '',
-  description: '',
-  icon: '✨',
-  instructions: '',
-  files: '',
-  links: '',
-  agentConfig: '{}',
-});
 
 const projects = computed(() => projectStore.sortedProjects);
 
-function normalizeLines(value: string): string[] {
-  return value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function resetDraft() {
-  draft.name = '';
-  draft.description = '';
-  draft.icon = '✨';
-  draft.instructions = '';
-  draft.files = '';
-  draft.links = '';
-  draft.agentConfig = '{}';
-  createError.value = null;
-}
-
-function openCreateDialog() {
-  resetDraft();
-  showCreateDialog.value = true;
-}
-
-function parseAgentConfig(raw: string): Record<string, unknown> {
-  const normalized = raw.trim();
-  if (!normalized) return {};
-
-  const parsed = JSON.parse(normalized) as unknown;
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error('Agent config must be a JSON object.');
-  }
-  return parsed as Record<string, unknown>;
-}
-
 async function submitCreateProject() {
-  const name = draft.name.trim();
-  if (!name) {
-    createError.value = 'Project name is required.';
-    return;
-  }
-
   createError.value = null;
   try {
     const project = await projectStore.createProject({
-      name,
-      description: draft.description.trim() || null,
-      icon: draft.icon.trim() || null,
-      instructions: draft.instructions.trim() || null,
-      files: normalizeLines(draft.files),
-      links: normalizeLines(draft.links),
-      agent_config: parseAgentConfig(draft.agentConfig),
+      name: 'Новый проект',
     });
-    showCreateDialog.value = false;
     void router.push({
       name: 'project-detail',
       params: { projectId: project.id },
@@ -124,9 +49,6 @@ onMounted(() => {
         <section class="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div class="max-w-2xl">
-              <p class="text-xs font-semibold uppercase tracking-[0.26em] text-subtle-foreground">
-                Spaces
-              </p>
               <h1 class="mt-3 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
                 Projects
               </h1>
@@ -137,11 +59,19 @@ onMounted(() => {
               </p>
             </div>
 
-            <Button class="rounded-full px-5" @click="openCreateDialog">
+            <Button
+              class="rounded-full px-5"
+              :disabled="projectStore.saving"
+              @click="submitCreateProject"
+            >
               <Plus class="h-4 w-4" />
               New Project
             </Button>
           </div>
+
+          <p v-if="createError" class="text-sm text-destructive">
+            {{ createError }}
+          </p>
 
           <div
             v-if="projects.length > 0"
@@ -207,7 +137,11 @@ onMounted(() => {
               Create your first project to keep related threads, instructions,
               files, and links in one place.
             </p>
-            <Button class="mt-6 rounded-full px-5" @click="openCreateDialog">
+            <Button
+              class="mt-6 rounded-full px-5"
+              :disabled="projectStore.saving"
+              @click="submitCreateProject"
+            >
               <Sparkles class="h-4 w-4" />
               Create first project
             </Button>
@@ -217,109 +151,6 @@ onMounted(() => {
           </div>
         </section>
       </ScrollArea>
-    </div>
-
-    <div
-      v-if="showCreateDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-sm"
-      @click.self="showCreateDialog = false"
-    >
-      <div class="surface-panel w-full max-w-3xl rounded-[2rem] border border-border/90 p-6 shadow-2xl">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <p class="text-xs font-semibold uppercase tracking-[0.24em] text-subtle-foreground">
-              New project
-            </p>
-            <h2 class="mt-2 text-2xl font-semibold text-foreground">
-              Create a new workspace
-            </h2>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="rounded-full"
-            @click="showCreateDialog = false"
-          >
-            <Plus class="h-4 w-4 rotate-45" />
-          </Button>
-        </div>
-
-        <div class="mt-6 grid gap-4 sm:grid-cols-[120px_minmax(0,1fr)]">
-          <input
-            v-model="draft.icon"
-            type="text"
-            maxlength="8"
-            class="focus-ring rounded-2xl border border-border bg-background/70 px-4 py-3 text-center text-3xl text-foreground"
-            placeholder="✨"
-          />
-          <div class="space-y-4">
-            <input
-              v-model="draft.name"
-              type="text"
-              maxlength="120"
-              class="focus-ring w-full rounded-2xl border border-border bg-background/70 px-4 py-3 text-lg font-medium text-foreground"
-              placeholder="Project name"
-            />
-            <textarea
-              v-model="draft.description"
-              rows="3"
-              class="focus-ring min-h-[96px] w-full rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6 text-foreground"
-              placeholder="Short description"
-            />
-          </div>
-        </div>
-
-        <div class="mt-4 grid gap-4 lg:grid-cols-2">
-          <textarea
-            v-model="draft.instructions"
-            rows="7"
-            class="focus-ring min-h-[180px] w-full rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6 text-foreground"
-            placeholder="Project instructions"
-          />
-          <textarea
-            v-model="draft.agentConfig"
-            rows="7"
-            class="focus-ring min-h-[180px] w-full rounded-2xl border border-border bg-background/70 px-4 py-3 font-mono text-xs leading-6 text-foreground"
-            placeholder='{"model":"yodoca"}'
-          />
-        </div>
-
-        <div class="mt-4 grid gap-4 lg:grid-cols-2">
-          <textarea
-            v-model="draft.files"
-            rows="5"
-            class="focus-ring min-h-[140px] w-full rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6 text-foreground"
-            placeholder="Files: one path per line"
-          />
-          <textarea
-            v-model="draft.links"
-            rows="5"
-            class="focus-ring min-h-[140px] w-full rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm leading-6 text-foreground"
-            placeholder="Links: one URL per line"
-          />
-        </div>
-
-        <p v-if="createError" class="mt-4 text-sm text-destructive">
-          {{ createError }}
-        </p>
-
-        <div class="mt-6 flex flex-wrap justify-end gap-3">
-          <Button
-            variant="secondary"
-            class="rounded-full"
-            @click="showCreateDialog = false"
-          >
-            Cancel
-          </Button>
-          <Button
-            class="rounded-full px-5"
-            :disabled="projectStore.saving"
-            @click="submitCreateProject"
-          >
-            Create Project
-          </Button>
-        </div>
-      </div>
     </div>
   </div>
 </template>
