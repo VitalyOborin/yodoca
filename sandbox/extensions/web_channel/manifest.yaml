@@ -19,5 +19,6 @@ config:
   request_timeout_seconds: 120
   model_name: "yodoca"
   default_user_id: "web_user"
+  log_file: "sandbox/logs/web.log"
 
 enabled: true

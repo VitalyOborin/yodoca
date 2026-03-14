@@ -15,5 +15,4 @@ config:
   streaming_enabled: true
   stream_edit_interval_ms: 500
   stream_min_chunk_chars: 20
-  web_channel_log_file: sandbox/logs/web.log
 enabled: true

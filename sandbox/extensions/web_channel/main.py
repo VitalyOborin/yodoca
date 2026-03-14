@@ -5,8 +5,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
-
 from sandbox.extensions.web_channel.app import create_app
 from sandbox.extensions.web_channel.bridge import RequestBridge
 
@@ -28,29 +26,6 @@ class WebChannelExtension:
         self._server: Any = None
         self._server_task: asyncio.Task[Any] | None = None
         self._channel_id = "web_channel"
-
-    def _resolve_log_file_from_telegram_manifest(self) -> str:
-        """Read web_channel log file path from telegram_channel manifest config."""
-        default_path = "sandbox/logs/web.log"
-        manifest_path = (
-            Path(__file__).resolve().parents[2]
-            / "extensions"
-            / "telegram_channel"
-            / "manifest.yaml"
-        )
-        if not manifest_path.exists():
-            return default_path
-        try:
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return default_path
-        config = manifest.get("config") if isinstance(manifest, dict) else None
-        if not isinstance(config, dict):
-            return default_path
-        value = config.get("web_channel_log_file")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return default_path
 
     def _setup_request_logger(self, log_file: str) -> logging.Logger:
         """Configure a dedicated file logger for web_channel HTTP audit events."""
@@ -91,7 +66,7 @@ class WebChannelExtension:
             "model_name": context.get_config("model_name", "yodoca"),
             "default_user_id": context.get_config("default_user_id", "web_user"),
         }
-        log_file = self._resolve_log_file_from_telegram_manifest()
+        log_file = context.get_config("log_file", "sandbox/logs/web.log")
         self._request_logger = self._setup_request_logger(log_file)
         api_key = self._config.get("api_key")
         if not api_key:
