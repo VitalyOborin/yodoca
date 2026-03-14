@@ -19,6 +19,7 @@ from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
 from core.terminal import reset_terminal_for_input
 from core.tools.channel import make_channel_tools
+from core.tools.configure_extension import make_configure_extension_tool
 from core.tools.secure_input import make_secure_input_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +52,7 @@ async def _wire_extensions(loader: Loader, router: MessageRouter, event_bus: Eve
     await loader.discover()
     await loader.load_all()
     await loader.initialize_all(router)
+    await loader._update_setup_providers_state()
     loader.detect_and_wire_all(router)
     loader.wire_event_subscriptions(event_bus)
 
@@ -68,9 +70,31 @@ def _create_agent(
     def tool_resolver(tool_ids: list[str], agent_id: str | None = None) -> list[Any]:
         return loader.resolve_tools(tool_ids, agent_id)
 
+    def _request_restart_after_setup() -> None:
+        restart_file = (
+            _PROJECT_ROOT
+            / get_setting(
+                settings,
+                "supervisor.restart_file",
+                "sandbox/.restart_requested",
+            )
+        )
+        restart_file.parent.mkdir(parents=True, exist_ok=True)
+        restart_file.write_text(
+            "restart requested after successful extension setup",
+            encoding="utf-8",
+        )
+
     factory = AgentFactory(model_router, tool_resolver, registry)
     catalog = ModelCatalog(overrides=settings.get("models"))
-    channel_tools = make_channel_tools(router) + [make_secure_input_tool(event_bus)]
+    channel_tools = make_channel_tools(router) + [
+        make_secure_input_tool(event_bus),
+        make_configure_extension_tool(
+            loader.get_extensions(),
+            secret_resolver=secrets.get_secret_async,
+            request_restart=_request_restart_after_setup,
+        ),
+    ]
     return create_orchestrator_agent(
         model_router=model_router,
         settings=settings,

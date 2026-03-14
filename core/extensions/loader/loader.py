@@ -20,6 +20,7 @@ from core.extensions.contract import (
     ExtensionState,
     SchedulerProvider,
     ServiceProvider,
+    SetupProvider,
     ToolProvider,
     TurnContext,
 )
@@ -72,6 +73,7 @@ class Loader:
         self._scheduler_manager: SchedulerManager | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._event_bus: EventBus | None = None
+        self._setup_providers: dict[str, bool] = {}
 
     def _lifecycle(self) -> ExtensionStateMachine:
         """State machine bound to current state dict (tests may replace self._state)."""
@@ -357,6 +359,23 @@ class Loader:
         )
         self._agent_registry.register(record, ext)
 
+    async def _update_setup_providers_state(self) -> None:
+        """Call on_setup_complete for each SetupProvider; store configured state."""
+        self._setup_providers.clear()
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if not isinstance(ext, SetupProvider):
+                continue
+            try:
+                ok, _msg = await ext.on_setup_complete()
+                self._setup_providers[ext_id] = ok
+            except Exception as e:
+                logger.warning(
+                    "SetupProvider %s on_setup_complete failed: %s", ext_id, e
+                )
+                self._setup_providers[ext_id] = False
+
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
@@ -456,6 +475,10 @@ class Loader:
                 logger.exception("get_mcp_servers failed for %s: %s", ext_id, e)
         return servers
 
+    def get_extensions(self) -> dict[str, Any]:
+        """Return extensions dict for tools that need to resolve SetupProvider."""
+        return self._extensions
+
     def get_available_tool_ids(self) -> list[str]:
         """Return tool IDs usable in agent uses_tools or create_agent.
 
@@ -496,6 +519,20 @@ class Loader:
             tool_parts.append(f"- {ext_id}: {manifest.description.strip()}")
         return tool_parts
 
+    def _collect_setup_sections(self) -> list[str]:
+        """Return setup_instructions for unconfigured SetupProvider extensions."""
+        parts: list[str] = []
+        for ext_id, is_configured in self._setup_providers.items():
+            if is_configured:
+                continue
+            manifest = self._get_manifest(ext_id)
+            if not manifest or not manifest.setup_instructions.strip():
+                continue
+            parts.append(
+                f"- {ext_id}: {manifest.setup_instructions.strip()}"
+            )
+        return parts
+
     def _collect_mcp_aliases(self) -> list[str]:
         """Collect MCP server aliases from ACTIVE extensions."""
         mcp_aliases: list[str] = []
@@ -519,8 +556,13 @@ class Loader:
     def get_capabilities_summary(self) -> str:
         """Build a natural-language capability summary for the orchestrator."""
         tool_parts = self._collect_tool_agent_parts()
+        setup_parts = self._collect_setup_sections()
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
+        if setup_parts:
+            sections.append(
+                "Extensions needing setup:\n" + "\n".join(setup_parts)
+            )
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))
         if self._agent_registry and self._agent_registry.list_agents():

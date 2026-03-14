@@ -54,12 +54,13 @@ The startup sequence in `core/runner.py`:
 1. **discover** — Scan `sandbox/extensions/` for `manifest.yaml`; load manifests, filter `enabled: true`
 2. **load_all** — Topological sort by `depends_on`; dynamic import or `DeclarativeAgentAdapter`; instantiate
 3. **initialize_all** — Create `ExtensionContext` per extension; call `initialize(ctx)`
-4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
-5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
-6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
-7. **configure_thread** — `router.configure_thread()` creates persistent thread/project services and the default runtime thread
-8. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
-9. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
+4. **_update_setup_providers_state** — For each SetupProvider, call `on_setup_complete()`; store configured vs unconfigured
+5. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
+6. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
+7. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
+8. **configure_thread** — `router.configure_thread()` creates persistent thread/project services and the default runtime thread
+9. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
+10. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
 
 Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: cancel service/cron/health tasks → `stop()` → `destroy()`).
 
@@ -274,7 +275,14 @@ Wired by `loader.wire_context_providers()` after `start_all()`. The middleware c
 
 ### `SetupProvider`
 
-Extension that needs configuration (secrets, settings).
+Extension that needs configuration (secrets, settings). The Loader detects SetupProvider extensions at startup, calls `on_setup_complete()` to determine configured state, and injects `setup_instructions` from the manifest into the Orchestrator's capabilities summary when an extension is unconfigured.
+
+**Setup flow:**
+
+1. At startup, the Loader calls `on_setup_complete()` for each SetupProvider. If it returns `(False, msg)`, the extension is "unconfigured".
+2. The capabilities summary includes an "Extensions needing setup" section with `manifest.setup_instructions` for unconfigured extensions.
+3. The Orchestrator can use the `configure_extension(extension_id, param_name, value)` core tool to apply configuration. The tool calls `apply_config()` then `on_setup_complete()` and returns a structured result.
+4. For secrets (e.g. API tokens), the agent should use `request_secure_input` first to collect the value securely, then pass it to `configure_extension` or have the user provide it via a secure channel.
 
 ```python
 def get_setup_schema(self) -> list[dict]:
@@ -310,7 +318,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 |-------|------|---------|-------------|
 | `version` | str | `"1.0.0"` | Semantic version |
 | `description` | str | `""` | Shown in Orchestrator capabilities summary |
-| `setup_instructions` | str | `""` | User-facing setup help |
+| `setup_instructions` | str | `""` | Instructions for the agent when extension is unconfigured. Shown in capabilities summary; agent uses `configure_extension` or `request_secure_input` + `request_restart` per instructions. |
 | `depends_on` | list[str] | `[]` | Extension IDs; load order is topological |
 | `secrets` | list[str] | `[]` | Required env var names |
 | `config` | dict | `{}` | Passed to `context.get_config()` |

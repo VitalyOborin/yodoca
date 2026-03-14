@@ -15,6 +15,7 @@ from core.extensions.contract import (
     AgentResponse,
     ChannelProvider,
     Extension,
+    SetupProvider,
 )
 from core.extensions.loader import ExtensionState, Loader
 from core.extensions.manifest import ExtensionManifest
@@ -28,6 +29,7 @@ def _manifest(
     ext_id: str,
     depends_on: list[str] | None = None,
     config: dict | None = None,
+    setup_instructions: str = "",
 ) -> ExtensionManifest:
     data: dict = {
         "id": ext_id,
@@ -37,6 +39,8 @@ def _manifest(
     }
     if config is not None:
         data["config"] = config
+    if setup_instructions:
+        data["setup_instructions"] = setup_instructions
     return ExtensionManifest.model_validate(data)
 
 
@@ -654,3 +658,85 @@ class TestDependencyCascadeAndFailFast:
             RuntimeError, match="Dependency 'b' of 'a' is in ERROR state"
         ):
             get_ext("b")
+
+
+class TestSetupProviders:
+    """SetupProvider detection and setup_instructions in capabilities summary."""
+
+    @pytest.mark.asyncio
+    async def test_update_setup_providers_populates_configured_state(self) -> None:
+        """_update_setup_providers_state calls on_setup_complete and stores result."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(return_value=(True, "OK"))
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._extensions = {"setup_ext": mock_ext}
+        loader._state = {"setup_ext": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+
+        assert loader._setup_providers == {"setup_ext": True}
+        mock_ext.on_setup_complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_setup_providers_stores_false_when_not_configured(
+        self,
+    ) -> None:
+        """_update_setup_providers_state stores False when on_setup_complete returns (False, msg)."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(
+            return_value=(False, "token required")
+        )
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._extensions = {"setup_ext": mock_ext}
+        loader._state = {"setup_ext": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+
+        assert loader._setup_providers == {"setup_ext": False}
+
+    @pytest.mark.asyncio
+    async def test_get_capabilities_summary_includes_unconfigured_setup_instructions(
+        self,
+    ) -> None:
+        """get_capabilities_summary includes Extensions needing setup when SetupProvider is unconfigured."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(
+            return_value=(False, "token required")
+        )
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [
+            _manifest(
+                "telegram_channel",
+                setup_instructions="Use request_secure_input for token.",
+            ),
+        ]
+        loader._extensions = {"telegram_channel": mock_ext}
+        loader._state = {"telegram_channel": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+        summary = loader.get_capabilities_summary()
+
+        assert "Extensions needing setup" in summary
+        assert "telegram_channel" in summary
+        assert "request_secure_input" in summary
+
+    def test_get_extensions_returns_extensions_dict(self) -> None:
+        """get_extensions returns the extensions dict."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        ext_a, ext_b = object(), object()
+        loader._extensions = {"a": ext_a, "b": ext_b}
+        ext = loader.get_extensions()
+        assert ext is loader._extensions
+        assert ext["a"] is ext_a
+        assert ext["b"] is ext_b
