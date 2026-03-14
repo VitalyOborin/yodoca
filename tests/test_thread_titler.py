@@ -1,10 +1,10 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from sandbox.extensions.thread_titler.main import (
-    REFINE_REQUESTED_TOPIC,
     TITLE_UPDATED_TOPIC,
     ThreadTitlerExtension,
 )
@@ -14,9 +14,6 @@ def _thread(**overrides):
     data = {
         "id": "thread_1",
         "title": None,
-        "title_source": None,
-        "title_status": None,
-        "title_updated_at": None,
         "channel_id": "web_channel",
     }
     data.update(overrides)
@@ -24,41 +21,35 @@ def _thread(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_phase1_sets_provisional_title_and_requests_refine():
+async def test_phase1_sets_provisional_title_and_starts_parallel_refine():
     ext = ThreadTitlerExtension()
+    updated = _thread(title="Need help with Python traceback parsing in logs...")
     ctx = SimpleNamespace(
         get_config=lambda key, default=None: default,
         subscribe=lambda event, handler: None,
-        subscribe_event=lambda topic, handler: None,
         model_router=None,
         get_thread=AsyncMock(return_value=_thread()),
-        update_thread=AsyncMock(
-            return_value=_thread(
-                title="Need help with Python traceback parsing in logs...",
-                title_source="derived",
-                title_status="provisional",
-                title_updated_at=123,
-            )
-        ),
+        update_thread=AsyncMock(return_value=updated),
         emit=AsyncMock(),
     )
     await ext.initialize(ctx)
 
-    await ext._on_user_message(
-        {
-            "thread_id": "thread_1",
-            "text": (
-                "Need help with Python traceback parsing in logs and "
-                "figuring out why the parser fails on multiline stack traces."
-            ),
-        }
-    )
+    with patch.object(ext, "_run_refine", new=AsyncMock()) as run_refine:
+        await ext._on_user_message(
+            {
+                "thread_id": "thread_1",
+                "text": (
+                    "Need help with Python traceback parsing in logs and "
+                    "figuring out why the parser fails on multiline stack traces."
+                ),
+            }
+        )
+        await asyncio.sleep(0)
 
     kwargs = ctx.update_thread.await_args.kwargs
-    assert kwargs["title_source"] == "derived"
-    assert kwargs["title_status"] == "provisional"
-    assert ctx.emit.await_args_list[0].args[0] == TITLE_UPDATED_TOPIC
-    assert ctx.emit.await_args_list[1].args[0] == REFINE_REQUESTED_TOPIC
+    assert kwargs["title"] == "Need help with Python traceback parsing in logs..."
+    assert ctx.emit.await_args.args[0] == TITLE_UPDATED_TOPIC
+    run_refine.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -67,11 +58,8 @@ async def test_phase1_skips_already_titled_thread():
     ctx = SimpleNamespace(
         get_config=lambda key, default=None: default,
         subscribe=lambda event, handler: None,
-        subscribe_event=lambda topic, handler: None,
         model_router=None,
-        get_thread=AsyncMock(
-            return_value=_thread(title="Manual", title_source="manual")
-        ),
+        get_thread=AsyncMock(return_value=_thread(title="Existing title")),
         update_thread=AsyncMock(),
         emit=AsyncMock(),
     )
@@ -84,25 +72,20 @@ async def test_phase1_skips_already_titled_thread():
 
 
 @pytest.mark.asyncio
-async def test_phase2_refines_provisional_title():
+async def test_phase2_refines_only_if_title_still_matches_provisional():
     ext = ThreadTitlerExtension()
-    thread = _thread(
-        title="Parser error in logs...",
-        title_source="derived",
-        title_status="provisional",
-    )
-    updated_thread = _thread(
-        title="Fixing parser errors in logs",
-        title_source="ai",
-        title_status="finalized",
-        title_updated_at=456,
-    )
+    provisional = "Parser error in logs..."
+    updated_thread = _thread(title="Fixing parser errors in logs")
     ctx = SimpleNamespace(
         get_config=lambda key, default=None: default,
         subscribe=lambda event, handler: None,
-        subscribe_event=lambda topic, handler: None,
         model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
-        get_thread=AsyncMock(side_effect=[thread, thread]),
+        get_thread=AsyncMock(
+            side_effect=[
+                _thread(title=provisional),
+                _thread(title=provisional),
+            ]
+        ),
         update_thread=AsyncMock(return_value=updated_thread),
         emit=AsyncMock(),
     )
@@ -110,50 +93,37 @@ async def test_phase2_refines_provisional_title():
 
     with patch(
         "sandbox.extensions.thread_titler.main.Runner.run",
-        new=AsyncMock(),
-    ) as run:
-        run.return_value = SimpleNamespace(
-            final_output=' "Fixing parser errors in logs." '
-        )
-        await ext._on_refine_requested(
-            SimpleNamespace(
-                payload={
-                    "thread_id": "thread_1",
-                    "message_text": (
-                        "Long message about parser failures in logs and "
-                        "multiline stack traces."
-                    ),
-                }
+        new=AsyncMock(
+            return_value=SimpleNamespace(
+                final_output=' "Fixing parser errors in logs." '
             )
+        ),
+    ):
+        await ext._run_refine(
+            thread_id="thread_1",
+            message_text="Long message about parser failures in logs.",
+            provisional_title=provisional,
         )
 
-    kwargs = ctx.update_thread.await_args.kwargs
-    assert kwargs["title"] == "Fixing parser errors in logs"
-    assert kwargs["title_source"] == "ai"
-    assert kwargs["title_status"] == "finalized"
+    assert (
+        ctx.update_thread.await_args.kwargs["title"]
+        == "Fixing parser errors in logs"
+    )
     assert ctx.emit.await_args.args[0] == TITLE_UPDATED_TOPIC
 
 
 @pytest.mark.asyncio
-async def test_phase2_skips_if_thread_became_manual():
+async def test_phase2_skips_if_title_changed_before_refine_finishes():
     ext = ThreadTitlerExtension()
+    provisional = "Derived"
     ctx = SimpleNamespace(
         get_config=lambda key, default=None: default,
         subscribe=lambda event, handler: None,
-        subscribe_event=lambda topic, handler: None,
         model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
         get_thread=AsyncMock(
             side_effect=[
-                _thread(
-                    title="Derived",
-                    title_source="derived",
-                    title_status="provisional",
-                ),
-                _thread(
-                    title="Manual",
-                    title_source="manual",
-                    title_status="finalized",
-                ),
+                _thread(title=provisional),
+                _thread(title="Manual rename"),
             ]
         ),
         update_thread=AsyncMock(),
@@ -163,16 +133,43 @@ async def test_phase2_skips_if_thread_became_manual():
 
     with patch(
         "sandbox.extensions.thread_titler.main.Runner.run",
-        new=AsyncMock(),
-    ) as run:
-        run.return_value = SimpleNamespace(final_output="Manual title should win")
-        await ext._on_refine_requested(
-            SimpleNamespace(
-                payload={
-                    "thread_id": "thread_1",
-                    "message_text": "Please summarize this title.",
-                }
-            )
+        new=AsyncMock(return_value=SimpleNamespace(final_output="Manual should win")),
+    ):
+        await ext._run_refine(
+            thread_id="thread_1",
+            message_text="Please summarize this title.",
+            provisional_title=provisional,
         )
 
     ctx.update_thread.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_active_refine_tasks():
+    ext = ThreadTitlerExtension()
+    ctx = SimpleNamespace(
+        get_config=lambda key, default=None: default,
+        subscribe=lambda event, handler: None,
+        model_router=None,
+        get_thread=AsyncMock(),
+        update_thread=AsyncMock(),
+        emit=AsyncMock(),
+    )
+    await ext.initialize(ctx)
+
+    started = asyncio.Event()
+
+    async def fake_run_refine(**kwargs):
+        started.set()
+        await asyncio.sleep(10)
+
+    with patch.object(ext, "_run_refine", side_effect=fake_run_refine):
+        ext._spawn_refine_task(
+            thread_id="thread_1",
+            message_text="long message",
+            provisional_title="provisional",
+        )
+        await started.wait()
+        await ext.stop()
+
+    assert not ext._active_refine_tasks

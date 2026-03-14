@@ -62,17 +62,12 @@ async def create_thread(request: Request) -> JSONResponse:
     ext = _get_extension(request)
     ctx = ext._context
     payload = CreateThreadRequest.model_validate(await request.json())
-    now_ts = int(time.time())
-    title_provided = payload.title is not None
     try:
         thread = await ctx.create_thread(
             thread_id=payload.id or f"thread_{uuid.uuid4().hex}",
             channel_id=ext._channel_id,
             project_id=payload.project_id,
             title=payload.title,
-            title_source="manual" if title_provided else None,
-            title_status="finalized" if title_provided else None,
-            title_updated_at=now_ts if title_provided else None,
         )
     except ValueError as exc:
         return JSONResponse(
@@ -119,17 +114,10 @@ async def patch_thread(request: Request, thread_id: str) -> JSONResponse:
     ext = _get_extension(request)
     ctx = ext._context
     payload = UpdateThreadRequest.model_validate(await request.json())
-    title_provided = "title" in payload.model_fields_set
-    title_updated_at = int(time.time()) if title_provided else UNSET
-    title_source = "manual" if title_provided else UNSET
-    title_status = "finalized" if title_provided else UNSET
     try:
         thread = await ctx.update_thread(
             thread_id,
-            title=payload.title if title_provided else UNSET,
-            title_source=title_source,
-            title_status=title_status,
-            title_updated_at=title_updated_at,
+            title=payload.title if "title" in payload.model_fields_set else UNSET,
             project_id=payload.project_id
             if "project_id" in payload.model_fields_set
             else UNSET,

@@ -158,7 +158,7 @@ Supporting data classes: `AgentDescriptor`, `AgentResponse`, `AgentInvocationCon
 - **Location:** `core/extensions/persistence/`
 - **Role:** Owns persistent thread and project metadata outside hot-path routing logic.
 - **Key modules:** `ThreadManager` manages runtime `SQLiteThread` objects plus persisted thread rows; `ProjectService` coordinates project CRUD and thread binding; `schema.py` centralizes SQLite DDL; `models.py` defines typed `ThreadInfo` and `ProjectInfo`.
-- **Thread metadata:** persisted rows include title lifecycle fields used by extensions such as `thread_titler` (`title`, `title_source`, `title_status`, `title_updated_at`, `channel_id`, timestamps, archive flag).
+- **Thread metadata:** persisted rows include `title`, `channel_id`, timestamps, and archive state; extensions such as `thread_titler` keep auto-title policy outside core.
 - **Context access:** `ExtensionContext` now exposes thread/project APIs directly (`list_threads`, `create_thread`, `list_projects`, `create_project`, etc.) instead of proxying them through `MessageRouter`. See [ADR 029](adr/029-refactor-core-extensions-boundaries.md).
 
 ### Core Tools

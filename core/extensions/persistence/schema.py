@@ -56,9 +56,6 @@ def ensure_thread_schema(db_path: str) -> None:
                 thread_id TEXT PRIMARY KEY,
                 project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
                 title TEXT,
-                title_source TEXT,
-                title_status TEXT,
-                title_updated_at INTEGER,
                 channel_id TEXT NOT NULL DEFAULT 'unknown',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -78,24 +75,6 @@ def ensure_thread_schema(db_path: str) -> None:
             table="projects",
             column="icon",
             ddl="icon TEXT",
-        )
-        _ensure_column(
-            conn,
-            table="threads",
-            column="title_source",
-            ddl="title_source TEXT",
-        )
-        _ensure_column(
-            conn,
-            table="threads",
-            column="title_status",
-            ddl="title_status TEXT",
-        )
-        _ensure_column(
-            conn,
-            table="threads",
-            column="title_updated_at",
-            ddl="title_updated_at INTEGER",
         )
         conn.commit()
     finally:

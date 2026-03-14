@@ -141,9 +141,6 @@ def test_post_threads(web_channel_app):
     data = resp.json()
     assert data["thread"]["id"] == "sess_1"
     assert data["thread"]["channel_id"] == "web_channel"
-    kwargs = web_channel_app.state.extension._context.create_thread.await_args.kwargs
-    assert kwargs["title_source"] == "manual"
-    assert kwargs["title_status"] == "finalized"
 
 
 def test_get_thread_detail_ok(web_channel_app, mock_context):
@@ -197,9 +194,6 @@ def test_patch_thread_ok(web_channel_app, mock_context):
     )
     assert resp.status_code == 200
     assert resp.json()["thread"]["project_id"] == "proj_1"
-    kwargs = mock_context.update_thread.await_args.kwargs
-    assert kwargs["title_source"] == "manual"
-    assert kwargs["title_status"] == "finalized"
 
 
 def test_delete_thread_archives(web_channel_app, mock_context):

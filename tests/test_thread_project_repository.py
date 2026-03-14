@@ -45,9 +45,6 @@ def test_thread_repository_creates_and_retrieves_thread(tmp_path: Path) -> None:
         channel_id="web_channel",
         project_id=None,
         title="Draft",
-        title_source=None,
-        title_status=None,
-        title_updated_at=None,
         now_ts=1773096500,
     )
     assert thread is not None
@@ -55,46 +52,11 @@ def test_thread_repository_creates_and_retrieves_thread(tmp_path: Path) -> None:
     assert thread.channel_id == "web_channel"
     assert thread.created_at == 1773096500
     assert thread.last_active_at == 1773096500
-    assert thread.title_source is None
-    assert thread.title_status is None
-    assert thread.title_updated_at is None
 
     retrieved = repo.get_thread("sess_1", include_archived=True)
     assert retrieved is not None
     assert retrieved.id == "sess_1"
     assert retrieved.channel_id == "web_channel"
-
-
-def test_thread_repository_migrates_title_metadata_columns(tmp_path: Path) -> None:
-    db_path = tmp_path / "thread.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE threads (
-            thread_id TEXT PRIMARY KEY,
-            project_id TEXT,
-            title TEXT,
-            channel_id TEXT NOT NULL DEFAULT 'unknown',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_active_at INTEGER NOT NULL DEFAULT 0,
-            is_archived INTEGER NOT NULL DEFAULT 0
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-
-    ThreadRepository(str(db_path))
-
-    conn = sqlite3.connect(db_path)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(threads)").fetchall()}
-    conn.close()
-
-    assert "title_source" in columns
-    assert "title_status" in columns
-    assert "title_updated_at" in columns
-
 
 def test_thread_repository_get_thread_history(tmp_path: Path) -> None:
     db_path = tmp_path / "thread.db"
@@ -104,9 +66,6 @@ def test_thread_repository_get_thread_history(tmp_path: Path) -> None:
         channel_id="web_channel",
         project_id=None,
         title=None,
-        title_source=None,
-        title_status=None,
-        title_updated_at=None,
         now_ts=1773096500,
     )
     _seed_agent_messages(db_path, "sess_1", '{"role":"user","content":"hello"}')
@@ -158,9 +117,6 @@ def test_project_service_binds_and_unbinds_threads(tmp_path: Path) -> None:
         channel_id="web_channel",
         project_id=None,
         title="Draft",
-        title_source=None,
-        title_status=None,
-        title_updated_at=None,
         now_ts=1773096500,
     )
     project = service.create_project(
@@ -337,9 +293,6 @@ async def test_loader_injects_project_context_before_memory(tmp_path: Path) -> N
         channel_id="cli_channel",
         project_id=project.id,
         title=None,
-        title_source=None,
-        title_status=None,
-        title_updated_at=None,
         now_ts=1773096501,
     )
 

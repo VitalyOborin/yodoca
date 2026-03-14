@@ -20,8 +20,6 @@ agent_config:
 
 events:
   publishes:
-    - topic: thread.title.refine_requested
-      description: "Request async AI refinement for a provisional thread title."
     - topic: thread.title.updated
       description: "Thread title metadata changed."
 

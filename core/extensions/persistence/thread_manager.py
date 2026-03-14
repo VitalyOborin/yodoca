@@ -130,9 +130,6 @@ class ThreadManager:
                 channel_id=channel_id,
                 project_id=None,
                 title=None,
-                title_source=None,
-                title_status=None,
-                title_updated_at=None,
                 now_ts=effective_now,
             )
         return repo.update_thread(
@@ -174,9 +171,6 @@ class ThreadManager:
         thread_id: str,
         *,
         title: str | None | UnsetType = UNSET,
-        title_source: str | None | UnsetType = UNSET,
-        title_status: str | None | UnsetType = UNSET,
-        title_updated_at: int | None | UnsetType = UNSET,
         project_id: str | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
         channel_id: str | UnsetType = UNSET,
@@ -186,9 +180,6 @@ class ThreadManager:
             self.thread_repository.update_thread,
             thread_id,
             title=title,
-            title_source=title_source,
-            title_status=title_status,
-            title_updated_at=title_updated_at,
             project_id=project_id,
             is_archived=is_archived,
             channel_id=channel_id,
@@ -233,9 +224,6 @@ class ThreadManager:
             channel_id=channel_id,
             project_id=None,
             title=None,
-            title_source=None,
-            title_status=None,
-            title_updated_at=None,
             now_ts=effective_now,
         )
 

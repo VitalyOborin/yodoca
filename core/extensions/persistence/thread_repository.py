@@ -44,9 +44,6 @@ class ThreadRepository:
         channel_id: str,
         project_id: str | None,
         title: str | None,
-        title_source: str | None,
-        title_status: str | None,
-        title_updated_at: int | None,
         now_ts: int,
     ) -> ThreadInfo:
         with self._connect() as conn:
@@ -56,30 +53,15 @@ class ThreadRepository:
                     thread_id,
                     project_id,
                     title,
-                    title_source,
-                    title_status,
-                    title_updated_at,
                     channel_id,
                     created_at,
                     last_active_at,
                     is_archived
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     project_id = COALESCE(excluded.project_id, threads.project_id),
                     title = COALESCE(excluded.title, threads.title),
-                    title_source = COALESCE(
-                        excluded.title_source,
-                        threads.title_source
-                    ),
-                    title_status = COALESCE(
-                        excluded.title_status,
-                        threads.title_status
-                    ),
-                    title_updated_at = COALESCE(
-                        excluded.title_updated_at,
-                        threads.title_updated_at
-                    ),
                     channel_id = CASE
                         WHEN threads.channel_id = 'unknown' THEN excluded.channel_id
                         ELSE threads.channel_id
@@ -93,9 +75,6 @@ class ThreadRepository:
                     thread_id,
                     project_id,
                     title,
-                    title_source,
-                    title_status,
-                    title_updated_at,
                     channel_id,
                     now_ts,
                     now_ts,
@@ -117,9 +96,6 @@ class ThreadRepository:
                     thread_id,
                     project_id,
                     title,
-                    title_source,
-                    title_status,
-                    title_updated_at,
                     channel_id,
                     created_at,
                     last_active_at,
@@ -154,9 +130,6 @@ class ThreadRepository:
                     thread_id,
                     project_id,
                     title,
-                    title_source,
-                    title_status,
-                    title_updated_at,
                     channel_id,
                     created_at,
                     last_active_at,
@@ -179,9 +152,6 @@ class ThreadRepository:
         thread_id: str,
         *,
         title: str | None | UnsetType = UNSET,
-        title_source: str | None | UnsetType = UNSET,
-        title_status: str | None | UnsetType = UNSET,
-        title_updated_at: int | None | UnsetType = UNSET,
         project_id: str | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
         last_active_at: int | UnsetType = UNSET,
@@ -192,15 +162,6 @@ class ThreadRepository:
         if title is not UNSET:
             assignments.append("title = ?")
             params.append(title)
-        if title_source is not UNSET:
-            assignments.append("title_source = ?")
-            params.append(title_source)
-        if title_status is not UNSET:
-            assignments.append("title_status = ?")
-            params.append(title_status)
-        if title_updated_at is not UNSET:
-            assignments.append("title_updated_at = ?")
-            params.append(title_updated_at)
         if project_id is not UNSET:
             assignments.append("project_id = ?")
             params.append(project_id)
@@ -319,9 +280,6 @@ class ThreadRepository:
             id=row["thread_id"],
             project_id=row["project_id"],
             title=row["title"],
-            title_source=row["title_source"],
-            title_status=row["title_status"],
-            title_updated_at=row["title_updated_at"],
             channel_id=row["channel_id"],
             created_at=self._parse_created_at(row["created_at"]),
             last_active_at=int(row["last_active_at"]),
