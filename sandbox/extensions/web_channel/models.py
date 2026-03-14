@@ -121,6 +121,9 @@ class Thread(BaseModel):
     id: str
     project_id: str | None = None
     title: str | None = None
+    title_source: str | None = None
+    title_status: str | None = None
+    title_updated_at: int | None = None
     channel_id: str
     created_at: int
     last_active_at: int

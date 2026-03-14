@@ -198,6 +198,9 @@ class ExtensionContext:
         channel_id: str,
         project_id: str | None = None,
         title: str | None = None,
+        title_source: str | None = None,
+        title_status: str | None = None,
+        title_updated_at: int | None = None,
     ) -> ThreadInfo:
         """Create a persisted thread row before any messages are sent."""
         if project_id is not None and self._projects is not None:
@@ -210,6 +213,9 @@ class ExtensionContext:
             channel_id,
             project_id,
             title,
+            title_source,
+            title_status,
+            title_updated_at,
             int(time.time()),
         )
 
@@ -226,6 +232,9 @@ class ExtensionContext:
         thread_id: str,
         *,
         title: str | None | UnsetType = UNSET,
+        title_source: str | None | UnsetType = UNSET,
+        title_status: str | None | UnsetType = UNSET,
+        title_updated_at: int | None | UnsetType = UNSET,
         project_id: str | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
     ) -> ThreadInfo | None:
@@ -241,6 +250,9 @@ class ExtensionContext:
         return await self._threads.update_thread(
             thread_id,
             title=title,
+            title_source=title_source,
+            title_status=title_status,
+            title_updated_at=title_updated_at,
             project_id=project_id,
             is_archived=is_archived,
         )

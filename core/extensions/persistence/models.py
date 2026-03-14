@@ -11,6 +11,9 @@ class ThreadInfo:
     id: str
     project_id: str | None
     title: str | None
+    title_source: str | None
+    title_status: str | None
+    title_updated_at: int | None
     channel_id: str
     created_at: int
     last_active_at: int
@@ -21,6 +24,9 @@ class ThreadInfo:
             "id": self.id,
             "project_id": self.project_id,
             "title": self.title,
+            "title_source": self.title_source,
+            "title_status": self.title_status,
+            "title_updated_at": self.title_updated_at,
             "channel_id": self.channel_id,
             "created_at": self.created_at,
             "last_active_at": self.last_active_at,

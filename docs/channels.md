@@ -129,6 +129,8 @@ Channels can optionally implement **StreamingChannelProvider** (in addition to `
 - Enforces a single active request with a busy guard; concurrent requests receive `503` with `Retry-After: 5`
 - Supports `X-Thread-Id` so web frontends can bind requests to named runtime threads
 - Uses a stable logical user identity (`default_user_id`, default `web_user`) for memory/context continuity
+- Thread rows now expose title lifecycle metadata (`title_source`, `title_status`, `title_updated_at`)
+- Untitled threads receive an automatic provisional title from the first user message; long/noisy first messages may be refined asynchronously by the `thread_titler` extension
 
 **Configuration:**
 
