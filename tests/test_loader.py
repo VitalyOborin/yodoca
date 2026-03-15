@@ -288,13 +288,16 @@ class TestProactiveLoop:
         loader._agent_registry = registry
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
-        await event_bus.recover()
-        loader.wire_event_subscriptions(event_bus)
+        try:
+            await event_bus.recover()
+            loader.wire_event_subscriptions(event_bus)
 
-        assert "email.received" in event_bus._subscribers
-        handlers = event_bus._subscribers["email.received"]
-        proactive = [h for h in handlers if h[1] == "kernel.proactive"]
-        assert len(proactive) == 1
+            assert "email.received" in event_bus._subscribers
+            handlers = event_bus._subscribers["email.received"]
+            proactive = [h for h in handlers if h[1] == "kernel.proactive"]
+            assert len(proactive) == 1
+        finally:
+            await event_bus.stop()
 
     @pytest.mark.asyncio
     async def test_wire_event_subscriptions_registers_system_topics(
@@ -311,18 +314,21 @@ class TestProactiveLoop:
         loader._agent_registry = AgentRegistry()
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
-        await event_bus.recover()
-        loader.wire_event_subscriptions(event_bus)
+        try:
+            await event_bus.recover()
+            loader.wire_event_subscriptions(event_bus)
 
-        for topic in (
-            SystemTopics.USER_NOTIFY,
-            SystemTopics.AGENT_TASK,
-            SystemTopics.AGENT_BACKGROUND,
-        ):
-            assert topic in event_bus._subscribers
-            handlers = event_bus._subscribers[topic]
-            kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
-            assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
+            for topic in (
+                SystemTopics.USER_NOTIFY,
+                SystemTopics.AGENT_TASK,
+                SystemTopics.AGENT_BACKGROUND,
+            ):
+                assert topic in event_bus._subscribers
+                handlers = event_bus._subscribers[topic]
+                kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
+                assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
+        finally:
+            await event_bus.stop()
 
     @pytest.mark.asyncio
     async def test_on_agent_task_passes_turn_context_channel(
