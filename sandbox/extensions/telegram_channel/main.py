@@ -274,7 +274,7 @@ class TelegramChannelExtension:
 
     async def stop(self) -> None:
         if self._dp:
-            self._dp.stop_polling()
+            await self._dp.stop_polling()
 
     async def destroy(self) -> None:
         await self._close_bot()
