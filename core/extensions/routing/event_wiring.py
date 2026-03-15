@@ -69,6 +69,7 @@ class EventWiringManager:
     async def _on_agent_task(self, event: Event) -> None:
         if not self._router:
             return
+        router = self._router
         prompt = event.payload.get("prompt", "")
         channel_id = event.payload.get("channel_id")
         correlation_id = event.payload.get("correlation_id") or event.correlation_id
@@ -88,11 +89,11 @@ class EventWiringManager:
                     agent_id="orchestrator",
                     channel_id=channel_id,
                 )
-                response = await self._router.invoke_agent_background(
+                response = await router.invoke_agent_background(
                     prompt, turn_context=turn_context
                 )
                 if response:
-                    await self._router.notify_user(response, channel_id)
+                    await router.notify_user(response, channel_id)
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.info(
                     "agent task: done",
@@ -173,11 +174,13 @@ class EventWiringManager:
                     _topic: str = topic,
                     _subscriber_id: str = subscriber_id,
                 ) -> None:
-                    if self._router:
-                        await self._router.notify_user(
-                            event.payload.get("text", ""),
-                            event.payload.get("channel_id"),
-                        )
+                    router = self._router
+                    if router is None:
+                        return
+                    await router.notify_user(
+                        event.payload.get("text", ""),
+                        event.payload.get("channel_id"),
+                    )
 
                 event_bus.subscribe(topic, handler, subscriber_id)
 

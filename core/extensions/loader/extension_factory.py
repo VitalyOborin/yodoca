@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from typing import cast
 
 from core.extensions.contract import Extension
 from core.extensions.manifest import ExtensionManifest
@@ -39,4 +40,4 @@ class ExtensionFactory:
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         cls = getattr(module, class_name)
-        return cls()
+        return cast(Extension, cls())

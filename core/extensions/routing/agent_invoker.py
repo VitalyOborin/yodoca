@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from core.extensions.contract import TurnContext
 from core.extensions.persistence.thread_manager import ThreadManager
@@ -166,8 +166,8 @@ class AgentInvoker:
             event_data, response_delta_type
         ):
             return getattr(event_data, "delta", None)
-        if hasattr(event_data, "delta"):
-            return event_data.delta
+        if event_data is not None and hasattr(event_data, "delta"):
+            return cast(str | None, event_data.delta)
         return None
 
     async def _run_streamed_invoke(

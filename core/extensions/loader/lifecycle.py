@@ -3,8 +3,8 @@
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any, cast
 
 from core.extensions.contract import ExtensionState
 
@@ -40,7 +40,7 @@ class TaskSupervisor:
     def start(
         self,
         name: str,
-        coro_factory: Callable[[], Awaitable[Any]],
+        coro_factory: Callable[[], Coroutine[Any, Any, Any]],
         on_error: TaskErrorHandler | None = None,
     ) -> asyncio.Task[Any]:
         """Start managed task and attach done callback for failure policy."""
@@ -62,7 +62,7 @@ class TaskSupervisor:
             try:
                 result = on_error(name, exc)
                 if inspect.isawaitable(result):
-                    asyncio.create_task(result)
+                    asyncio.create_task(cast(Coroutine[Any, Any, Any], result))
             except Exception:
                 logger.exception("Managed task error handler failed for %s", name)
 

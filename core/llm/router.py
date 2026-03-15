@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
 from core.llm.providers import AnthropicProvider, OpenAICompatibleProvider
@@ -63,11 +63,14 @@ def _load_agent_configs(settings: dict[str, Any]) -> dict[str, ModelConfig]:
 def _build_provider_registry() -> dict[str, ModelProvider]:
     """Build default provider type -> instance mapping."""
     openai_compat = OpenAICompatibleProvider()
-    return {
-        "openai": openai_compat,
-        "openai_compatible": openai_compat,
-        "anthropic": AnthropicProvider(),
-    }
+    return cast(
+        dict[str, ModelProvider],
+        {
+            "openai": openai_compat,
+            "openai_compatible": openai_compat,
+            "anthropic": AnthropicProvider(),
+        },
+    )
 
 
 # --- ModelRouter ---

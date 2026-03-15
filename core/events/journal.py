@@ -4,16 +4,18 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-_EventRow = tuple[int, str, str, dict, float, str | None, int]
+_EventRow = tuple[int, str, str, dict[str, Any], float, str | None, int]
 
 
-def _row_to_event_tuple(row: tuple) -> _EventRow:
+def _row_to_event_tuple(row: Sequence[Any]) -> _EventRow:
     """Convert journal row to (id, topic, source, payload, created_at, correlation_id, retry_count)."""
     payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
     retry_count = row[6] if len(row) > 6 else 0
@@ -122,7 +124,7 @@ class EventJournal:
         self,
         topic: str,
         source: str,
-        payload: dict,
+        payload: dict[str, Any],
         correlation_id: str | None = None,
     ) -> int:
         """Insert event and return row id."""
@@ -171,7 +173,7 @@ class EventJournal:
                     [now, *ids],
                 )
             await conn.commit()
-            return [_row_to_event_tuple(row) for row in rows]
+            return [_row_to_event_tuple(tuple(row)) for row in rows]
         except Exception:
             await conn.rollback()
             raise

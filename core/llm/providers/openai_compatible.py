@@ -37,14 +37,6 @@ def _normalize_texts(texts: list[str]) -> list[tuple[int, str]]:
     return [(i, t) for i, t in enumerate(cleaned) if t]
 
 
-def _embed_request_kwargs(
-    model: str,
-    input_text: str | list[str],
-) -> dict:
-    """Build kwargs for embeddings.create. Handles single text or list."""
-    return {"model": model, "input": input_text}
-
-
 # --- OpenAIEmbedder ---
 
 
@@ -65,8 +57,10 @@ class OpenAIEmbedder:
         if not non_empty:
             return [None] * len(texts)
         try:
-            kwargs = _embed_request_kwargs(model, [t for _, t in non_empty])
-            resp = await self._client.embeddings.create(**kwargs)
+            resp = await self._client.embeddings.create(
+                model=model,
+                input=[t for _, t in non_empty],
+            )
             result: list[list[float] | None] = [None] * len(texts)
             for emb_data, (orig_idx, _) in zip(resp.data, non_empty, strict=True):
                 result[orig_idx] = list(emb_data.embedding)
@@ -91,8 +85,10 @@ class OpenAIEmbedder:
         if not text:
             return None
         try:
-            kwargs = _embed_request_kwargs(model, text)
-            resp = await self._client.embeddings.create(**kwargs)
+            resp = await self._client.embeddings.create(
+                model=model,
+                input=text,
+            )
             return list(resp.data[0].embedding) if resp.data else None
         except Exception as e:
             logger.warning("Embedding failed: %s", e)

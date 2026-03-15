@@ -1,6 +1,7 @@
 """Terminal utilities. Resets terminal state after TUI tools (questionary, prompt_toolkit) exit."""
 
 import sys
+from typing import Any, cast
 
 
 def reset_terminal_for_input() -> None:
@@ -24,7 +25,7 @@ def _reset_windows_console() -> None:
     try:
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32 = cast(Any, ctypes.windll).kernel32
         STD_INPUT_HANDLE = -10
         ENABLE_LINE_INPUT = 0x0002
         ENABLE_ECHO_INPUT = 0x0004

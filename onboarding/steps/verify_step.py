@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 from dotenv import dotenv_values
 
@@ -20,7 +21,8 @@ def run_verify_step(
 
     Returns True to proceed (write config), False to retry from provider step.
     """
-    env_vars = dict(dotenv_values(env_path)) if env_path.exists() else {}
+    raw_env = dict(dotenv_values(env_path)) if env_path.exists() else {}
+    env_vars = {k: v for k, v in raw_env.items() if isinstance(v, str)}
     env_vars.update(state.env_vars)
     env_vars.update(get_current_env())
 
@@ -48,14 +50,17 @@ def _ask_retry_or_skip() -> bool:
     try:
         from questionary import Choice, select
 
-        choice = select(
-            "What would you like to do?",
-            choices=[
-                Choice("Retry (re-enter credentials)", "retry"),
-                Choice("Skip verification and write config anyway", "skip"),
-            ],
-            style=STYLE,
-        ).ask()
+        choice = cast(
+            str | None,
+            select(
+                "What would you like to do?",
+                choices=[
+                    Choice("Retry (re-enter credentials)", "retry"),
+                    Choice("Skip verification and write config anyway", "skip"),
+                ],
+                style=STYLE,
+            ).ask(),
+        )
         return choice == "retry"
     except Exception:
         return False

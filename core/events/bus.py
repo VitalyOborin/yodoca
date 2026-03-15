@@ -6,6 +6,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from core.events.journal import EventJournal
 from core.events.models import Event
@@ -43,7 +44,7 @@ class EventBus:
         self,
         topic: str,
         source: str,
-        payload: dict,
+        payload: dict[str, Any],
         correlation_id: str | None = None,
     ) -> int:
         """Write event to the journal. Returns event id. Fire-and-forget for caller."""
@@ -94,8 +95,6 @@ class EventBus:
             try:
                 await asyncio.sleep(self._watchdog_interval)
             except asyncio.CancelledError:
-                break
-            if self._stopped:
                 break
             try:
                 reset_count, dead_count = await self._journal.recover_stale(
@@ -188,8 +187,6 @@ class EventBus:
             except TimeoutError:
                 pass
             self._wake.clear()
-            if self._stopped:
-                break
             await self._claim_and_deliver_batch()
 
     async def _run_handlers(self, event: Event) -> list[str]:

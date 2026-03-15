@@ -70,6 +70,6 @@ def _make_send_to_channel(router: MessageRouter) -> Any:
     return send_to_channel
 
 
-def make_channel_tools(router: MessageRouter) -> list:
+def make_channel_tools(router: MessageRouter) -> list[Any]:
     """Create agent tools for channel discovery and targeted messaging."""
     return [_make_list_channels(router), _make_send_to_channel(router)]

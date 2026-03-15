@@ -1,6 +1,7 @@
 """Event model for the Event Bus."""
 
 from dataclasses import dataclass
+from typing import Any
 
 __all__ = ["Event"]
 
@@ -12,7 +13,7 @@ class Event:
     id: int
     topic: str
     source: str
-    payload: dict
+    payload: dict[str, Any]
     created_at: float
     correlation_id: str | None = None
     status: str = "pending"

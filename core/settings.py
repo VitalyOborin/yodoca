@@ -1,7 +1,7 @@
 """Load application settings from config/settings.yaml."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -58,7 +58,7 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 
 def get_default_settings() -> dict[str, Any]:
     """Return a deep copy of default settings. Used by onboarding config writer."""
-    return _deep_copy_nested(_DEFAULTS)
+    return cast(dict[str, Any], _deep_copy_nested(_DEFAULTS))
 
 
 def get_setting(settings: dict[str, Any], path: str, default: Any = None) -> Any:
@@ -93,7 +93,7 @@ def load_settings(config_dir: Path | None = None) -> dict[str, Any]:
 
     if path.exists():
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = cast(Any, yaml.safe_load(path.read_text(encoding="utf-8")))
             if isinstance(data, dict):
                 _deep_merge(result, data)
         except (yaml.YAMLError, OSError):

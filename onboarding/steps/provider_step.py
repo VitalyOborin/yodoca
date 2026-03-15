@@ -5,6 +5,7 @@ select provider -> credentials -> model -> add another?
 """
 
 from collections.abc import Callable
+from typing import cast
 
 import questionary
 from questionary import Choice
@@ -47,7 +48,10 @@ def run_provider_step(state: WizardState) -> bool:
         prompt = (
             "Select a provider:" if not state.providers else "Select another provider:"
         )
-        choice = questionary.select(prompt, choices=all_choices, style=STYLE).ask()
+        choice = cast(
+            str | None,
+            questionary.select(prompt, choices=all_choices, style=STYLE).ask(),
+        )
         if choice is None:
             return False
 
@@ -108,11 +112,14 @@ def _select_model(provider_id: str) -> str | None:
     choices: list[Choice] = [Choice(m, m) for m in models]
     choices.append(Choice("Enter model name manually...", _MANUAL_ENTRY))
 
-    selected = questionary.select(
-        "Default model:",
-        choices=choices,
-        style=STYLE,
-    ).ask()
+    selected = cast(
+        str | None,
+        questionary.select(
+            "Default model:",
+            choices=choices,
+            style=STYLE,
+        ).ask(),
+    )
     if selected is None:
         return None
     if selected == _MANUAL_ENTRY:
@@ -124,9 +131,9 @@ def _ask_until_nonempty(prompt: str, is_password: bool = False) -> str | None:
     """Prompt until non-empty input or user cancelled. Returns None on cancel."""
     while True:
         if is_password:
-            val = questionary.password(prompt, style=STYLE).ask()
+            val = cast(str | None, questionary.password(prompt, style=STYLE).ask())
         else:
-            val = questionary.text(prompt, style=STYLE).ask()
+            val = cast(str | None, questionary.text(prompt, style=STYLE).ask())
         if val is None:
             return None
         if val and val.strip():

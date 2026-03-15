@@ -23,7 +23,7 @@ class UnicodeSQLiteSession(SQLiteSession):
         if not items:
             return
 
-        def _add_items_sync():
+        def _add_items_sync() -> None:
             conn = self._get_connection()
 
             with self._lock if self._is_memory_db else threading.Lock():

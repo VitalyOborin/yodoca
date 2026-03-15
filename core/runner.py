@@ -13,7 +13,7 @@ from core.agents.orchestrator import create_orchestrator_agent
 from core.agents.registry import AgentRegistry
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
-from core.llm import ModelRouter, ModelRouterProtocol
+from core.llm import ModelRouter
 from core.llm.catalog import ModelCatalog
 from core.logging_config import setup_logging
 from core.settings import get_setting, load_settings
@@ -25,7 +25,7 @@ from core.tools.secure_input import make_secure_input_tool
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _build_event_bus(settings: dict) -> EventBus:
+def _build_event_bus(settings: dict[str, Any]) -> EventBus:
     eb_cfg = settings.get("event_bus", {})
     db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
     return EventBus(
@@ -38,7 +38,9 @@ def _build_event_bus(settings: dict) -> EventBus:
     )
 
 
-def _build_loader_router(settings: dict) -> tuple:
+def _build_loader_router(
+    settings: dict[str, Any],
+) -> tuple[Loader, MessageRouter, Path, Path, asyncio.Event]:
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
     shutdown_event = asyncio.Event()
@@ -63,8 +65,8 @@ def _create_agent(
     loader: Loader,
     router: MessageRouter,
     event_bus: EventBus,
-    settings: dict,
-    model_router: ModelRouterProtocol,
+    settings: dict[str, Any],
+    model_router: ModelRouter,
     registry: AgentRegistry,
 ) -> Any:
     from core.agents.factory import AgentFactory
@@ -95,7 +97,7 @@ def _create_agent(
 
 def _configure_thread(
     router: MessageRouter,
-    settings: dict,
+    settings: dict[str, Any],
     data_dir: Path,
     event_bus: EventBus,
 ) -> None:

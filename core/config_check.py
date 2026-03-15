@@ -5,6 +5,7 @@ Determines whether the application is sufficiently configured to start core.
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import yaml
 from dotenv import dotenv_values
@@ -12,7 +13,7 @@ from dotenv import dotenv_values
 from core import secrets
 
 
-def _provider_has_key(cfg: dict, env_vars: dict[str, str]) -> bool:
+def _provider_has_key(cfg: dict[str, Any], env_vars: dict[str, str]) -> bool:
     if cfg.get("api_key_literal"):
         return True
     secret = cfg.get("api_key_secret")
@@ -22,9 +23,9 @@ def _provider_has_key(cfg: dict, env_vars: dict[str, str]) -> bool:
 
 
 def _check_default_agent(
-    settings: dict,
-    providers: dict,
-    provider_has_key: Callable[[dict], bool],
+    settings: dict[str, Any],
+    providers: dict[str, Any],
+    provider_has_key: Callable[[dict[str, Any]], bool],
 ) -> tuple[bool, str]:
     default_agent = (settings.get("agents") or {}).get("default")
     if not default_agent or not isinstance(default_agent, dict):
@@ -42,7 +43,7 @@ def _check_default_agent(
     return True, "ok"
 
 
-def _read_settings(settings_file: Path) -> tuple[dict, str | None]:
+def _read_settings(settings_file: Path) -> tuple[dict[str, Any], str | None]:
     """Load and parse settings YAML. Returns (settings, None) or ({}, error_message)."""
     try:
         data = yaml.safe_load(settings_file.read_text(encoding="utf-8")) or {}
@@ -68,10 +69,11 @@ def is_configured(
     providers = settings.get("providers") or {}
     if not providers:
         return False, "No providers configured"
-    env_vars = dict(dotenv_values(env_file)) if env_file.exists() else {}
+    raw_env = dict(dotenv_values(env_file)) if env_file.exists() else {}
+    env_vars = {k: v for k, v in raw_env.items() if isinstance(v, str)}
     env_vars.update(get_current_env())
 
-    def has_key(cfg):
+    def has_key(cfg: dict[str, Any]) -> bool:
         return _provider_has_key(cfg, env_vars)
 
     return _check_default_agent(settings, providers, has_key)

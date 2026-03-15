@@ -43,10 +43,13 @@ class DeclarativeAgentAdapter:
         return self._agent is not None
 
     def get_agent_descriptor(self) -> AgentDescriptor:
+        agent_cfg = self._manifest.agent
+        if agent_cfg is None:
+            raise RuntimeError("Declarative agent config is missing in manifest")
         return AgentDescriptor(
             name=self._manifest.name,
             description=self._manifest.description,
-            integration_mode=self._manifest.agent.integration_mode,
+            integration_mode=agent_cfg.integration_mode,
         )
 
     async def invoke(
@@ -59,10 +62,17 @@ class DeclarativeAgentAdapter:
                 error="Agent not initialized",
             )
         try:
+            agent_cfg = self._manifest.agent
+            if agent_cfg is None:
+                return AgentResponse(
+                    status="error",
+                    content="",
+                    error="Declarative agent config is missing in manifest",
+                )
             result = await Runner.run(
                 self._agent,
                 task,
-                max_turns=self._manifest.agent.limits.max_turns,
+                max_turns=agent_cfg.limits.max_turns,
             )
             return AgentResponse(
                 status="success",
