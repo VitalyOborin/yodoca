@@ -29,10 +29,10 @@ describe('useScheduleStore', () => {
         id: 2,
         type: 'recurring',
         topic: 'system.agent.background',
-        message: 'Health check',
+        message: 'Health check active',
         channel_id: null,
         payload: {},
-        fires_at_iso: '2026-03-16T08:00:00',
+        fires_at_iso: '2026-03-16T10:00:00',
         status: 'active',
         cron_expr: '0 * * * *',
         every_seconds: null,
@@ -41,6 +41,20 @@ describe('useScheduleStore', () => {
       },
       {
         id: 3,
+        type: 'recurring',
+        topic: 'system.agent.background',
+        message: 'Paused task',
+        channel_id: null,
+        payload: {},
+        fires_at_iso: '2026-03-16T08:00:00',
+        status: 'paused',
+        cron_expr: '*/10 * * * *',
+        every_seconds: null,
+        until_iso: null,
+        created_at: 5,
+      },
+      {
+        id: 4,
         type: 'one_shot',
         topic: 'system.user.notify',
         message: 'Done',
@@ -53,14 +67,28 @@ describe('useScheduleStore', () => {
         until_iso: null,
         created_at: 3,
       },
+      {
+        id: 5,
+        type: 'recurring',
+        topic: 'system.agent.background',
+        message: 'Cancelled recurring',
+        channel_id: null,
+        payload: {},
+        fires_at_iso: '2026-03-16T07:00:00',
+        status: 'cancelled',
+        cron_expr: '0 9 * * *',
+        every_seconds: null,
+        until_iso: null,
+        created_at: 4,
+      },
     ]);
 
     const store = useScheduleStore();
     await store.loadSchedules();
 
     expect(store.activeOnce.map((item) => item.id)).toEqual([1]);
-    expect(store.activeRecurring.map((item) => item.id)).toEqual([2]);
-    expect(store.history.map((item) => item.id)).toEqual([3]);
+    expect(store.activeRecurring.map((item) => item.id)).toEqual([3, 2]);
+    expect(store.history.map((item) => item.id)).toEqual([5, 4]);
   });
 
   it('rolls back optimistic remove on error', async () => {

@@ -23,6 +23,11 @@ export const useScheduleStore = defineStore('schedules', () => {
   const error = ref<string | null>(null);
   const activeTab = ref<ScheduleTab>('once');
 
+  function parseScheduleTime(iso: string): number | null {
+    const value = Date.parse(iso);
+    return Number.isFinite(value) ? value : null;
+  }
+
   const activeOnce = computed(() =>
     schedules.value
       .filter((item) => item.type === 'one_shot' && item.status === 'scheduled')
@@ -33,9 +38,21 @@ export const useScheduleStore = defineStore('schedules', () => {
   );
 
   const activeRecurring = computed(() =>
-    schedules.value.filter(
-      (item) => item.type === 'recurring' && item.status === 'active',
-    ),
+    schedules.value
+      .filter(
+        (item) =>
+          item.type === 'recurring'
+          && (item.status === 'active' || item.status === 'paused'),
+      )
+      .sort((a, b) => {
+        const at = parseScheduleTime(a.fires_at_iso);
+        const bt = parseScheduleTime(b.fires_at_iso);
+        if (at !== null && bt !== null && at !== bt) return at - bt;
+        if (at !== null && bt === null) return -1;
+        if (at === null && bt !== null) return 1;
+        if (a.created_at !== b.created_at) return b.created_at - a.created_at;
+        return a.id - b.id;
+      }),
   );
 
   const history = computed(() =>

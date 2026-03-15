@@ -96,7 +96,7 @@ describe('schedules api client', () => {
       message: 'Check',
       every_seconds: 60,
     });
-    await updateRecurringSchedule('one_shot', 11, { status: 'paused' });
+    await updateRecurringSchedule('recurring', 11, { status: 'paused' });
     await deleteSchedule('recurring', 11);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -111,13 +111,34 @@ describe('schedules api client', () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      '/api/schedules/one_shot/11',
+      '/api/schedules/recurring/11',
       expect.objectContaining({ method: 'PATCH' }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
       '/api/schedules/recurring/11',
       expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('uses recurring patch endpoint for resume transition', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({
+        success: true,
+        schedule_id: 12,
+        next_fire_iso: '2026-03-16T10:00:00',
+        message: 'resumed',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateRecurringSchedule('recurring', 12, { status: 'active' });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/schedules/recurring/12',
+      expect.objectContaining({ method: 'PATCH' }),
     );
   });
 
