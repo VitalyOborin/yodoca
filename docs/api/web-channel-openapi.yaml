@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Yodoca Web Channel API
-  version: 0.4.0
+  version: 0.5.0
   description: >
     OpenAPI specification for the experimental web channel API with first-class
     thread and project resources.
@@ -15,6 +15,7 @@ tags:
   - name: threads
   - name: projects
   - name: notifications
+  - name: schedules
 paths:
   /v1/models:
     get:
@@ -433,6 +434,230 @@ paths:
                 $ref: "#/components/schemas/NotificationsResponse"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
+  /api/schedules:
+    get:
+      tags: [schedules]
+      summary: List all schedules
+      description: >
+        Returns all one-shot and recurring schedules stored in the scheduler
+        extension. Use the optional `status` query parameter to narrow the
+        result set. Valid values differ by schedule type:
+        one-shot — `scheduled`, `fired`, `cancelled`;
+        recurring — `active`, `paused`, `cancelled`.
+        When `status=active` is supplied, only recurring schedules with
+        `status=active` **and** one-shot schedules with `status=scheduled` are
+        returned (i.e. the filter is applied as "currently pending").
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: >
+            Filter by schedule status. For one-shot schedules the applicable
+            values are `scheduled`, `fired`, `cancelled`. For recurring
+            schedules: `active`, `paused`, `cancelled`. The special alias
+            `active` returns only pending/active schedules of both types.
+          schema:
+            type: string
+            enum: [scheduled, fired, active, paused, cancelled]
+      responses:
+        "200":
+          description: Schedule list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleListResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+  /api/schedules/once:
+    post:
+      tags: [schedules]
+      summary: Create a one-shot schedule
+      description: >
+        Schedule a single event to fire once at a specific time.
+        Provide **exactly one** of `delay_seconds` (relative) or `at_iso`
+        (absolute ISO 8601 datetime). The event is published to the Event Bus
+        under `topic` when it fires. Use system topics (`system.user.notify`,
+        `system.agent.task`, `system.agent.background`) for built-in
+        integrations; any other topic requires `payload_extra`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOnceScheduleRequest"
+            examples:
+              delay:
+                summary: Fire in 5 minutes
+                value:
+                  topic: system.user.notify
+                  message: "Reminder: stand-up in 5 minutes"
+                  delay_seconds: 300
+              absolute:
+                summary: Fire at a specific time
+                value:
+                  topic: system.user.notify
+                  message: "Good morning!"
+                  at_iso: "2026-03-16T09:00:00"
+                  channel_id: telegram_channel
+      responses:
+        "201":
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleOnceResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+  /api/schedules/recurring:
+    post:
+      tags: [schedules]
+      summary: Create a recurring schedule
+      description: >
+        Create a schedule that fires repeatedly according to a cron expression
+        or a fixed interval. Provide **exactly one** of `cron` or
+        `every_seconds`. Optionally set `until_iso` to limit the schedule
+        duration. The schedule starts in `active` status immediately after
+        creation.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecurringScheduleRequest"
+            examples:
+              cron:
+                summary: Daily at 09:00
+                value:
+                  topic: system.user.notify
+                  message: "Daily stand-up time!"
+                  cron: "0 9 * * *"
+              interval:
+                summary: Every 10 minutes until midnight
+                value:
+                  topic: system.agent.background
+                  message: "Run health check"
+                  every_seconds: 600
+                  until_iso: "2026-03-16T00:00:00"
+      responses:
+        "201":
+          description: Recurring schedule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleRecurringResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+  /api/schedules/{type}/{id}:
+    delete:
+      tags: [schedules]
+      summary: Cancel a schedule
+      description: >
+        Cancel a schedule by its type and ID. For one-shot schedules only
+        `scheduled` entries can be cancelled (already `fired` schedules are
+        immutable). For recurring schedules, cancellation is always possible
+        regardless of current status.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ScheduleType"
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Schedule cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: >
+            Cannot cancel — the one-shot schedule has already been fired or
+            was previously cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    patch:
+      tags: [schedules]
+      summary: Update or pause/resume a schedule
+      description: >
+        Update fields of a recurring schedule or change its status
+        (`active` / `paused`). Applies **only to recurring schedules** — use
+        `DELETE` to cancel a one-shot. Supplying `cron` or `every_seconds`
+        also resets `next_fire_at` immediately. At most one of `cron` /
+        `every_seconds` may be present per request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ScheduleType"
+        - $ref: "#/components/parameters/ScheduleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScheduleRequest"
+            examples:
+              pause:
+                summary: Pause a recurring schedule
+                value:
+                  status: paused
+              resume:
+                summary: Resume a paused recurring schedule
+                value:
+                  status: active
+              change_cron:
+                summary: Change cron expression
+                value:
+                  cron: "0 10 * * 1-5"
+              extend:
+                summary: Extend end datetime
+                value:
+                  until_iso: "2026-12-31T23:59:59"
+      responses:
+        "200":
+          description: Schedule updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateScheduleResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "422":
+          description: >
+            Semantic validation error — e.g. both `cron` and `every_seconds`
+            supplied, or `until_iso` is in the past.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 components:
   securitySchemes:
     bearerAuth:
@@ -447,6 +672,22 @@ components:
       description: Optional thread identifier for routing into an existing conversation thread.
       schema:
         type: string
+    ScheduleType:
+      name: type
+      in: path
+      required: true
+      description: Schedule type — `one_shot` or `recurring`.
+      schema:
+        type: string
+        enum: [one_shot, recurring]
+    ScheduleId:
+      name: id
+      in: path
+      required: true
+      description: Numeric schedule ID as returned by the create endpoints.
+      schema:
+        type: integer
+        minimum: 1
   responses:
     UnauthorizedError:
       description: Missing or invalid Bearer token
@@ -479,6 +720,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     TimeoutError:
       description: The request exceeded `request_timeout_seconds`
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailableError:
+      description: Scheduler extension is not loaded or not initialized
       content:
         application/json:
           schema:
@@ -789,4 +1036,228 @@ components:
         state: {}
         forwardedProps: {}
       required: [threadId, runId]
+    ScheduleItem:
+      type: object
+      description: >
+        A single schedule entry (one-shot or recurring). Fields `cron_expr`,
+        `every_seconds`, and `until_iso` are only present for recurring entries.
+        `fires_at_iso` is the next (or only) fire time in ISO 8601.
+      properties:
+        id: { type: integer }
+        type:
+          type: string
+          enum: [one_shot, recurring]
+        topic: { type: string }
+        message: { type: string, nullable: true }
+        channel_id: { type: string, nullable: true }
+        payload:
+          type: object
+          additionalProperties: true
+          description: Raw Event Bus payload that will be emitted when the schedule fires.
+        fires_at_iso:
+          type: string
+          format: date-time
+          description: Next (or only) scheduled fire time in ISO 8601.
+        status:
+          type: string
+          description: >
+            One-shot statuses: `scheduled`, `fired`, `cancelled`.
+            Recurring statuses: `active`, `paused`, `cancelled`.
+        cron_expr:
+          type: string
+          nullable: true
+          description: Cron expression — present only for recurring schedules.
+        every_seconds:
+          type: number
+          nullable: true
+          description: Fixed interval in seconds — present only for recurring schedules.
+        until_iso:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional expiry datetime — present only for recurring schedules.
+        created_at: { type: integer, description: Unix timestamp of creation. }
+      required: [id, type, topic, payload, fires_at_iso, status, created_at]
+    ScheduleListResponse:
+      type: object
+      properties:
+        schedules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleItem"
+        count: { type: integer, minimum: 0 }
+      required: [schedules, count]
+    CreateOnceScheduleRequest:
+      type: object
+      description: >
+        Payload for creating a one-shot schedule. Exactly one of `delay_seconds`
+        or `at_iso` must be supplied.
+      properties:
+        topic:
+          type: string
+          description: >
+            Event Bus topic to emit when the schedule fires.
+            Built-in system topics: `system.user.notify` (delivers `message` as
+            text to the user), `system.agent.task` (sends `message` as a prompt
+            to the agent), `system.agent.background` (agent task without a
+            user-facing response). Any custom topic requires `payload_extra`.
+          examples:
+            - system.user.notify
+            - system.agent.task
+            - system.agent.background
+        message:
+          type: string
+          description: >
+            Human-readable text (for `system.user.notify`) or instruction prompt
+            (for `system.agent.task` / `system.agent.background`). For custom
+            topics this becomes the `message` field of `payload_extra` unless
+            overridden there.
+        channel_id:
+          type: string
+          nullable: true
+          description: >
+            Optional delivery channel ID (e.g. `telegram_channel`).
+            If omitted, the default channel is used.
+        payload_extra:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            Additional key/value fields merged into the Event Bus payload.
+            Intended for custom (non-system) topics only.
+        delay_seconds:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: >
+            Number of seconds from now until the schedule fires.
+            Mutually exclusive with `at_iso`.
+        at_iso:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Absolute fire time as ISO 8601 datetime (e.g. `2026-03-16T09:00:00`).
+            Must be in the future. Mutually exclusive with `delay_seconds`.
+      required: [topic, message]
+    ScheduleOnceResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        schedule_id: { type: integer }
+        topic: { type: string }
+        fires_in_seconds: { type: integer, minimum: 0 }
+        status: { type: string, enum: [scheduled] }
+        error: { type: string, nullable: true }
+      required: [success, schedule_id, topic, fires_in_seconds, status]
+    CreateRecurringScheduleRequest:
+      type: object
+      description: >
+        Payload for creating a recurring schedule. Exactly one of `cron` or
+        `every_seconds` must be supplied.
+      properties:
+        topic:
+          type: string
+          description: >
+            Event Bus topic to emit on each fire. Same semantics as for
+            `CreateOnceScheduleRequest.topic`.
+          examples:
+            - system.user.notify
+            - system.agent.background
+        message:
+          type: string
+          description: >
+            Text or prompt delivered with each event. Same semantics as for
+            `CreateOnceScheduleRequest.message`.
+        channel_id:
+          type: string
+          nullable: true
+          description: Optional delivery channel ID.
+        payload_extra:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: >
+            Additional key/value fields merged into the Event Bus payload for
+            custom topics.
+        cron:
+          type: string
+          nullable: true
+          description: >
+            Standard 5-field cron expression (e.g. `0 9 * * *` for daily at
+            09:00, `*/15 * * * *` for every 15 minutes).
+            Mutually exclusive with `every_seconds`.
+        every_seconds:
+          type: number
+          minimum: 1
+          nullable: true
+          description: >
+            Fixed repeat interval in seconds (positive number).
+            Mutually exclusive with `cron`.
+        until_iso:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Optional ISO 8601 datetime after which the schedule is
+            auto-cancelled. Must be in the future.
+      required: [topic, message]
+    ScheduleRecurringResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        schedule_id: { type: integer }
+        next_fire_iso:
+          type: string
+          format: date-time
+        status: { type: string, enum: [created] }
+        error: { type: string, nullable: true }
+      required: [success, schedule_id, next_fire_iso, status]
+    UpdateScheduleRequest:
+      type: object
+      description: >
+        Partial update for a **recurring** schedule. All fields are optional;
+        supply only those you want to change. At most one of `cron` /
+        `every_seconds` may be present. Changing `cron` or `every_seconds`
+        immediately recalculates `next_fire_at`.
+      properties:
+        cron:
+          type: string
+          nullable: true
+          description: >
+            New cron expression. Clears any existing `every_seconds` on the
+            schedule. Mutually exclusive with `every_seconds` in this request.
+        every_seconds:
+          type: number
+          minimum: 1
+          nullable: true
+          description: >
+            New fixed interval in seconds. Clears any existing `cron` on the
+            schedule. Mutually exclusive with `cron` in this request.
+        until_iso:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            New or updated end datetime in ISO 8601. Pass `null` explicitly to
+            remove an existing expiry and make the schedule open-ended.
+        status:
+          type: string
+          enum: [active, paused]
+          nullable: true
+          description: >
+            Set to `paused` to suspend firing without cancelling; set back to
+            `active` to resume. Use `DELETE` to permanently cancel.
+    UpdateScheduleResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        schedule_id: { type: integer }
+        next_fire_iso:
+          type: string
+          format: date-time
+          description: Next scheduled fire time after the update.
+        message: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+      required: [success, schedule_id, next_fire_iso]
 
