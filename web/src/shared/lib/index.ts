@@ -2,6 +2,7 @@ export {
   formatDate,
   formatDateTime,
   formatMessageTime,
+  formatInterval,
   formatRelative,
   formatRelativeTime,
   formatRelativeTimeFromEpoch,

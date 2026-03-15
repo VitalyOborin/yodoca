@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   formatDateTime,
+  formatInterval,
   formatRelative,
   formatTime,
   updateDateTimePreferences,
@@ -64,5 +65,12 @@ describe('date formatting', () => {
     const now = new Date('2026-03-15T13:05:09Z');
     const formatted = formatRelative(new Date('2026-03-15T13:05:09Z'), now);
     expect(formatted).not.toBe('just now');
+  });
+
+  it('formats repeating interval into human-readable units', () => {
+    expect(formatInterval(60)).toBe('Every 1 minute');
+    expect(formatInterval(3_600)).toBe('Every 1 hour');
+    expect(formatInterval(7_200)).toBe('Every 2 hours');
+    expect(formatInterval(86_400)).toBe('Every 1 day');
   });
 });

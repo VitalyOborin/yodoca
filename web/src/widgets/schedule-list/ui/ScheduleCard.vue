@@ -4,7 +4,7 @@ import { BellRing, Bot, Clock3, RefreshCcw } from 'lucide-vue-next';
 import cronstrue from 'cronstrue';
 import { ScheduleActions } from '@/features/manage-schedule';
 import type { ScheduleItem } from '@/shared/api';
-import { formatScheduleAbsolute, formatScheduleRelative } from '@/shared/lib';
+import { formatInterval, formatScheduleAbsolute, formatScheduleRelative } from '@/shared/lib';
 
 const props = defineProps<{
   item: ScheduleItem;
@@ -77,7 +77,10 @@ const statusBadgeClass = computed(() => {
           {{ cronLabel }}
         </p>
         <p v-else-if="item.every_seconds" class="mt-2 text-sm text-muted-foreground">
-          Every {{ item.every_seconds }} seconds
+          {{ formatInterval(item.every_seconds) }}
+        </p>
+        <p v-if="item.until_iso" class="mt-2 text-sm text-muted-foreground">
+          Until {{ formatScheduleAbsolute(item.until_iso) }}
         </p>
       </div>
     </div>

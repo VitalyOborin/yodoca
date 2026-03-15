@@ -7,6 +7,7 @@ const scheduleStore = {
   loading: false,
   saving: false,
   error: null as string | null,
+  lastErrorStatus: null as number | null,
   activeTab: 'once' as 'once' | 'recurring',
   activeOnce: [],
   activeRecurring: [],

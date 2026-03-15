@@ -168,3 +168,24 @@ export function formatScheduleAbsolute(iso: string): string {
 export function formatScheduleRelative(iso: string): string {
   return formatRelative(iso);
 }
+
+function formatUnitLabel(value: number, singular: string, plural: string): string {
+  return value === 1 ? singular : plural;
+}
+
+export function formatInterval(seconds: number): string {
+  const safeSeconds = Math.max(1, Math.round(seconds));
+  if (safeSeconds % 86_400 === 0) {
+    const days = safeSeconds / 86_400;
+    return `Every ${days} ${formatUnitLabel(days, 'day', 'days')}`;
+  }
+  if (safeSeconds % 3_600 === 0) {
+    const hours = safeSeconds / 3_600;
+    return `Every ${hours} ${formatUnitLabel(hours, 'hour', 'hours')}`;
+  }
+  if (safeSeconds % 60 === 0) {
+    const minutes = safeSeconds / 60;
+    return `Every ${minutes} ${formatUnitLabel(minutes, 'minute', 'minutes')}`;
+  }
+  return `Every ${safeSeconds} ${formatUnitLabel(safeSeconds, 'second', 'seconds')}`;
+}

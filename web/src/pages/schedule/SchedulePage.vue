@@ -16,6 +16,11 @@ import { ScheduleList } from '@/widgets/schedule-list';
 const scheduleStore = useScheduleStore();
 const dialogOpen = ref(false);
 const editItem = ref<ScheduleItem | null>(null);
+const schedulerUnavailableRetries = ref(0);
+const nextAllowedPollAt = ref(0);
+
+const BASE_POLL_INTERVAL_MS = 30_000;
+const MAX_POLL_INTERVAL_MS = 5 * 60_000;
 
 const pageError = computed(() => scheduleStore.error);
 
@@ -49,14 +54,31 @@ async function onUpdateRecurring(id: number, payload: UpdateRecurringRequest) {
   closeDialog();
 }
 
+function nextBackoffMs(retries: number): number {
+  const multiplier = 2 ** Math.max(0, retries - 1);
+  return Math.min(BASE_POLL_INTERVAL_MS * multiplier, MAX_POLL_INTERVAL_MS);
+}
+
+async function refreshSchedules() {
+  await scheduleStore.loadSchedules();
+  if (scheduleStore.lastErrorStatus === 503) {
+    schedulerUnavailableRetries.value += 1;
+    nextAllowedPollAt.value = Date.now() + nextBackoffMs(schedulerUnavailableRetries.value);
+    return;
+  }
+  schedulerUnavailableRetries.value = 0;
+  nextAllowedPollAt.value = Date.now() + BASE_POLL_INTERVAL_MS;
+}
+
 onMounted(() => {
-  void scheduleStore.loadSchedules();
+  void refreshSchedules();
 });
 
 useIntervalFn(() => {
   if (document.visibilityState !== 'visible') return;
-  void scheduleStore.loadSchedules();
-}, 30_000);
+  if (Date.now() < nextAllowedPollAt.value) return;
+  void refreshSchedules();
+}, BASE_POLL_INTERVAL_MS);
 
 function onCancel(type: 'one_shot' | 'recurring', id: number) {
   void scheduleStore.remove(type, id);

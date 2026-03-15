@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
+  ApiRequestError,
   createOnceSchedule,
   createRecurringSchedule,
   deleteSchedule as apiDeleteSchedule,
@@ -21,6 +22,7 @@ export const useScheduleStore = defineStore('schedules', () => {
   const loading = ref(false);
   const saving = ref(false);
   const error = ref<string | null>(null);
+  const lastErrorStatus = ref<number | null>(null);
   const activeTab = ref<ScheduleTab>('once');
 
   function parseScheduleTime(iso: string): number | null {
@@ -64,10 +66,13 @@ export const useScheduleStore = defineStore('schedules', () => {
   async function loadSchedules(status?: ScheduleStatus) {
     loading.value = true;
     error.value = null;
+    lastErrorStatus.value = null;
     try {
       schedules.value = await fetchSchedules(status);
     } catch (cause) {
       schedules.value = [];
+      lastErrorStatus.value =
+        cause instanceof ApiRequestError ? cause.status : null;
       error.value =
         cause instanceof Error ? cause.message : 'Failed to load schedules';
     } finally {
@@ -153,6 +158,7 @@ export const useScheduleStore = defineStore('schedules', () => {
     loading,
     saving,
     error,
+    lastErrorStatus,
     activeTab,
     activeOnce,
     activeRecurring,
