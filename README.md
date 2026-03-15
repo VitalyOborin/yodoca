@@ -302,13 +302,13 @@ name: Telegram Channel
 version: "0.2.0"
 description: |
   Telegram Bot API channel via aiogram long-polling.
-  Setup: save secret 'telegram_channel_token' (Bot API token from @BotFather),
+  Setup: save secret 'telegram_bot_token' (Bot API token from @BotFather),
   then call request_restart().
 entrypoint: main:TelegramChannelExtension
 depends_on:
   - kv
 config:
-  token_secret: telegram_channel_token
+  token_secret: telegram_bot_token
   polling_timeout: 10
   streaming_enabled: true
 enabled: true

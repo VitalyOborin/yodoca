@@ -46,7 +46,7 @@ def test_clear_saved_secrets_uses_registry_env_settings_and_manifests(
     )
     (root / ".env").write_text("ENV_ONLY=value\n", encoding="utf-8")
     (root / "sandbox" / "extensions" / "telegram_channel" / "manifest.yaml").write_text(
-        "config:\n  token_secret: telegram_channel_token\nsecrets:\n  - manifest_declared\n",
+        "config:\n  token_secret: telegram_bot_token\nsecrets:\n  - manifest_declared\n",
         encoding="utf-8",
     )
 
@@ -64,5 +64,5 @@ def test_clear_saved_secrets_uses_registry_env_settings_and_manifests(
         "OPENAI_API_KEY",
         "REGISTRY_ONLY",
         "manifest_declared",
-        "telegram_channel_token",
+        "telegram_bot_token",
     }

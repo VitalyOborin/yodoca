@@ -16,7 +16,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 from aiogram.utils.token import TokenValidationError, validate_token
-from formatting import escape_html, md_to_tg_html
+from formatting import escape_html, md_to_tg_html, split_for_telegram
 
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
@@ -116,9 +116,7 @@ class TelegramChannelExtension:
             raise RuntimeError("Extension not initialized")
         value = (value or "").strip() or None
         if name == "token":
-            token_key = self._ctx.get_config(
-                "token_secret", f"{self._ctx.extension_id}_token"
-            )
+            token_key = self._ctx.get_config("token_secret", "telegram_bot_token")
             if value:
                 await self._ctx.set_secret(token_key, value)
                 await self._activate_token(value)
@@ -133,9 +131,7 @@ class TelegramChannelExtension:
         """SetupProvider: verify token is valid via Telegram API. chat_id is optional (auto-captured)."""
         if not self._ctx:
             return False, "Extension not initialized"
-        token_key = self._ctx.get_config(
-            "token_secret", f"{self._ctx.extension_id}_token"
-        )
+        token_key = self._ctx.get_config("token_secret", "telegram_bot_token")
         token = await self._ctx.get_secret(token_key)
         if not token and self._kv:
             token = await self._kv.get(f"{self._ctx.extension_id}.token")
@@ -191,13 +187,22 @@ class TelegramChannelExtension:
 
         self._dp.message.register(on_message)
 
+    async def _close_bot(self) -> None:
+        """Close the active bot session if one exists."""
+        if self._bot:
+            try:
+                await self._bot.session.close()
+            except Exception:
+                pass
+            self._bot = None
+
     async def _activate_token(self, token: str) -> None:
         if not self._ctx:
             return
         token = token.strip()
+        await self._close_bot()
         if not token:
             self._token = None
-            self._bot = None
             self._dp = None
             return
         try:
@@ -205,7 +210,6 @@ class TelegramChannelExtension:
         except TokenValidationError as e:
             self._ctx.logger.warning("Telegram token format is invalid: %s", e)
             self._token = None
-            self._bot = None
             self._dp = None
             return
 
@@ -234,7 +238,7 @@ class TelegramChannelExtension:
         )
         self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
-        token_key = context.get_config("token_secret", f"{context.extension_id}_token")
+        token_key = context.get_config("token_secret", "telegram_bot_token")
         token = await context.get_secret(token_key)
         if not token:
             token = await self._kv.get(f"{context.extension_id}.token")
@@ -269,16 +273,11 @@ class TelegramChannelExtension:
         pass
 
     async def stop(self) -> None:
-        """Loader cancels run_background task; no extra cleanup needed."""
-        pass
+        if self._dp:
+            self._dp.stop_polling()
 
     async def destroy(self) -> None:
-        if self._bot:
-            try:
-                await self._bot.session.close()
-            except Exception:
-                pass
-            self._bot = None
+        await self._close_bot()
         self._dp = None
         self._token = None
 
@@ -291,11 +290,14 @@ class TelegramChannelExtension:
 
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""
+        backoff = 1.0
+        max_backoff = 60.0
         while True:
             try:
                 if not self._bot or not self._dp or not self._token:
                     await asyncio.sleep(0.5)
                     continue
+                backoff = 1.0  # reset on every successful polling start
                 await self._dp.start_polling(
                     self._bot,
                     handle_signals=False,
@@ -307,7 +309,8 @@ class TelegramChannelExtension:
             except Exception as e:
                 if self._ctx:
                     self._ctx.logger.exception("Telegram polling failed: %s", e)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     # ------------------------------------------------------------------ #
     # Streaming helpers                                                     #
@@ -327,7 +330,10 @@ class TelegramChannelExtension:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    pass
+                    if self._ctx:
+                        self._ctx.logger.debug(
+                            "Typing heartbeat send_chat_action failed", exc_info=True
+                        )
         except asyncio.CancelledError:
             pass
 
@@ -371,7 +377,8 @@ class TelegramChannelExtension:
             )
             state.last_edit_at = now
         except Exception:
-            pass
+            if self._ctx:
+                self._ctx.logger.debug("Stream chunk edit failed", exc_info=True)
 
     async def on_stream_status(self, user_id: str, status: str) -> None:
         if not self._streaming_enabled or not self._bot:
@@ -379,7 +386,10 @@ class TelegramChannelExtension:
         try:
             await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
         except Exception:
-            return
+            if self._ctx:
+                self._ctx.logger.debug(
+                    "Stream status send_chat_action failed", exc_info=True
+                )
 
     async def on_stream_end(self, user_id: str, full_text: str) -> None:
         if not self._bot:
@@ -397,31 +407,20 @@ class TelegramChannelExtension:
             except asyncio.CancelledError:
                 pass
         try:
-            formatted = md_to_tg_html(full_text)
-            if len(formatted) <= MAX_TG_MESSAGE_LEN:
-                await self._bot.edit_message_text(
+            parts = split_for_telegram(full_text, MAX_TG_MESSAGE_LEN)
+            first, *rest = parts if parts else [md_to_tg_html(full_text)]
+            await self._bot.edit_message_text(
+                chat_id=self._chat_id,
+                message_id=state.message_id,
+                text=first,
+                parse_mode=ParseMode.HTML,
+            )
+            for part in rest:
+                await self._bot.send_message(
                     chat_id=self._chat_id,
-                    message_id=state.message_id,
-                    text=formatted,
+                    text=part,
                     parse_mode=ParseMode.HTML,
                 )
-            else:
-                parts = [
-                    formatted[i : i + MAX_TG_MESSAGE_LEN]
-                    for i in range(0, len(formatted), MAX_TG_MESSAGE_LEN)
-                ]
-                await self._bot.edit_message_text(
-                    chat_id=self._chat_id,
-                    message_id=state.message_id,
-                    text=parts[0],
-                    parse_mode=ParseMode.HTML,
-                )
-                for part in parts[1:]:
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        text=part,
-                        parse_mode=ParseMode.HTML,
-                    )
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception(
