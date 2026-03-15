@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue';
 import { Button } from '@/components/ui/button';
+import { Pagination } from '@/components/ui/pagination';
 import { useInboxStore } from '@/entities/inbox';
 import { InboxDetailPanel } from '@/features/inbox-detail';
 import { AppNavigationSidebar } from '@/widgets/navigation';
@@ -13,10 +14,14 @@ const pageError = computed(() => inboxStore.error);
 const items = computed(() => inboxStore.items);
 const selectedId = computed(() => inboxStore.selectedId);
 const selectedItem = computed(() => inboxStore.selectedItem);
+const total = computed(() => inboxStore.total);
+const pageLimit = computed(() => inboxStore.pageLimit);
+const pageOffset = computed(() => inboxStore.pageOffset);
 
 watch(
   () => [inboxStore.sourceFilter, inboxStore.entityTypeFilter, inboxStore.statusFilter, inboxStore.unreadOnly],
   () => {
+    inboxStore.resetPagination();
     void inboxStore.loadInbox();
   },
 );
@@ -30,8 +35,7 @@ function onSelectItem(id: number) {
 }
 
 function onMarkAllRead() {
-  const source = inboxStore.sourceFilter === 'all' ? undefined : inboxStore.sourceFilter;
-  void inboxStore.readAll(source);
+  void inboxStore.readAll();
 }
 
 function onReadItem(id: number) {
@@ -40,6 +44,10 @@ function onReadItem(id: number) {
 
 function onDeleteItem(id: number) {
   void inboxStore.softDelete(id);
+}
+
+function onPageOffsetChange(offset: number) {
+  inboxStore.setOffset(offset);
 }
 
 onMounted(() => {
@@ -82,16 +90,25 @@ onMounted(() => {
           </div>
 
           <div v-else class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
-            <InboxList
-              :loading="inboxStore.loading"
-              :items="items"
-              :tabs="inboxStore.sourceTabs"
-              :active-source="activeSource"
-              :unread-by-source="inboxStore.sourceUnread"
-              :selected-id="selectedId"
-              @select-source="onSelectSource"
-              @select-item="onSelectItem"
-            />
+            <div class="space-y-3">
+              <InboxList
+                :loading="inboxStore.loading"
+                :items="items"
+                :tabs="inboxStore.sourceTabs"
+                :active-source="activeSource"
+                :unread-by-source="inboxStore.sourceUnread"
+                :selected-id="selectedId"
+                @select-source="onSelectSource"
+                @select-item="onSelectItem"
+              />
+              <Pagination
+                :total="total"
+                :limit="pageLimit"
+                :offset="pageOffset"
+                :disabled="inboxStore.loading || inboxStore.saving"
+                @update-offset="onPageOffsetChange"
+              />
+            </div>
             <InboxDetailPanel
               :item="selectedItem"
               :busy="inboxStore.saving"

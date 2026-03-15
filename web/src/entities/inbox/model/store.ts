@@ -18,6 +18,9 @@ export const useInboxStore = defineStore('inbox', () => {
   const items = ref<InboxItem[]>([]);
   const total = ref(0);
   const unreadCount = ref(0);
+  const sourceUnread = ref<Record<string, number>>({ all: 0 });
+  const pageLimit = ref(50);
+  const pageOffset = ref(0);
   const loading = ref(false);
   const saving = ref(false);
   const error = ref<string | null>(null);
@@ -40,17 +43,6 @@ export const useInboxStore = defineStore('inbox', () => {
     return ['all', ...Array.from(uniq).sort((a, b) => a.localeCompare(b))];
   });
 
-  const sourceUnread = computed(() => {
-    const counts: Record<string, number> = { all: 0 };
-    for (const item of items.value) {
-      if (item.status !== 'active' || item.is_read) continue;
-      const allCount = counts.all ?? 0;
-      counts.all = allCount + 1;
-      counts[item.source_type] = (counts[item.source_type] ?? 0) + 1;
-    }
-    return counts;
-  });
-
   const selectedItem = computed(() => {
     if (selectedId.value === null) return null;
     return items.value.find((item) => item.id === selectedId.value) ?? null;
@@ -60,14 +52,17 @@ export const useInboxStore = defineStore('inbox', () => {
     () => lastErrorStatus.value === 503 || error.value?.includes('unavailable') === true,
   );
 
+  const currentPage = computed(() => Math.floor(pageOffset.value / pageLimit.value) + 1);
+  const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageLimit.value)));
+
   function currentQuery(): InboxListQuery {
     return {
       source_type: sourceFilter.value === 'all' ? undefined : sourceFilter.value,
       entity_type: entityTypeFilter.value || undefined,
       status: statusFilter.value,
       unread: unreadOnly.value ? true : undefined,
-      limit: 50,
-      offset: 0,
+      limit: pageLimit.value,
+      offset: pageOffset.value,
     };
   }
 
@@ -93,11 +88,57 @@ export const useInboxStore = defineStore('inbox', () => {
 
   async function refreshUnreadCount() {
     try {
-      const data = await fetchInbox({ status: 'active', limit: 1, offset: 0 });
-      unreadCount.value = data.unread_count;
+      const limit = 100;
+      let offset = 0;
+      let pages = 0;
+      let expectedTotal = 0;
+      let allUnread = 0;
+      const counts: Record<string, number> = {};
+
+      while (pages < 50) {
+        const data = await fetchInbox({
+          status: 'active',
+          unread: true,
+          limit,
+          offset,
+        });
+        if (pages === 0) {
+          expectedTotal = data.total;
+        }
+        if (data.items.length === 0) break;
+        for (const item of data.items) {
+          allUnread += 1;
+          counts[item.source_type] = (counts[item.source_type] ?? 0) + 1;
+        }
+        offset += data.items.length;
+        pages += 1;
+        if (offset >= expectedTotal) break;
+      }
+
+      unreadCount.value = allUnread;
+      sourceUnread.value = { all: allUnread, ...counts };
     } catch {
       // keep existing unread count
     }
+  }
+
+  function setPage(page: number) {
+    const clamped = Math.max(1, Math.min(page, totalPages.value));
+    const nextOffset = (clamped - 1) * pageLimit.value;
+    if (nextOffset === pageOffset.value) return;
+    pageOffset.value = nextOffset;
+    void loadInbox();
+  }
+
+  function setOffset(offset: number) {
+    const safeOffset = Math.max(0, offset);
+    if (safeOffset === pageOffset.value) return;
+    pageOffset.value = safeOffset;
+    void loadInbox();
+  }
+
+  function resetPagination() {
+    pageOffset.value = 0;
   }
 
   async function loadInbox() {
@@ -108,7 +149,15 @@ export const useInboxStore = defineStore('inbox', () => {
       const data = await fetchInbox(currentQuery());
       items.value = data.items;
       total.value = data.total;
-      unreadCount.value = data.unread_count;
+      if (total.value > 0 && pageOffset.value >= total.value) {
+        const lastPageOffset = (Math.ceil(total.value / pageLimit.value) - 1) * pageLimit.value;
+        if (lastPageOffset !== pageOffset.value) {
+          pageOffset.value = lastPageOffset;
+          await loadInbox();
+          return;
+        }
+      }
+      await refreshUnreadCount();
       if (
         selectedId.value !== null
         && items.value.find((item) => item.id === selectedId.value)
@@ -149,8 +198,11 @@ export const useInboxStore = defineStore('inbox', () => {
       const item = items.value.find((entry) => entry.id === id);
       if (item && !item.is_read) {
         item.is_read = true;
-        unreadCount.value = Math.max(0, unreadCount.value - 1);
+        if (unreadOnly.value) {
+          removeItem(id);
+        }
       }
+      await refreshUnreadCount();
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : 'Failed to mark as read';
     } finally {
@@ -163,6 +215,8 @@ export const useInboxStore = defineStore('inbox', () => {
     error.value = null;
     try {
       await markAllInboxRead(sourceType ? { source_type: sourceType } : {});
+      unreadCount.value = 0;
+      sourceUnread.value = { all: 0 };
       await loadInbox();
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : 'Failed to mark all as read';
@@ -235,6 +289,10 @@ export const useInboxStore = defineStore('inbox', () => {
     items,
     total,
     unreadCount,
+    pageLimit,
+    pageOffset,
+    currentPage,
+    totalPages,
     loading,
     saving,
     error,
@@ -258,5 +316,8 @@ export const useInboxStore = defineStore('inbox', () => {
     stopInboxStream,
     bootstrap,
     refreshUnreadCount,
+    setPage,
+    setOffset,
+    resetPagination,
   };
 });
