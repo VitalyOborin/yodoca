@@ -53,7 +53,7 @@ const emit = defineEmits<{
     </Button>
 
     <Button
-      v-if="status === 'scheduled' || type === 'recurring'"
+      v-if="status === 'scheduled' || (type === 'recurring' && status !== 'cancelled')"
       variant="destructive"
       size="sm"
       :disabled="disabled"
