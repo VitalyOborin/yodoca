@@ -6,8 +6,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sandbox.extensions.inbox.models import InboxItem as InboxModelItem
 
+from sandbox.extensions.inbox.models import InboxItem as InboxModelItem
 from sandbox.extensions.web_channel.main import WebChannelExtension
 
 

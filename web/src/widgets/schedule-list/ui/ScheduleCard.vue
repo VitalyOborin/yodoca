@@ -34,10 +34,22 @@ const cronLabel = computed(() => {
 });
 
 const statusBadgeClass = computed(() => {
+  if (props.item.status === 'fired') {
+    return 'border-emerald-900 bg-emerald-900 text-white';
+  }
+  if (props.item.status === 'cancelled') {
+    return 'border-red-900 bg-red-900 text-white';
+  }
   if (props.item.status === 'paused') {
     return 'border-yellow-300 bg-yellow-300 text-black';
   }
   return 'border-border text-muted-foreground';
+});
+
+const statusBadgeLabel = computed(() => {
+  if (props.item.status === 'fired') return 'Fired';
+  if (props.item.status === 'cancelled') return 'Cancelled';
+  return props.item.status;
 });
 </script>
 
@@ -64,7 +76,7 @@ const statusBadgeClass = computed(() => {
             class="inline-flex rounded-full border px-2.5 py-1 text-xs uppercase"
             :class="statusBadgeClass"
           >
-            {{ item.status }}
+            {{ statusBadgeLabel }}
           </span>
         </div>
         <p class="mt-3 text-base font-medium text-foreground">

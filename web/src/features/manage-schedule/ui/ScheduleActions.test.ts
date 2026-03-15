@@ -18,4 +18,20 @@ describe('ScheduleActions', () => {
 
     expect(wrapper.text()).not.toContain('Cancel');
   });
+
+  it('does not show Edit button for fired recurring schedules', () => {
+    const wrapper = mount(ScheduleActions, {
+      props: {
+        type: 'recurring',
+        status: 'fired',
+      },
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+      },
+    });
+
+    expect(wrapper.text()).not.toContain('Edit');
+  });
 });

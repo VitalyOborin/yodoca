@@ -19,7 +19,7 @@ const emit = defineEmits<{
 <template>
   <div class="flex flex-wrap items-center gap-2">
     <Button
-      v-if="type === 'recurring'"
+      v-if="type === 'recurring' && status !== 'cancelled' && status !== 'fired'"
       variant="secondary"
       size="sm"
       :disabled="disabled || status === 'cancelled'"
