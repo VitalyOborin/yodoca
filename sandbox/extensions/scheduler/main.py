@@ -326,6 +326,7 @@ class _SchedulerStore:
         every_sec: float | None = None,
         until_at: float | None = None,
         status: str | None = None,
+        set_until: bool = False,
     ) -> float | None:
         conn = await self._ensure_conn()
         cursor = await conn.execute(
@@ -347,16 +348,14 @@ class _SchedulerStore:
         if every_sec is not None:
             updates.append("every_sec = ?")
             params.append(every_sec)
-        if until_at is not None:
+        if set_until:
             updates.append("until_at = ?")
             params.append(until_at)
         if status is not None:
             updates.append("status = ?")
             params.append(status)
 
-        expr_changed = (
-            cron_expr is not None or every_sec is not None or until_at is not None
-        )
+        expr_changed = cron_expr is not None or every_sec is not None or set_until
         if not expr_changed and not updates:
             cursor = await conn.execute(
                 "SELECT next_fire_at FROM recurring_schedules WHERE id = ?",
@@ -369,7 +368,7 @@ class _SchedulerStore:
         if expr_changed:
             new_cron = cron_expr if cron_expr is not None else old_cron
             new_every = every_sec if every_sec is not None else old_every
-            new_until = until_at if until_at is not None else old_until
+            new_until = until_at if set_until else old_until
             now = time.time()
             next_fire = _compute_next_fire(new_cron, new_every, now)
             if new_until is not None and next_fire > new_until:

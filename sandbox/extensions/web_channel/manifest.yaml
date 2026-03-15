@@ -9,7 +9,8 @@ description: |
   Supports streaming via Server-Sent Events (SSE).
   Compatible with LibreChat, LobeChat, Open WebUI, and other OpenAI-compatible frontends.
 
-depends_on: []
+depends_on:
+  - scheduler
 
 config:
   host: "127.0.0.1"

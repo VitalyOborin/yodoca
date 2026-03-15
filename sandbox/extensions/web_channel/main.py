@@ -21,6 +21,7 @@ class WebChannelExtension:
         self._context: ExtensionContext | None = None
         self._config: dict[str, Any] = {}
         self._bridge: RequestBridge | None = None
+        self._scheduler: Any = None
         self._request_logger: logging.Logger | None = None
         self._app: Any = None
         self._server: Any = None
@@ -55,6 +56,7 @@ class WebChannelExtension:
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._context = context
+        self._scheduler = None
         self._config = {
             "host": context.get_config("host", "127.0.0.1"),
             "port": context.get_config("port", 8080),
@@ -86,6 +88,18 @@ class WebChannelExtension:
             )
         )
         self._app = create_app(self)
+
+    def get_scheduler(self) -> Any | None:
+        """Resolve scheduler extension lazily. Returns None when unavailable."""
+        if self._scheduler is not None:
+            return self._scheduler
+        if not self._context:
+            return None
+        try:
+            self._scheduler = self._context.get_extension("scheduler")
+        except Exception:
+            self._scheduler = None
+        return self._scheduler
 
     async def start(self) -> None:
         pass

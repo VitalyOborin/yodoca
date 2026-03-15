@@ -1,6 +1,6 @@
 """Pydantic request/response models for web_channel API (OpenAI format)."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -208,6 +208,120 @@ class OperationResult(BaseModel):
 
     success: bool
     message: str | None = None
+
+
+# --- Schedules API ---
+
+
+class ScheduleItem(BaseModel):
+    """Single schedule entry (one-shot or recurring)."""
+
+    id: int
+    type: Literal["one_shot", "recurring"]
+    topic: str
+    message: str | None = None
+    channel_id: str | None = None
+    payload: dict[str, Any]
+    fires_at_iso: str
+    status: str
+    cron_expr: str | None = None
+    every_seconds: float | None = None
+    until_iso: str | None = None
+    created_at: int
+
+
+class ScheduleListResponse(BaseModel):
+    """GET /api/schedules response."""
+
+    schedules: list[ScheduleItem]
+    count: int
+
+
+class CreateOnceScheduleRequest(BaseModel):
+    """POST /api/schedules/once request."""
+
+    topic: str
+    message: str
+    channel_id: str | None = None
+    payload_extra: dict[str, Any] | None = None
+    delay_seconds: int | None = Field(default=None, ge=1)
+    at_iso: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_time_selector(self) -> "CreateOnceScheduleRequest":
+        if (self.delay_seconds is None) == (self.at_iso is None):
+            raise ValueError(
+                "provide exactly one of delay_seconds or at_iso"
+            )
+        return self
+
+
+class ScheduleOnceResponse(BaseModel):
+    """POST /api/schedules/once response."""
+
+    success: bool
+    schedule_id: int
+    topic: str
+    fires_in_seconds: int
+    status: Literal["scheduled"]
+    error: str | None = None
+
+
+class CreateRecurringScheduleRequest(BaseModel):
+    """POST /api/schedules/recurring request."""
+
+    topic: str
+    message: str
+    channel_id: str | None = None
+    payload_extra: dict[str, Any] | None = None
+    cron: str | None = None
+    every_seconds: float | None = Field(default=None, ge=1)
+    until_iso: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_schedule_selector(self) -> "CreateRecurringScheduleRequest":
+        has_cron = bool(self.cron and self.cron.strip())
+        has_interval = self.every_seconds is not None
+        if has_cron == has_interval:
+            raise ValueError("provide exactly one of cron or every_seconds")
+        return self
+
+
+class ScheduleRecurringResponse(BaseModel):
+    """POST /api/schedules/recurring response."""
+
+    success: bool
+    schedule_id: int
+    next_fire_iso: str
+    status: Literal["created"]
+    error: str | None = None
+
+
+class UpdateScheduleRequest(BaseModel):
+    """PATCH /api/schedules/{type}/{id} request."""
+
+    cron: str | None = None
+    every_seconds: float | None = Field(default=None, ge=1)
+    until_iso: str | None = None
+    status: Literal["active", "paused"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_selector(self) -> "UpdateScheduleRequest":
+        has_cron = self.cron is not None and bool(self.cron.strip())
+        has_interval = self.every_seconds is not None
+        if has_cron and has_interval:
+            raise ValueError("provide only one of cron or every_seconds")
+        return self
+
+
+class UpdateScheduleResponse(BaseModel):
+    """PATCH /api/schedules/{type}/{id} response."""
+
+    success: bool
+    schedule_id: int
+    next_fire_iso: str
+    message: str | None = None
+    error: str | None = None
 
 
 # --- AG-UI (Agent-User Interaction Protocol) ---

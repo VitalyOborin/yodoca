@@ -1,22 +1,34 @@
 """Custom API routes for health, threads, projects, and notifications."""
 
+import json
 import time
 import uuid
+from datetime import datetime
 
+from croniter import croniter
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse
 
 from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.update_fields import UNSET
 from sandbox.extensions.web_channel.models import (
+    CreateOnceScheduleRequest,
     CreateProjectRequest,
+    CreateRecurringScheduleRequest,
     CreateThreadRequest,
     HealthResponse,
     NotificationsResponse,
+    OperationResult,
     Project,
+    ScheduleItem,
+    ScheduleListResponse,
+    ScheduleOnceResponse,
+    ScheduleRecurringResponse,
     Thread,
     ThreadDetailResponse,
     UpdateProjectRequest,
+    UpdateScheduleRequest,
+    UpdateScheduleResponse,
     UpdateThreadRequest,
 )
 
@@ -33,6 +45,124 @@ def _thread_model(data: ThreadInfo | dict) -> Thread:
 
 def _project_model(data: ProjectInfo | dict) -> Project:
     return Project.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
+
+
+def _scheduler_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "message": "Scheduler extension is not loaded or not initialized",
+                "type": "service_unavailable",
+                "code": "scheduler_unavailable",
+            }
+        },
+    )
+
+
+def _parse_iso_to_timestamp(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _decode_payload(raw: object) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+        except (TypeError, ValueError):
+            return {"raw": raw}
+    return {"value": raw}
+
+
+def _payload_message(topic: str, payload: dict) -> str | None:
+    if topic == "system.user.notify":
+        value = payload.get("text")
+        return value if isinstance(value, str) else None
+    if topic in ("system.agent.task", "system.agent.background"):
+        value = payload.get("prompt")
+        return value if isinstance(value, str) else None
+    for key in ("message", "text", "prompt"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _build_event_payload(
+    topic: str,
+    message: str,
+    channel_id: str | None,
+    payload_extra: dict | None,
+) -> dict:
+    if topic == "system.user.notify":
+        payload: dict = {"text": message}
+    elif topic in ("system.agent.task", "system.agent.background"):
+        payload = {"prompt": message}
+    elif payload_extra:
+        payload = dict(payload_extra)
+        if (
+            "message" not in payload
+            and "text" not in payload
+            and "prompt" not in payload
+        ):
+            payload["message"] = message
+    else:
+        payload = {"message": message}
+    if channel_id:
+        payload["channel_id"] = channel_id
+    return payload
+
+
+def _schedule_item_model(row: dict) -> ScheduleItem:
+    payload = _decode_payload(row.get("payload"))
+    fire_ts = row.get("fire_at_or_next")
+    until_ts = row.get("until_at")
+    return ScheduleItem(
+        id=int(row["id"]),
+        type=row["type"],
+        topic=row["topic"],
+        message=_payload_message(row["topic"], payload),
+        channel_id=payload.get("channel_id")
+        if isinstance(payload.get("channel_id"), str)
+        else None,
+        payload=payload,
+        fires_at_iso=datetime.fromtimestamp(float(fire_ts)).isoformat(),
+        status=row["status"],
+        cron_expr=row.get("cron_expr"),
+        every_seconds=row.get("every_sec"),
+        until_iso=datetime.fromtimestamp(float(until_ts)).isoformat()
+        if until_ts is not None
+        else None,
+        created_at=int(row.get("created_at", 0)),
+    )
+
+
+def _filter_schedule_rows(rows: list[dict], status: str | None) -> list[dict]:
+    if not status:
+        return rows
+    if status == "active":
+        return [
+            row
+            for row in rows
+            if (row.get("type") == "one_shot" and row.get("status") == "scheduled")
+            or (row.get("type") == "recurring" and row.get("status") == "active")
+        ]
+    return [row for row in rows if row.get("status") == status]
+
+
+def _get_scheduler_store(request: Request):
+    ext = _get_extension(request)
+    scheduler = ext.get_scheduler()
+    if not scheduler:
+        return None
+    return getattr(scheduler, "_store", None)
 
 
 @router.get("/health")
@@ -285,6 +415,376 @@ async def delete_project(request: Request, project_id: str) -> JSONResponse:
             "message": "Project deleted and bound threads were unlinked.",
         }
     )
+
+
+@router.get("/schedules")
+async def get_schedules(request: Request, status: str | None = None) -> JSONResponse:
+    """List one-shot and recurring schedules."""
+    if status and status not in {"scheduled", "fired", "active", "paused", "cancelled"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    rows = await store.list_all()
+    filtered_rows = _filter_schedule_rows(rows, status)
+    schedules = [_schedule_item_model(row) for row in filtered_rows]
+    response = ScheduleListResponse(
+        schedules=schedules,
+        count=len(schedules),
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.post("/schedules/once")
+async def create_once_schedule(request: Request) -> JSONResponse:
+    """Create one-shot schedule."""
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    try:
+        payload = CreateOnceScheduleRequest.model_validate(await request.json())
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    fire_at: float
+    if payload.delay_seconds is not None:
+        fire_at = now + payload.delay_seconds
+    else:
+        fire_at = _parse_iso_to_timestamp(payload.at_iso)
+        if fire_at is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "Invalid at_iso format. Use ISO 8601.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+        if fire_at <= now:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "at_iso must be in the future.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+
+    event_payload = _build_event_payload(
+        topic=payload.topic,
+        message=payload.message,
+        channel_id=payload.channel_id,
+        payload_extra=payload.payload_extra,
+    )
+    schedule_id = await store.insert_one_shot(
+        payload.topic,
+        json.dumps(event_payload, ensure_ascii=False),
+        fire_at,
+    )
+    response = ScheduleOnceResponse(
+        success=True,
+        schedule_id=schedule_id,
+        topic=payload.topic,
+        fires_in_seconds=max(int(fire_at - now), 0),
+        status="scheduled",
+    )
+    return JSONResponse(status_code=201, content=response.model_dump())
+
+
+@router.post("/schedules/recurring")
+async def create_recurring_schedule(request: Request) -> JSONResponse:
+    """Create recurring schedule."""
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    try:
+        payload = CreateRecurringScheduleRequest.model_validate(await request.json())
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    if payload.cron:
+        try:
+            next_fire = croniter(payload.cron.strip(), now).get_next(float)
+        except (ValueError, KeyError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": f"Invalid cron expression: {exc}",
+                        "type": "invalid_request_error",
+                        "code": "invalid_cron",
+                    }
+                },
+            )
+    else:
+        next_fire = now + (payload.every_seconds or 0)
+
+    until_at = _parse_iso_to_timestamp(payload.until_iso) if payload.until_iso else None
+    if payload.until_iso and until_at is None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid until_iso format. Use ISO 8601.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_datetime",
+                }
+            },
+        )
+    if until_at is not None and until_at <= now:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "until_iso must be in the future.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_datetime",
+                }
+            },
+        )
+
+    event_payload = _build_event_payload(
+        topic=payload.topic,
+        message=payload.message,
+        channel_id=payload.channel_id,
+        payload_extra=payload.payload_extra,
+    )
+    schedule_id = await store.insert_recurring(
+        payload.topic,
+        json.dumps(event_payload, ensure_ascii=False),
+        payload.cron.strip() if payload.cron else None,
+        payload.every_seconds,
+        until_at,
+        next_fire,
+    )
+    response = ScheduleRecurringResponse(
+        success=True,
+        schedule_id=schedule_id,
+        next_fire_iso=datetime.fromtimestamp(next_fire).isoformat(),
+        status="created",
+    )
+    return JSONResponse(status_code=201, content=response.model_dump())
+
+
+@router.delete("/schedules/{type}/{id}")
+async def delete_schedule(request: Request, type: str, id: int) -> JSONResponse:
+    """Cancel one-shot or recurring schedule."""
+    if type not in {"one_shot", "recurring"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid schedule type",
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_type",
+                }
+            },
+        )
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    rows = await store.list_all()
+    row = next(
+        (
+            item
+            for item in rows
+            if item.get("type") == type and item.get("id") == id
+        ),
+        None,
+    )
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Schedule {type}/{id} not found",
+                    "type": "not_found",
+                    "code": "schedule_not_found",
+                }
+            },
+        )
+
+    if type == "one_shot":
+        if row.get("status") != "scheduled":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "message": "Cannot cancel one-shot schedule in current status",
+                        "type": "conflict",
+                        "code": "schedule_conflict",
+                    }
+                },
+            )
+        ok = await store.cancel_one_shot(id)
+        if not ok:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "message": "Cannot cancel one-shot schedule in current status",
+                        "type": "conflict",
+                        "code": "schedule_conflict",
+                    }
+                },
+            )
+    else:
+        await store.cancel_recurring(id)
+
+    result = OperationResult(success=True, message=f"Schedule {type}/{id} cancelled.")
+    return JSONResponse(content=result.model_dump())
+
+
+@router.patch("/schedules/{type}/{id}")
+async def patch_schedule(request: Request, type: str, id: int) -> JSONResponse:
+    """Update recurring schedule fields or status."""
+    if type not in {"one_shot", "recurring"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid schedule type",
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_type",
+                }
+            },
+        )
+    if type == "one_shot":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "message": "PATCH is supported only for recurring schedules",
+                    "type": "invalid_request_error",
+                    "code": "one_shot_update_not_supported",
+                }
+            },
+        )
+
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    raw_payload = await request.json()
+    try:
+        payload = UpdateScheduleRequest.model_validate(raw_payload)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    if payload.cron:
+        try:
+            croniter(payload.cron.strip(), now).get_next(float)
+        except (ValueError, KeyError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": f"Invalid cron expression: {exc}",
+                        "type": "invalid_request_error",
+                        "code": "invalid_cron",
+                    }
+                },
+            )
+
+    until_at = None
+    if "until_iso" in payload.model_fields_set and payload.until_iso is not None:
+        until_at = _parse_iso_to_timestamp(payload.until_iso)
+        if until_at is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "Invalid until_iso format. Use ISO 8601.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+        if until_at <= now:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "until_iso must be in the future.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+
+    next_fire = await store.update_recurring(
+        id,
+        cron_expr=payload.cron.strip() if payload.cron else None,
+        every_sec=payload.every_seconds,
+        until_at=until_at,
+        status=payload.status,
+        set_until="until_iso" in payload.model_fields_set,
+    )
+    if next_fire is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Recurring schedule {id} not found",
+                    "type": "not_found",
+                    "code": "schedule_not_found",
+                }
+            },
+        )
+    response = UpdateScheduleResponse(
+        success=True,
+        schedule_id=id,
+        next_fire_iso=datetime.fromtimestamp(next_fire).isoformat(),
+        message=f"Schedule #{id} updated.",
+    )
+    return JSONResponse(content=response.model_dump())
 
 
 @router.get("/notifications")
