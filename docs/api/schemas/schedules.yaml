@@ -22,7 +22,7 @@ ScheduleItem:
     fires_at_iso:
       type: string
       format: date-time
-      description: Next (or only) scheduled fire time in ISO 8601.
+      description: Next (or only) scheduled fire time in RFC3339 UTC (e.g. `...Z`).
     status:
       type: string
       description: >
@@ -40,7 +40,7 @@ ScheduleItem:
       type: string
       format: date-time
       nullable: true
-      description: Optional expiry datetime — present only for recurring schedules.
+      description: Optional expiry datetime in RFC3339 UTC (`...Z`) — present only for recurring schedules.
     created_at: { type: integer, description: Unix timestamp of creation. }
   required: [id, type, topic, payload, fires_at_iso, status, created_at]
 
@@ -104,7 +104,7 @@ CreateOnceScheduleRequest:
       format: date-time
       nullable: true
       description: >
-        Absolute fire time as ISO 8601 datetime (e.g. `2026-03-16T09:00:00`).
+        Absolute fire time as RFC3339 datetime (e.g. `2026-03-16T09:00:00Z`).
         Must be in the future. Mutually exclusive with `delay_seconds`.
   required: [topic, message]
 
@@ -180,6 +180,7 @@ ScheduleRecurringResponse:
     next_fire_iso:
       type: string
       format: date-time
+      description: Next fire time in RFC3339 UTC (`...Z`).
     status: { type: string, enum: [created] }
     error: { type: string, nullable: true }
   required: [success, schedule_id, next_fire_iso, status]
@@ -210,7 +211,7 @@ UpdateScheduleRequest:
       format: date-time
       nullable: true
       description: >
-        New or updated end datetime in ISO 8601. Pass `null` explicitly to
+        New or updated end datetime in RFC3339 UTC (`...Z`). Pass `null` explicitly to
         remove an existing expiry and make the schedule open-ended.
     status:
       type: string
@@ -228,7 +229,7 @@ UpdateScheduleResponse:
     next_fire_iso:
       type: string
       format: date-time
-      description: Next scheduled fire time after the update.
+      description: Next scheduled fire time after the update in RFC3339 UTC (`...Z`).
     message: { type: string, nullable: true }
     error: { type: string, nullable: true }
   required: [success, schedule_id, next_fire_iso]

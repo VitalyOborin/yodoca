@@ -441,6 +441,7 @@ def test_get_schedules_status_active_alias(web_channel_app, mock_context):
     assert all(item["status"] in {"scheduled", "active"} for item in data["schedules"])
     assert any(item["type"] == "one_shot" for item in data["schedules"])
     assert any(item["type"] == "recurring" for item in data["schedules"])
+    assert all(item["fires_at_iso"].endswith("Z") for item in data["schedules"])
 
 
 def test_post_schedules_once_created(web_channel_app):
@@ -490,6 +491,7 @@ def test_post_schedules_recurring_created(web_channel_app):
     assert data["success"] is True
     assert data["schedule_id"] == 202
     assert data["status"] == "created"
+    assert data["next_fire_iso"].endswith("Z")
 
 
 def test_post_schedules_recurring_invalid_cron(web_channel_app):
@@ -542,6 +544,7 @@ def test_patch_schedule_until_null_sets_set_until(web_channel_app, mock_context)
         json={"until_iso": None},
     )
     assert resp.status_code == 200
+    assert resp.json()["next_fire_iso"].endswith("Z")
     kwargs = mock_context._scheduler_store.update_recurring.await_args.kwargs
     assert kwargs["set_until"] is True
     assert kwargs["until_at"] is None

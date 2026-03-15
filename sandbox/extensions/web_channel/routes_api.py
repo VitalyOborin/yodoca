@@ -3,7 +3,7 @@
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from croniter import croniter
 from fastapi import APIRouter, Request
@@ -67,6 +67,14 @@ def _parse_iso_to_timestamp(value: str | None) -> float | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError):
         return None
+
+
+def _to_utc_iso(timestamp: float) -> str:
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _decode_payload(raw: object) -> dict:
@@ -133,11 +141,11 @@ def _schedule_item_model(row: dict) -> ScheduleItem:
         if isinstance(payload.get("channel_id"), str)
         else None,
         payload=payload,
-        fires_at_iso=datetime.fromtimestamp(float(fire_ts)).isoformat(),
+        fires_at_iso=_to_utc_iso(float(fire_ts)),
         status=row["status"],
         cron_expr=row.get("cron_expr"),
         every_seconds=row.get("every_sec"),
-        until_iso=datetime.fromtimestamp(float(until_ts)).isoformat()
+        until_iso=_to_utc_iso(float(until_ts))
         if until_ts is not None
         else None,
         created_at=int(row.get("created_at", 0)),
@@ -596,7 +604,7 @@ async def create_recurring_schedule(request: Request) -> JSONResponse:
     response = ScheduleRecurringResponse(
         success=True,
         schedule_id=schedule_id,
-        next_fire_iso=datetime.fromtimestamp(next_fire).isoformat(),
+        next_fire_iso=_to_utc_iso(next_fire),
         status="created",
     )
     return JSONResponse(status_code=201, content=response.model_dump())
@@ -781,7 +789,7 @@ async def patch_schedule(request: Request, type: str, id: int) -> JSONResponse:
     response = UpdateScheduleResponse(
         success=True,
         schedule_id=id,
-        next_fire_iso=datetime.fromtimestamp(next_fire).isoformat(),
+        next_fire_iso=_to_utc_iso(next_fire),
         message=f"Schedule #{id} updated.",
     )
     return JSONResponse(content=response.model_dump())

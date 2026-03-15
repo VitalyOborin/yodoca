@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +14,14 @@ from croniter import croniter
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _to_utc_iso(timestamp: float) -> str:
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 # --- Tool result models (structured output per agent_tools skill) ---
 
@@ -687,7 +695,7 @@ class SchedulerExtension:
                 until_at,
                 next_fire,
             )
-            iso = datetime.fromtimestamp(next_fire).isoformat()
+            iso = _to_utc_iso(next_fire)
             return ScheduleRecurringResult(
                 success=True,
                 schedule_id=row_id,
@@ -715,9 +723,7 @@ class SchedulerExtension:
                     type=r["type"],
                     topic=r["topic"],
                     payload=_parse_payload_json(r["payload"]),
-                    next_fire_iso=datetime.fromtimestamp(
-                        r["fire_at_or_next"]
-                    ).isoformat(),
+                    next_fire_iso=_to_utc_iso(r["fire_at_or_next"]),
                     status=r["status"],
                 )
                 for r in rows
@@ -792,7 +798,7 @@ class SchedulerExtension:
                     message="",
                     error="Schedule not found or cancelled.",
                 )
-            iso = datetime.fromtimestamp(next_fire).isoformat()
+            iso = _to_utc_iso(next_fire)
             return UpdateRecurringResult(
                 success=True,
                 schedule_id=schedule_id,
