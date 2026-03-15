@@ -17,7 +17,8 @@ docs/api/
 │   ├── threads.yaml           # /api/threads, /api/threads/{thread_id}
 │   ├── projects.yaml          # /api/projects, /api/projects/{project_id}
 │   ├── notifications.yaml    # /api/notifications
-│   └── schedules.yaml         # /api/schedules, /api/schedules/once, etc.
+│   ├── schedules.yaml         # /api/schedules, /api/schedules/once, etc.
+│   └── inbox.yaml             # /api/inbox, /api/inbox/{id}, etc.
 └── schemas/
     ├── common.yaml            # ErrorResponse, OperationResult, HealthResponse
     ├── openai.yaml            # Models, ChatCompletions, Responses, Usage
@@ -25,7 +26,8 @@ docs/api/
     ├── threads.yaml           # Thread, ThreadDetailResponse, Create/Update
     ├── projects.yaml          # Project, CreateProjectRequest, UpdateProjectRequest
     ├── notifications.yaml    # Notification, NotificationsResponse
-    └── schedules.yaml         # ScheduleItem, CreateOnce/Recurring, Update
+    ├── schedules.yaml         # ScheduleItem, CreateOnce/Recurring, Update
+    └── inbox.yaml             # InboxItem, InboxListResponse, InboxReadAllRequest
 ```
 
 ## Usage

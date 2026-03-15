@@ -30,6 +30,7 @@ class InboxItem(BaseModel):
     occurred_at: float
     ingested_at: float
     status: str = "active"
+    is_read: bool = False
     is_current: bool = True
     payload: dict = Field(default_factory=dict)
     payload_hash: str = ""

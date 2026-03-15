@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +23,14 @@ def mock_context():
     scheduler_store.update_recurring = AsyncMock(return_value=time.time() + 300)
     scheduler_ext = MagicMock()
     scheduler_ext._store = scheduler_store
+    inbox_ext = MagicMock()
+    inbox_ext.list_items = AsyncMock(return_value=([], 0))
+    inbox_ext.get_item = AsyncMock(return_value=None)
+    inbox_ext.mark_read = AsyncMock(return_value=False)
+    inbox_ext.mark_all_read = AsyncMock(return_value=0)
+    inbox_ext.get_unread_count = AsyncMock(return_value=0)
+    inbox_ext.upsert_item = AsyncMock(return_value=MagicMock(success=True, error=None))
+    event_handlers = {}
 
     ctx.get_config = MagicMock(
         side_effect=lambda k, d=None: {
@@ -38,10 +46,17 @@ def mock_context():
     ctx.get_secret = AsyncMock(return_value=None)
     ctx.get_extension = MagicMock(
         side_effect=lambda extension_id: (
-            scheduler_ext if extension_id == "scheduler" else None
+            scheduler_ext
+            if extension_id == "scheduler"
+            else inbox_ext
+            if extension_id == "inbox"
+            else None
         )
     )
     ctx.emit = AsyncMock()
+    ctx.subscribe_event = MagicMock(
+        side_effect=lambda topic, handler: event_handlers.__setitem__(topic, handler)
+    )
     ctx.list_threads = AsyncMock(return_value=[])
     ctx.create_thread = AsyncMock(
         return_value={
@@ -91,6 +106,8 @@ def mock_context():
     ctx.delete_project = AsyncMock(return_value=False)
     ctx._scheduler_store = scheduler_store
     ctx._scheduler_ext = scheduler_ext
+    ctx._inbox_ext = inbox_ext
+    ctx._event_handlers = event_handlers
     return ctx
 
 
@@ -121,6 +138,12 @@ def test_get_health(web_channel_app):
     data = resp.json()
     assert data["status"] == "ok"
     assert "uptime_seconds" in data
+
+
+def test_web_channel_subscribes_to_inbox_ingested(mock_context):
+    ext = WebChannelExtension()
+    asyncio.run(ext.initialize(mock_context))
+    mock_context.subscribe_event.assert_any_call("inbox.item.ingested", ANY)
 
 
 def test_get_threads(web_channel_app, mock_context):
@@ -334,6 +357,45 @@ def test_get_notifications_empty(web_channel_app):
     resp = client.get("/api/notifications?timeout=1")
     assert resp.status_code == 200
     assert resp.json()["notifications"] == []
+
+
+def test_get_inbox_items_ok(web_channel_app, mock_context):
+    mock_context._inbox_ext.list_items.return_value = (
+        [
+            {
+                "id": 42,
+                "source_type": "mail",
+                "source_account": "vitaly@example.com",
+                "entity_type": "email.message",
+                "external_id": "msg-abc123",
+                "title": "Re: Project update",
+                "occurred_at": 1773600000.0,
+                "ingested_at": 1773600010.0,
+                "status": "active",
+                "is_read": False,
+                "payload": {"from": "alice@example.com"},
+            }
+        ],
+        1,
+    )
+    mock_context._inbox_ext.get_unread_count.return_value = 7
+
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/inbox?status=active&limit=50&offset=0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["unread_count"] == 7
+    assert data["items"][0]["id"] == 42
+    assert data["items"][0]["is_read"] is False
+
+
+def test_post_inbox_read_all_with_source_filter(web_channel_app, mock_context):
+    client = TestClient(web_channel_app)
+    resp = client.post("/api/inbox/read-all", json={"source_type": "mail"})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    mock_context._inbox_ext.mark_all_read.assert_awaited_once_with("mail")
 
 
 def test_post_chat_completions_no_user_message(web_channel_app):
@@ -560,3 +622,23 @@ def test_scheduler_endpoints_return_503_when_extension_missing(mock_context):
     resp = client.get("/api/schedules")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "scheduler_unavailable"
+
+
+def test_inbox_endpoints_return_503_when_extension_missing(mock_context):
+    def get_extension_only_scheduler(extension_id):
+        if extension_id == "scheduler":
+            return mock_context._scheduler_ext
+        return None
+
+    mock_context.get_extension = MagicMock(side_effect=get_extension_only_scheduler)
+    ext = WebChannelExtension()
+    asyncio.run(ext.initialize(mock_context))
+    from sandbox.extensions.web_channel.app import create_app
+
+    client = TestClient(create_app(ext))
+    resp = client.get("/api/inbox")
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "inbox extension unavailable"}
+    stream_resp = client.get("/api/inbox/stream")
+    assert stream_resp.status_code == 503
+    assert stream_resp.json() == {"detail": "inbox extension unavailable"}

@@ -20,6 +20,7 @@ tags:
   - name: projects
   - name: notifications
   - name: schedules
+  - name: inbox
 paths:
   /v1/models:
     $ref: "paths/openai.yaml#/~1v1~1models"
@@ -49,6 +50,16 @@ paths:
     $ref: "paths/schedules.yaml#/~1api~1schedules~1recurring"
   /api/schedules/{type}/{id}:
     $ref: "paths/schedules.yaml#/~1api~1schedules~1{type}~1{id}"
+  /api/inbox:
+    $ref: "paths/inbox.yaml#/~1api~1inbox"
+  /api/inbox/stream:
+    $ref: "paths/inbox.yaml#/~1api~1inbox~1stream"
+  /api/inbox/{id}:
+    $ref: "paths/inbox.yaml#/~1api~1inbox~1{id}"
+  /api/inbox/{id}/read:
+    $ref: "paths/inbox.yaml#/~1api~1inbox~1{id}~1read"
+  /api/inbox/read-all:
+    $ref: "paths/inbox.yaml#/~1api~1inbox~1read-all"
 components:
   securitySchemes:
     bearerAuth:
@@ -134,3 +145,11 @@ components:
       $ref: "schemas/schedules.yaml#/UpdateScheduleRequest"
     UpdateScheduleResponse:
       $ref: "schemas/schedules.yaml#/UpdateScheduleResponse"
+    InboxPayload:
+      $ref: "schemas/inbox.yaml#/InboxPayload"
+    InboxItem:
+      $ref: "schemas/inbox.yaml#/InboxItem"
+    InboxListResponse:
+      $ref: "schemas/inbox.yaml#/InboxListResponse"
+    InboxReadAllRequest:
+      $ref: "schemas/inbox.yaml#/InboxReadAllRequest"

@@ -1,5 +1,6 @@
 """Custom API routes for health, threads, projects, and notifications."""
 
+import asyncio
 import json
 import time
 import uuid
@@ -7,16 +8,19 @@ from datetime import UTC, datetime
 
 from croniter import croniter
 from fastapi import APIRouter, Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.update_fields import UNSET
+from sandbox.extensions.inbox.models import InboxItemInput
 from sandbox.extensions.web_channel.models import (
     CreateOnceScheduleRequest,
     CreateProjectRequest,
     CreateRecurringScheduleRequest,
     CreateThreadRequest,
     HealthResponse,
+    InboxItem,
+    InboxListResponse,
     NotificationsResponse,
     OperationResult,
     Project,
@@ -169,6 +173,18 @@ def _get_scheduler_store(request: Request):
     if not scheduler:
         return None
     return getattr(scheduler, "_store", None)
+
+
+def _inbox_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "inbox extension unavailable"},
+    )
+
+
+def _get_inbox_extension(request: Request):
+    ext = _get_extension(request)
+    return ext.get_inbox()
 
 
 @router.get("/health")
@@ -421,6 +437,223 @@ async def delete_project(request: Request, project_id: str) -> JSONResponse:
             "message": "Project deleted and bound threads were unlinked.",
         }
     )
+
+
+@router.get("/inbox")
+async def get_inbox_items(
+    request: Request,
+    source_type: str | None = None,
+    entity_type: str | None = None,
+    status: str = "active",
+    unread: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> JSONResponse:
+    """List inbox items with filtering and pagination."""
+    if status not in {"active", "deleted", "all"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    if limit < 1 or limit > 100:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "limit must be between 1 and 100",
+                    "type": "invalid_request_error",
+                    "code": "invalid_limit",
+                }
+            },
+        )
+    if offset < 0:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "offset must be >= 0",
+                    "type": "invalid_request_error",
+                    "code": "invalid_offset",
+                }
+            },
+        )
+
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    status_filter = None if status == "all" else status
+    is_read_filter = False if unread is True else None
+
+    items, total = await inbox.list_items(
+        source_type=source_type,
+        entity_type=entity_type,
+        status=status_filter,
+        is_read=is_read_filter,
+        limit=limit,
+        offset=offset,
+    )
+    unread_count = await inbox.get_unread_count()
+    response = InboxListResponse(
+        items=[InboxItem.model_validate(item).model_dump() for item in items],
+        total=total,
+        unread_count=unread_count,
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/inbox/stream", response_model=None)
+async def stream_inbox_items(request: Request):
+    """SSE stream for inbox.item.ingested events."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    ext = _get_extension(request)
+    queue = ext.create_inbox_stream_queue()
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        except asyncio.CancelledError:
+            return
+        finally:
+            ext.remove_inbox_stream_queue(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/inbox/{id}")
+async def get_inbox_item(request: Request, id: int) -> JSONResponse:
+    """Get a single inbox item by id."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+    return JSONResponse(content=InboxItem.model_validate(item).model_dump())
+
+
+@router.post("/inbox/{id}/read")
+async def mark_inbox_read(request: Request, id: int) -> JSONResponse:
+    """Mark one inbox item as read."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+    await inbox.mark_read(id)
+    return JSONResponse(content={"success": True})
+
+
+@router.post("/inbox/read-all")
+async def mark_all_inbox_read(request: Request) -> JSONResponse:
+    """Mark all inbox items as read, optionally filtered by source_type."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    source_type: str | None = None
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        value = payload.get("source_type")
+        if isinstance(value, str) and value.strip():
+            source_type = value.strip()
+
+    await inbox.mark_all_read(source_type)
+    return JSONResponse(content={"success": True})
+
+
+@router.delete("/inbox/{id}")
+async def delete_inbox_item(request: Request, id: int) -> JSONResponse:
+    """Soft-delete an inbox item by upserting deleted status."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+
+    result = await inbox.upsert_item(
+        InboxItemInput(
+            source_type=item.source_type,
+            source_account=item.source_account,
+            entity_type=item.entity_type,
+            external_id=item.external_id,
+            title=item.title,
+            occurred_at=item.occurred_at,
+            status="deleted",
+            payload=item.payload,
+        )
+    )
+    if not result.success:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": result.error or "Failed to delete inbox item",
+                    "type": "server_error",
+                    "code": "inbox_delete_failed",
+                }
+            },
+        )
+    return JSONResponse(content={"success": True})
 
 
 @router.get("/schedules")

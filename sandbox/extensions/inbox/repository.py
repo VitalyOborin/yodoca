@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     occurred_at     REAL    NOT NULL,
     ingested_at     REAL    NOT NULL,
     status          TEXT    NOT NULL DEFAULT 'active',
+    is_read         INTEGER NOT NULL DEFAULT 0,
     is_current      INTEGER NOT NULL DEFAULT 1,
     payload         TEXT    NOT NULL DEFAULT '{}',
     payload_hash    TEXT    NOT NULL DEFAULT ''
@@ -34,6 +35,11 @@ CREATE INDEX IF NOT EXISTS idx_inbox_source
 
 CREATE INDEX IF NOT EXISTS idx_inbox_ingested
   ON inbox_items(ingested_at);
+"""
+
+_INBOX_UNREAD_INDEX_SCHEMA = """
+CREATE INDEX IF NOT EXISTS idx_inbox_unread
+  ON inbox_items(is_read, is_current, status);
 """
 
 _INBOX_CURSORS_SCHEMA = """
@@ -66,6 +72,7 @@ def _row_to_dict(row: aiosqlite.Row) -> dict:
         "occurred_at": row["occurred_at"],
         "ingested_at": row["ingested_at"],
         "status": row["status"] or "active",
+        "is_read": bool(row["is_read"]),
         "is_current": bool(row["is_current"]),
         "payload": json.loads(row["payload"] or "{}"),
         "payload_hash": row["payload_hash"] or "",
@@ -86,9 +93,20 @@ class InboxRepository:
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA synchronous=NORMAL")
             await self._conn.executescript(_INBOX_ITEMS_SCHEMA)
+            await self._ensure_items_schema_migrations(self._conn)
+            await self._conn.executescript(_INBOX_UNREAD_INDEX_SCHEMA)
             await self._conn.executescript(_INBOX_CURSORS_SCHEMA)
             await self._conn.commit()
         return self._conn
+
+    async def _ensure_items_schema_migrations(self, conn: aiosqlite.Connection) -> None:
+        """Apply forward-compatible inbox_items schema migrations."""
+        cursor = await conn.execute("PRAGMA table_info(inbox_items)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "is_read" not in cols:
+            await conn.execute(
+                "ALTER TABLE inbox_items ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0"
+            )
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -109,7 +127,7 @@ class InboxRepository:
         try:
             cursor = await conn.execute(
                 """
-                SELECT id, payload_hash, status, ingested_at FROM inbox_items
+                SELECT id, payload_hash, status, ingested_at, is_read FROM inbox_items
                 WHERE source_type = ? AND source_account = ? AND entity_type = ?
                   AND external_id = ? AND is_current = 1
                 """,
@@ -127,9 +145,9 @@ class InboxRepository:
                     """
                     INSERT INTO inbox_items (
                         source_type, source_account, entity_type, external_id,
-                        title, occurred_at, ingested_at, status, is_current,
+                        title, occurred_at, ingested_at, status, is_read, is_current,
                         payload, payload_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
                     """,
                     (
                         input.source_type,
@@ -153,6 +171,7 @@ class InboxRepository:
             existing_id = row["id"]
             existing_hash = row["payload_hash"] or ""
             existing_status = row["status"] or "active"
+            existing_is_read = int(row["is_read"] or 0)
 
             if input.status == "deleted":
                 if existing_status == "deleted":
@@ -178,9 +197,9 @@ class InboxRepository:
                 """
                 INSERT INTO inbox_items (
                     source_type, source_account, entity_type, external_id,
-                    title, occurred_at, ingested_at, status, is_current,
+                    title, occurred_at, ingested_at, status, is_read, is_current,
                     payload, payload_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     input.source_type,
@@ -191,6 +210,7 @@ class InboxRepository:
                     input.occurred_at,
                     ingested_at,
                     input.status,
+                    existing_is_read,
                     payload_json,
                     payload_hash,
                 ),
@@ -221,6 +241,7 @@ class InboxRepository:
         source_type: str | None = None,
         entity_type: str | None = None,
         status: str = "active",
+        is_read: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
@@ -239,6 +260,9 @@ class InboxRepository:
         if status:
             conditions.append("status = ?")
             params.append(status)
+        if is_read is not None:
+            conditions.append("is_read = ?")
+            params.append(1 if is_read else 0)
 
         where = " AND ".join(conditions)
 
@@ -259,6 +283,52 @@ class InboxRepository:
         )
         rows = await cursor.fetchall()
         return ([_row_to_dict(r) for r in rows], total)
+
+    async def mark_read(self, inbox_id: int) -> bool:
+        """Mark a single inbox item as read."""
+        conn = await self.ensure_conn()
+        cursor = await conn.execute(
+            "UPDATE inbox_items SET is_read = 1 WHERE id = ? AND is_read = 0",
+            (inbox_id,),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def mark_all_read(self, source_type: str | None) -> int:
+        """Mark unread current active items as read. Returns updated rows count."""
+        conn = await self.ensure_conn()
+        if source_type is None:
+            cursor = await conn.execute(
+                """
+                UPDATE inbox_items
+                SET is_read = 1
+                WHERE is_current = 1 AND status = 'active' AND is_read = 0
+                """
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                UPDATE inbox_items
+                SET is_read = 1
+                WHERE is_current = 1 AND status = 'active' AND is_read = 0
+                  AND source_type = ?
+                """,
+                (source_type,),
+            )
+        await conn.commit()
+        return cursor.rowcount
+
+    async def get_unread_count(self) -> int:
+        """Count unread current active inbox items."""
+        conn = await self.ensure_conn()
+        cursor = await conn.execute(
+            """
+            SELECT COUNT(*) FROM inbox_items
+            WHERE is_current = 1 AND status = 'active' AND is_read = 0
+            """
+        )
+        row = await cursor.fetchone()
+        return int(row[0] if row else 0)
 
     async def get_cursor(
         self, source_type: str, source_account: str, stream: str

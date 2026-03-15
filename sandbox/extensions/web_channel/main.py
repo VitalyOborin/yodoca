@@ -9,6 +9,7 @@ from sandbox.extensions.web_channel.app import create_app
 from sandbox.extensions.web_channel.bridge import RequestBridge
 
 if TYPE_CHECKING:
+    from core.events.models import Event
     from core.extensions.context import ExtensionContext
 
 logger = logging.getLogger(__name__)
@@ -22,11 +23,15 @@ class WebChannelExtension:
         self._config: dict[str, Any] = {}
         self._bridge: RequestBridge | None = None
         self._scheduler: Any = None
+        self._inbox: Any = None
         self._request_logger: logging.Logger | None = None
         self._app: Any = None
         self._server: Any = None
         self._server_task: asyncio.Task[Any] | None = None
         self._channel_id = "web_channel"
+        self._inbox_stream_queues: dict[
+            asyncio.Queue[dict[str, Any]], asyncio.AbstractEventLoop
+        ] = {}
 
     def _setup_request_logger(self, log_file: str) -> logging.Logger:
         """Configure a dedicated file logger for web_channel HTTP audit events."""
@@ -57,6 +62,7 @@ class WebChannelExtension:
     async def initialize(self, context: "ExtensionContext") -> None:
         self._context = context
         self._scheduler = None
+        self._inbox = None
         self._config = {
             "host": context.get_config("host", "127.0.0.1"),
             "port": context.get_config("port", 8080),
@@ -87,7 +93,14 @@ class WebChannelExtension:
                 self._config.get("request_timeout_seconds", 120)
             )
         )
+        context.subscribe_event("inbox.item.ingested", self._on_inbox_item_ingested)
         self._app = create_app(self)
+
+    async def _on_inbox_item_ingested(self, event: "Event") -> None:
+        """Forward inbox ingestion events to SSE subscribers."""
+        payload = dict(event.payload or {})
+        payload["event"] = "inbox.item.ingested"
+        self.push_inbox_stream_event(payload)
 
     def get_scheduler(self) -> Any | None:
         """Resolve scheduler extension lazily. Returns None when unavailable."""
@@ -100,6 +113,18 @@ class WebChannelExtension:
         except Exception:
             self._scheduler = None
         return self._scheduler
+
+    def get_inbox(self) -> Any | None:
+        """Resolve inbox extension lazily. Returns None when unavailable."""
+        if self._inbox is not None:
+            return self._inbox
+        if not self._context:
+            return None
+        try:
+            self._inbox = self._context.get_extension("inbox")
+        except Exception:
+            self._inbox = None
+        return self._inbox
 
     async def start(self) -> None:
         pass
@@ -134,7 +159,7 @@ class WebChannelExtension:
                 pass
 
     async def destroy(self) -> None:
-        pass
+        self._inbox_stream_queues.clear()
 
     def health_check(self) -> bool:
         return self._bridge is not None
@@ -167,3 +192,25 @@ class WebChannelExtension:
         if self._bridge:
             self._bridge.push_stream_event("end", full_text)
             self._bridge.push_stream_end(full_text)
+
+    def create_inbox_stream_queue(self) -> asyncio.Queue[dict[str, Any]]:
+        """Create and register queue for /api/inbox/stream SSE."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._inbox_stream_queues[queue] = asyncio.get_running_loop()
+        return queue
+
+    def remove_inbox_stream_queue(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        """Remove queue from inbox SSE subscribers."""
+        self._inbox_stream_queues.pop(queue, None)
+
+    def push_inbox_stream_event(self, payload: dict[str, Any]) -> None:
+        """Broadcast event payload to all active inbox SSE subscribers."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        for queue, loop in tuple(self._inbox_stream_queues.items()):
+            if current_loop is loop:
+                queue.put_nowait(payload)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, payload)

@@ -203,6 +203,32 @@ class NotificationsResponse(BaseModel):
     notifications: list[Notification]
 
 
+class InboxItem(BaseModel):
+    """Single inbox item (current snapshot)."""
+
+    id: int
+    source_type: str
+    source_account: str
+    entity_type: str
+    external_id: str
+    title: str = ""
+    occurred_at: float
+    ingested_at: float
+    status: str = "active"
+    is_read: bool = False
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class InboxListResponse(BaseModel):
+    """GET /api/inbox response."""
+
+    items: list[InboxItem] = Field(default_factory=list)
+    total: int = 0
+    unread_count: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
 class OperationResult(BaseModel):
     """Generic operation result."""
 

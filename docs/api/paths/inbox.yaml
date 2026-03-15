@@ -1,0 +1,211 @@
+# Inbox domain paths: /api/inbox, /api/inbox/{id}, /api/inbox/{id}/read, /api/inbox/read-all
+
+/api/inbox:
+  get:
+    tags: [inbox]
+    summary: List inbox items
+    description: >
+      Returns inbox entries from the inbox extension via web_channel.
+      The endpoint supports filtering by source type, entity type,
+      lifecycle status, and unread flag.
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: source_type
+        in: query
+        required: false
+        description: Filter by source type (e.g. `mail`, `gitlab`, `github`, `scheduler`).
+        schema:
+          type: string
+      - name: entity_type
+        in: query
+        required: false
+        description: Filter by entity type (e.g. `email.message`).
+        schema:
+          type: string
+      - name: status
+        in: query
+        required: false
+        description: Filter by inbox lifecycle status.
+        schema:
+          type: string
+          enum: [active, deleted, all]
+          default: active
+      - name: unread
+        in: query
+        required: false
+        description: If `true`, returns only unread entries.
+        schema:
+          type: boolean
+      - name: limit
+        in: query
+        required: false
+        description: Page size.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: offset
+        in: query
+        required: false
+        description: Zero-based result offset.
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+    responses:
+      "200":
+        description: Inbox list
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboxListResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+
+/api/inbox/stream:
+  get:
+    tags: [inbox]
+    summary: Stream inbox ingestion events (SSE)
+    description: >
+      Server-Sent Events stream for real-time inbox updates. Emits
+      `inbox.item.ingested` payloads as `data:` frames.
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: SSE stream (text/event-stream)
+        content:
+          text/event-stream:
+            schema:
+              type: string
+      "503":
+        description: Inbox extension is unavailable.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                detail:
+                  type: string
+              required: [detail]
+
+/api/inbox/{id}:
+  get:
+    tags: [inbox]
+    summary: Get inbox item details
+    description: Returns a single inbox item with full payload.
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    responses:
+      "200":
+        description: Inbox item details
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboxItem"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+  delete:
+    tags: [inbox]
+    summary: Soft-delete inbox item
+    description: Marks an inbox item as `deleted` (soft-delete).
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    responses:
+      "200":
+        description: Soft-delete result
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationResult"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+
+/api/inbox/{id}/read:
+  post:
+    tags: [inbox]
+    summary: Mark inbox item as read
+    description: Marks one inbox item as read and returns operation status.
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    responses:
+      "200":
+        description: Item marked as read
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationResult"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+
+/api/inbox/read-all:
+  post:
+    tags: [inbox]
+    summary: Mark all inbox items as read
+    description: >
+      Marks all matching inbox items as read. Optionally filter by
+      `source_type`.
+    security:
+      - bearerAuth: []
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InboxReadAllRequest"
+          examples:
+            all:
+              summary: Mark all sources
+              value: {}
+            source_only:
+              summary: Mark all items from one source
+              value:
+                source_type: mail
+    responses:
+      "200":
+        description: Bulk mark-as-read result
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationResult"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"

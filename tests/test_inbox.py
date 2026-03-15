@@ -59,6 +59,7 @@ class TestInboxRepository:
         assert row is not None
         assert row["external_id"] == "msg-1"
         assert row["payload"]["from"] == "a@b.com"
+        assert row["is_read"] is False
 
     @pytest.mark.asyncio
     async def test_upsert_duplicate_suppression(self, repo: InboxRepository) -> None:
@@ -251,6 +252,101 @@ class TestInboxRepository:
         rows, total = await repo.list_items(source_type="gitlab")
         assert len(rows) == 1
         assert total == 1
+
+    @pytest.mark.asyncio
+    async def test_mark_read_and_unread_filter(self, repo: InboxRepository) -> None:
+        inp = InboxItemInput(
+            source_type="mail",
+            source_account="acc",
+            entity_type="email.message",
+            external_id="read-filter-1",
+            title="Unread item",
+            occurred_at=time.time(),
+            payload={},
+        )
+        inbox_id, _, _ = await repo.upsert_item(inp)
+        assert await repo.get_unread_count() == 1
+
+        marked = await repo.mark_read(inbox_id)
+        assert marked is True
+        assert await repo.get_unread_count() == 0
+
+        unread_rows, unread_total = await repo.list_items(is_read=False)
+        assert unread_total == 0
+        assert unread_rows == []
+
+        read_rows, read_total = await repo.list_items(is_read=True)
+        assert read_total == 1
+        assert len(read_rows) == 1
+        assert read_rows[0]["id"] == inbox_id
+
+    @pytest.mark.asyncio
+    async def test_mark_all_read_with_source_filter(self, repo: InboxRepository) -> None:
+        await repo.upsert_item(
+            InboxItemInput(
+                source_type="mail",
+                source_account="acc",
+                entity_type="email.message",
+                external_id="bulk-mail",
+                title="Mail",
+                occurred_at=time.time(),
+                payload={},
+            )
+        )
+        await repo.upsert_item(
+            InboxItemInput(
+                source_type="gitlab",
+                source_account="acc",
+                entity_type="gitlab.merge_request",
+                external_id="bulk-gitlab",
+                title="MR",
+                occurred_at=time.time(),
+                payload={},
+            )
+        )
+
+        updated_mail = await repo.mark_all_read("mail")
+        assert updated_mail == 1
+        assert await repo.get_unread_count() == 1
+
+        updated_rest = await repo.mark_all_read(None)
+        assert updated_rest == 1
+        assert await repo.get_unread_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_upsert_update_inherits_is_read(self, repo: InboxRepository) -> None:
+        inp1 = InboxItemInput(
+            source_type="gitlab",
+            source_account="default",
+            entity_type="gitlab.merge_request",
+            external_id="mr-read-inherit",
+            title="MR v1",
+            occurred_at=time.time(),
+            payload={"state": "opened"},
+        )
+        id1, _, _ = await repo.upsert_item(inp1)
+        assert await repo.mark_read(id1) is True
+
+        inp2 = InboxItemInput(
+            source_type="gitlab",
+            source_account="default",
+            entity_type="gitlab.merge_request",
+            external_id="mr-read-inherit",
+            title="MR v2",
+            occurred_at=time.time(),
+            payload={"state": "merged"},
+        )
+        id2, ct2, _ = await repo.upsert_item(inp2)
+        assert ct2 == "updated"
+        assert id2 != id1
+
+        old_row = await repo.get_item(id1)
+        new_row = await repo.get_item(id2)
+        assert old_row is not None
+        assert new_row is not None
+        assert old_row["is_current"] is False
+        assert new_row["is_current"] is True
+        assert new_row["is_read"] is True
 
     @pytest.mark.asyncio
     async def test_cursor_lifecycle(self, repo: InboxRepository) -> None:

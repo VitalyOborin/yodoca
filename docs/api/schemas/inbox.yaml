@@ -1,0 +1,83 @@
+# Inbox domain schemas.
+# Referenced from the main OpenAPI document.
+
+InboxPayload:
+  type: object
+  description: Source-specific payload for a concrete inbox entity.
+  additionalProperties: true
+
+InboxItem:
+  type: object
+  properties:
+    id:
+      type: integer
+      minimum: 1
+    source_type:
+      type: string
+      description: Source adapter type (e.g. `mail`, `gitlab`, `github`, `scheduler`).
+    source_account:
+      type: string
+      nullable: true
+      description: Source account identifier (e.g. mailbox or integration account).
+    entity_type:
+      type: string
+      description: Entity class identifier (e.g. `email.message`).
+    external_id:
+      type: string
+      nullable: true
+      description: Entity ID in the source system.
+    title:
+      type: string
+      nullable: true
+    occurred_at:
+      type: number
+      description: Source event timestamp as Unix seconds.
+    ingested_at:
+      type: number
+      description: Ingestion timestamp as Unix seconds.
+    status:
+      type: string
+      enum: [active, deleted]
+    is_read:
+      type: boolean
+    payload:
+      $ref: "#/components/schemas/InboxPayload"
+  required:
+    - id
+    - source_type
+    - entity_type
+    - occurred_at
+    - ingested_at
+    - status
+    - is_read
+    - payload
+
+InboxListResponse:
+  type: object
+  properties:
+    items:
+      type: array
+      items:
+        $ref: "#/components/schemas/InboxItem"
+    total:
+      type: integer
+      minimum: 0
+    unread_count:
+      type: integer
+      minimum: 0
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 100
+    offset:
+      type: integer
+      minimum: 0
+  required: [items, total, unread_count, limit, offset]
+
+InboxReadAllRequest:
+  type: object
+  properties:
+    source_type:
+      type: string
+      description: Optional source filter for bulk mark-as-read.
+  additionalProperties: false
