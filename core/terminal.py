@@ -25,7 +25,10 @@ def _reset_windows_console() -> None:
     try:
         import ctypes
 
-        kernel32 = cast(Any, ctypes.windll).kernel32
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            return
+        kernel32 = cast(Any, windll).kernel32
         STD_INPUT_HANDLE = -10
         ENABLE_LINE_INPUT = 0x0002
         ENABLE_ECHO_INPUT = 0x0004

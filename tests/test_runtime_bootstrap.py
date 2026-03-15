@@ -403,7 +403,9 @@ def test_runner_build_helpers_and_configure_calls(tmp_path: Path) -> None:
     kwargs = router_mock.configure_thread.call_args.kwargs
     assert kwargs["thread_timeout"] == 55
     assert kwargs["event_bus"] is event_bus
-    assert kwargs["thread_db_path"].endswith("memory\\thread.db")
+    thread_db_path = Path(kwargs["thread_db_path"])
+    assert thread_db_path.name == "thread.db"
+    assert thread_db_path.parent.name == "memory"
 
 
 @pytest.mark.asyncio
