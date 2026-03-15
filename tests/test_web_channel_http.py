@@ -6,6 +6,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sandbox.extensions.inbox.models import InboxItem as InboxModelItem
 
 from sandbox.extensions.web_channel.main import WebChannelExtension
 
@@ -388,6 +389,37 @@ def test_get_inbox_items_ok(web_channel_app, mock_context):
     assert data["unread_count"] == 7
     assert data["items"][0]["id"] == 42
     assert data["items"][0]["is_read"] is False
+
+
+def test_get_inbox_items_accepts_inbox_model_instances(web_channel_app, mock_context):
+    mock_context._inbox_ext.list_items.return_value = (
+        [
+            InboxModelItem(
+                id=68,
+                source_type="mail",
+                source_account="default",
+                entity_type="email.message",
+                external_id="msg-68",
+                title="From model",
+                occurred_at=1773600000.0,
+                ingested_at=1773600010.0,
+                status="active",
+                is_read=False,
+                payload={"from": "alice@example.com"},
+                is_current=True,
+                payload_hash="hash-68",
+            )
+        ],
+        1,
+    )
+    mock_context._inbox_ext.get_unread_count.return_value = 1
+
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/inbox")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"][0]["id"] == 68
+    assert data["items"][0]["title"] == "From model"
 
 
 def test_post_inbox_read_all_with_source_filter(web_channel_app, mock_context):

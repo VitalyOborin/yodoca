@@ -187,6 +187,21 @@ def _get_inbox_extension(request: Request):
     return ext.get_inbox()
 
 
+def _to_mapping(data: object) -> dict:
+    """Normalize Pydantic models / dataclasses / dict-like values to dict."""
+    if isinstance(data, dict):
+        return data
+    model_dump = getattr(data, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    to_dict = getattr(data, "to_dict", None)
+    if callable(to_dict):
+        dumped = to_dict()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
 @router.get("/health")
 async def get_health(request: Request) -> HealthResponse:
     """Health check with uptime."""
@@ -501,7 +516,9 @@ async def get_inbox_items(
     )
     unread_count = await inbox.get_unread_count()
     response = InboxListResponse(
-        items=[InboxItem.model_validate(item).model_dump() for item in items],
+        items=[
+            InboxItem.model_validate(_to_mapping(item)).model_dump() for item in items
+        ],
         total=total,
         unread_count=unread_count,
         limit=limit,
@@ -563,7 +580,9 @@ async def get_inbox_item(request: Request, id: int) -> JSONResponse:
                 }
             },
         )
-    return JSONResponse(content=InboxItem.model_validate(item).model_dump())
+    return JSONResponse(
+        content=InboxItem.model_validate(_to_mapping(item)).model_dump()
+    )
 
 
 @router.post("/inbox/{id}/read")
