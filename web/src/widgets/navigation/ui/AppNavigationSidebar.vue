@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router';
 import { Bot, CalendarClock, FolderKanban, Inbox, MessageSquareText, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useInboxStore } from '@/entities/inbox';
 
 const STORAGE_KEY = 'yodoca.nav.expanded';
 const expanded = ref(false);
 const route = useRoute();
 const router = useRouter();
+const inboxStore = useInboxStore();
 
 const navItems = [
   { id: 'chat', label: 'Chat', icon: MessageSquareText, path: '/chat' },
@@ -19,6 +21,7 @@ const navItems = [
 ] as const;
 
 const currentPath = computed(() => route.path);
+const unreadCount = computed(() => inboxStore.unreadCount);
 
 function navigateTo(path: string) {
   if (route.path === path) return;
@@ -29,6 +32,7 @@ onMounted(() => {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved === '1') expanded.value = true;
   if (saved === '0') expanded.value = false;
+  void inboxStore.bootstrap();
 });
 
 watch(expanded, (value) => {
@@ -71,7 +75,15 @@ watch(expanded, (value) => {
               ]"
               @click="navigateTo(item.path)"
             >
-              <component :is="item.icon" class="h-4 w-4 shrink-0" />
+              <span class="relative inline-flex">
+                <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                <span
+                  v-if="item.id === 'inbox' && unreadCount > 0"
+                  class="absolute -right-1.5 -top-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] leading-4 text-white"
+                >
+                  {{ unreadCount > 99 ? '99+' : unreadCount }}
+                </span>
+              </span>
               <span v-if="expanded" class="truncate">{{ item.label }}</span>
             </button>
           </TooltipTrigger>

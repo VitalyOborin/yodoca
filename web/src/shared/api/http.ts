@@ -55,6 +55,10 @@ export async function apiFetch<T>(
           type: json.error.type,
           code: json.error.code,
         };
+      } else if (typeof json?.detail === 'string') {
+        body = {
+          message: json.detail,
+        };
       }
     } catch {
       // ignore

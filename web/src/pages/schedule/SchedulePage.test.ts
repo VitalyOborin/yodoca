@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
+import type { ScheduleItem } from '@/shared/api';
 import SchedulePage from './SchedulePage.vue';
 
 const scheduleStore = {
@@ -9,9 +10,9 @@ const scheduleStore = {
   error: null as string | null,
   lastErrorStatus: null as number | null,
   activeTab: 'once' as 'once' | 'recurring',
-  activeOnce: [],
-  activeRecurring: [],
-  history: [],
+  activeOnce: [] as ScheduleItem[],
+  activeRecurring: [] as ScheduleItem[],
+  history: [] as ScheduleItem[],
   loadSchedules: vi.fn(),
   addOnce: vi.fn(),
   addRecurring: vi.fn(),

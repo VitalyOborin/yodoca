@@ -38,4 +38,19 @@ export {
   type ScheduleRecurringResponse,
   type UpdateScheduleResponse,
 } from './schedules';
+export {
+  fetchInbox,
+  fetchInboxItem,
+  markInboxRead,
+  markAllInboxRead,
+  deleteInboxItem,
+  useInboxStream,
+  type InboxItem,
+  type InboxListResponse,
+  type InboxListQuery,
+  type InboxReadAllRequest,
+  type InboxStatus,
+  type InboxStatusFilter,
+  type InboxStreamEvent,
+} from './inbox';
 export { runAgent, type ChatMessage, type RunAgentOptions } from './agent';
