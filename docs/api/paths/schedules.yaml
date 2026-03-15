@@ -1,0 +1,226 @@
+# Schedule domain paths: /api/schedules, /api/schedules/once, /api/schedules/recurring, /api/schedules/{type}/{id}
+
+/api/schedules:
+  get:
+    tags: [schedules]
+    summary: List all schedules
+    description: >
+      Returns all one-shot and recurring schedules stored in the scheduler
+      extension. Use the optional `status` query parameter to narrow the
+      result set. Valid values differ by schedule type:
+      one-shot — `scheduled`, `fired`, `cancelled`;
+      recurring — `active`, `paused`, `cancelled`.
+      When `status=active` is supplied, only recurring schedules with
+      `status=active` **and** one-shot schedules with `status=scheduled` are
+      returned (i.e. the filter is applied as "currently pending").
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: status
+        in: query
+        required: false
+        description: >
+          Filter by schedule status. For one-shot schedules the applicable
+          values are `scheduled`, `fired`, `cancelled`. For recurring
+          schedules: `active`, `paused`, `cancelled`. The special alias
+          `active` returns only pending/active schedules of both types.
+        schema:
+          type: string
+          enum: [scheduled, fired, active, paused, cancelled]
+    responses:
+      "200":
+        description: Schedule list
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleListResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+/api/schedules/once:
+  post:
+    tags: [schedules]
+    summary: Create a one-shot schedule
+    description: >
+      Schedule a single event to fire once at a specific time.
+      Provide **exactly one** of `delay_seconds` (relative) or `at_iso`
+      (absolute ISO 8601 datetime). The event is published to the Event Bus
+      under `topic` when it fires. Use system topics (`system.user.notify`,
+      `system.agent.task`, `system.agent.background`) for built-in
+      integrations; any other topic requires `payload_extra`.
+    security:
+      - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateOnceScheduleRequest"
+          examples:
+            delay:
+              summary: Fire in 5 minutes
+              value:
+                topic: system.user.notify
+                message: "Reminder: stand-up in 5 minutes"
+                delay_seconds: 300
+            absolute:
+              summary: Fire at a specific time
+              value:
+                topic: system.user.notify
+                message: "Good morning!"
+                at_iso: "2026-03-16T09:00:00"
+                channel_id: telegram_channel
+    responses:
+      "201":
+        description: Schedule created
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleOnceResponse"
+      "400":
+        $ref: "#/components/responses/ValidationError"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+/api/schedules/recurring:
+  post:
+    tags: [schedules]
+    summary: Create a recurring schedule
+    description: >
+      Create a schedule that fires repeatedly according to a cron expression
+      or a fixed interval. Provide **exactly one** of `cron` or
+      `every_seconds`. Optionally set `until_iso` to limit the schedule
+      duration. The schedule starts in `active` status immediately after
+      creation.
+    security:
+      - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateRecurringScheduleRequest"
+          examples:
+            cron:
+              summary: Daily at 09:00
+              value:
+                topic: system.user.notify
+                message: "Daily stand-up time!"
+                cron: "0 9 * * *"
+            interval:
+              summary: Every 10 minutes until midnight
+              value:
+                topic: system.agent.background
+                message: "Run health check"
+                every_seconds: 600
+                until_iso: "2026-03-16T00:00:00"
+    responses:
+      "201":
+        description: Recurring schedule created
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleRecurringResponse"
+      "400":
+        $ref: "#/components/responses/ValidationError"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+/api/schedules/{type}/{id}:
+  delete:
+    tags: [schedules]
+    summary: Cancel a schedule
+    description: >
+      Cancel a schedule by its type and ID. For one-shot schedules only
+      `scheduled` entries can be cancelled (already `fired` schedules are
+      immutable). For recurring schedules, cancellation is always possible
+      regardless of current status.
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/ScheduleType"
+      - $ref: "#/components/parameters/ScheduleId"
+    responses:
+      "200":
+        description: Schedule cancelled
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationResult"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "409":
+        description: >
+          Cannot cancel — the one-shot schedule has already been fired or
+          was previously cancelled.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+  patch:
+    tags: [schedules]
+    summary: Update or pause/resume a schedule
+    description: >
+      Update fields of a recurring schedule or change its status
+      (`active` / `paused`). Applies **only to recurring schedules** — use
+      `DELETE` to cancel a one-shot. Supplying `cron` or `every_seconds`
+      also resets `next_fire_at` immediately. At most one of `cron` /
+      `every_seconds` may be present per request.
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/ScheduleType"
+      - $ref: "#/components/parameters/ScheduleId"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UpdateScheduleRequest"
+          examples:
+            pause:
+              summary: Pause a recurring schedule
+              value:
+                status: paused
+            resume:
+              summary: Resume a paused recurring schedule
+              value:
+                status: active
+            change_cron:
+              summary: Change cron expression
+              value:
+                cron: "0 10 * * 1-5"
+            extend:
+              summary: Extend end datetime
+              value:
+                until_iso: "2026-12-31T23:59:59"
+    responses:
+      "200":
+        description: Schedule updated
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScheduleResponse"
+      "400":
+        $ref: "#/components/responses/ValidationError"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "422":
+        description: >
+          Semantic validation error — e.g. both `cron` and `every_seconds`
+          supplied, or `until_iso` is in the past.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"

@@ -1,0 +1,81 @@
+# OpenAI-compatible API paths: /v1/models, /v1/chat/completions, /v1/responses
+
+/v1/models:
+  get:
+    tags: [openai-compatible]
+    summary: List available models
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: OpenAI-compatible model list
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelsResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+/v1/chat/completions:
+  post:
+    tags: [openai-compatible]
+    summary: Create chat completion
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/XThreadId"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ChatCompletionsRequest"
+    responses:
+      "200":
+        description: Completion response (JSON or SSE stream)
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionsResponse"
+          text/event-stream:
+            schema:
+              type: string
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "422":
+        $ref: "#/components/responses/ValidationError"
+      "503":
+        $ref: "#/components/responses/BusyError"
+      "504":
+        $ref: "#/components/responses/TimeoutError"
+/v1/responses:
+  post:
+    tags: [openai-compatible]
+    summary: Create response
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/XThreadId"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResponsesRequest"
+    responses:
+      "200":
+        description: Responses API result (JSON or SSE stream)
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesResponse"
+          text/event-stream:
+            schema:
+              type: string
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "422":
+        $ref: "#/components/responses/ValidationError"
+      "503":
+        $ref: "#/components/responses/BusyError"
+      "504":
+        $ref: "#/components/responses/TimeoutError"

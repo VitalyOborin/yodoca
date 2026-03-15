@@ -2,7 +2,7 @@
 """Smoke test script for Yodoca Web Channel API endpoints.
 
 Runs against a live server and validates all endpoints from
-docs/api/web-channel-openapi.yaml.
+docs/api/openapi.yaml.
 
 Usage: uv run python scripts/check_api.py [--base-url URL] [--api-key KEY]
 """

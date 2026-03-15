@@ -61,7 +61,7 @@ The existing `StreamingChannelProvider` callbacks are translated to AG-UI events
 
 ### 4) OpenAPI specification
 
-Update `docs/api/web-channel-openapi.yaml` with the new path, request/response schemas, and `ag-ui` tag.
+Update `docs/api/openapi.yaml` with the new path, request/response schemas, and `ag-ui` tag.
 
 ## Consequences
 
@@ -82,5 +82,5 @@ Update `docs/api/web-channel-openapi.yaml` with the new path, request/response s
 
 - Route handler: `sandbox/extensions/web_channel/routes_agui.py`
 - Models: `AgUIRunRequest` and related types in `models.py`
-- OpenAPI: `POST /agent` path and schemas in `docs/api/web-channel-openapi.yaml`
+- OpenAPI: `POST /agent` path and schemas in `docs/api/openapi.yaml`
 

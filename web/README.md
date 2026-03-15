@@ -23,7 +23,7 @@ Vite dev server proxies requests to backend (`web/vite.config.ts`):
 No backend API contract changes are introduced by this client.
 Current HTTP API contract is documented in:
 
-- `docs/api/web-channel-openapi.yaml`
+- `docs/api/openapi.yaml`
 
 ## Chat Flow
 

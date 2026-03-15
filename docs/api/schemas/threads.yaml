@@ -1,0 +1,40 @@
+# Thread domain schemas.
+# Referenced from the main OpenAPI document.
+
+Thread:
+  type: object
+  properties:
+    id: { type: string }
+    project_id: { type: string, nullable: true }
+    title: { type: string, nullable: true }
+    channel_id: { type: string }
+    created_at: { type: integer }
+    last_active_at: { type: integer }
+    is_archived: { type: boolean }
+  required: [id, channel_id, created_at, last_active_at, is_archived]
+
+ThreadDetailResponse:
+  type: object
+  properties:
+    thread:
+      $ref: "#/components/schemas/Thread"
+    history:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+  required: [thread, history]
+
+CreateThreadRequest:
+  type: object
+  properties:
+    id: { type: string, nullable: true }
+    project_id: { type: string, nullable: true }
+    title: { type: string, nullable: true }
+
+UpdateThreadRequest:
+  type: object
+  properties:
+    title: { type: string, nullable: true }
+    project_id: { type: string, nullable: true }
+    is_archived: { type: boolean, nullable: true }

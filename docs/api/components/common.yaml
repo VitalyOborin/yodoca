@@ -1,0 +1,76 @@
+# Shared components: security, parameters, responses, common schemas.
+# Referenced from the main OpenAPI document.
+
+securitySchemes:
+  bearerAuth:
+    type: http
+    scheme: bearer
+    bearerFormat: APIKey
+
+parameters:
+  XThreadId:
+    name: X-Thread-Id
+    in: header
+    required: false
+    description: Optional thread identifier for routing into an existing conversation thread.
+    schema:
+      type: string
+  ScheduleType:
+    name: type
+    in: path
+    required: true
+    description: Schedule type — `one_shot` or `recurring`.
+    schema:
+      type: string
+      enum: [one_shot, recurring]
+  ScheduleId:
+    name: id
+    in: path
+    required: true
+    description: Numeric schedule ID as returned by the create endpoints.
+    schema:
+      type: integer
+      minimum: 1
+
+responses:
+  UnauthorizedError:
+    description: Missing or invalid Bearer token
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+  ValidationError:
+    description: Invalid request payload
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+  NotFoundError:
+    description: Resource not found
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+  BusyError:
+    description: Another request is currently in progress
+    headers:
+      Retry-After:
+        description: Recommended retry delay in seconds
+        schema:
+          type: integer
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+  TimeoutError:
+    description: The request exceeded `request_timeout_seconds`
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+  ServiceUnavailableError:
+    description: Scheduler extension is not loaded or not initialized
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"

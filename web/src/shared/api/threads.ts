@@ -1,6 +1,6 @@
 /**
  * Thread API client.
- * Types align with docs/api/web-channel-openapi.yaml.
+ * Types align with docs/api/openapi.yaml.
  */
 
 import { apiFetch } from './http';

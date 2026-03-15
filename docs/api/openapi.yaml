@@ -1,0 +1,136 @@
+# Yodoca Web Channel API — OpenAPI 3.1
+# Main entry point. Paths and components are split by domain for maintainability.
+# See docs/api/README.md for structure.
+
+openapi: 3.1.0
+info:
+  title: Yodoca Web Channel API
+  version: 0.5.0
+  description: >
+    OpenAPI specification for the experimental web channel API with first-class
+    thread and project resources.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local default
+tags:
+  - name: openai-compatible
+  - name: ag-ui
+  - name: system
+  - name: threads
+  - name: projects
+  - name: notifications
+  - name: schedules
+paths:
+  /v1/models:
+    $ref: "paths/openai.yaml#/~1v1~1models"
+  /v1/chat/completions:
+    $ref: "paths/openai.yaml#/~1v1~1chat~1completions"
+  /v1/responses:
+    $ref: "paths/openai.yaml#/~1v1~1responses"
+  /agent:
+    $ref: "paths/ag-ui.yaml#/~1agent"
+  /api/health:
+    $ref: "paths/system.yaml#/~1api~1health"
+  /api/threads:
+    $ref: "paths/threads.yaml#/~1api~1threads"
+  /api/threads/{thread_id}:
+    $ref: "paths/threads.yaml#/~1api~1threads~1{thread_id}"
+  /api/projects:
+    $ref: "paths/projects.yaml#/~1api~1projects"
+  /api/projects/{project_id}:
+    $ref: "paths/projects.yaml#/~1api~1projects~1{project_id}"
+  /api/notifications:
+    $ref: "paths/notifications.yaml#/~1api~1notifications"
+  /api/schedules:
+    $ref: "paths/schedules.yaml#/~1api~1schedules"
+  /api/schedules/once:
+    $ref: "paths/schedules.yaml#/~1api~1schedules~1once"
+  /api/schedules/recurring:
+    $ref: "paths/schedules.yaml#/~1api~1schedules~1recurring"
+  /api/schedules/{type}/{id}:
+    $ref: "paths/schedules.yaml#/~1api~1schedules~1{type}~1{id}"
+components:
+  securitySchemes:
+    bearerAuth:
+      $ref: "components/common.yaml#/securitySchemes/bearerAuth"
+  parameters:
+    XThreadId:
+      $ref: "components/common.yaml#/parameters/XThreadId"
+    ScheduleType:
+      $ref: "components/common.yaml#/parameters/ScheduleType"
+    ScheduleId:
+      $ref: "components/common.yaml#/parameters/ScheduleId"
+  responses:
+    UnauthorizedError:
+      $ref: "components/common.yaml#/responses/UnauthorizedError"
+    ValidationError:
+      $ref: "components/common.yaml#/responses/ValidationError"
+    NotFoundError:
+      $ref: "components/common.yaml#/responses/NotFoundError"
+    BusyError:
+      $ref: "components/common.yaml#/responses/BusyError"
+    TimeoutError:
+      $ref: "components/common.yaml#/responses/TimeoutError"
+    ServiceUnavailableError:
+      $ref: "components/common.yaml#/responses/ServiceUnavailableError"
+  schemas:
+    ErrorResponse:
+      $ref: "schemas/common.yaml#/ErrorResponse"
+    OperationResult:
+      $ref: "schemas/common.yaml#/OperationResult"
+    HealthResponse:
+      $ref: "schemas/common.yaml#/HealthResponse"
+    ModelsResponse:
+      $ref: "schemas/openai.yaml#/ModelsResponse"
+    ModelObject:
+      $ref: "schemas/openai.yaml#/ModelObject"
+    ChatMessage:
+      $ref: "schemas/openai.yaml#/ChatMessage"
+    ChatCompletionsRequest:
+      $ref: "schemas/openai.yaml#/ChatCompletionsRequest"
+    ChatCompletionsResponse:
+      $ref: "schemas/openai.yaml#/ChatCompletionsResponse"
+    ResponsesRequest:
+      $ref: "schemas/openai.yaml#/ResponsesRequest"
+    ResponsesResponse:
+      $ref: "schemas/openai.yaml#/ResponsesResponse"
+    UsageChat:
+      $ref: "schemas/openai.yaml#/UsageChat"
+    UsageResponses:
+      $ref: "schemas/openai.yaml#/UsageResponses"
+    AgUIRunRequest:
+      $ref: "schemas/ag-ui.yaml#/AgUIRunRequest"
+    Thread:
+      $ref: "schemas/threads.yaml#/Thread"
+    ThreadDetailResponse:
+      $ref: "schemas/threads.yaml#/ThreadDetailResponse"
+    CreateThreadRequest:
+      $ref: "schemas/threads.yaml#/CreateThreadRequest"
+    UpdateThreadRequest:
+      $ref: "schemas/threads.yaml#/UpdateThreadRequest"
+    Project:
+      $ref: "schemas/projects.yaml#/Project"
+    CreateProjectRequest:
+      $ref: "schemas/projects.yaml#/CreateProjectRequest"
+    UpdateProjectRequest:
+      $ref: "schemas/projects.yaml#/UpdateProjectRequest"
+    Notification:
+      $ref: "schemas/notifications.yaml#/Notification"
+    NotificationsResponse:
+      $ref: "schemas/notifications.yaml#/NotificationsResponse"
+    ScheduleItem:
+      $ref: "schemas/schedules.yaml#/ScheduleItem"
+    ScheduleListResponse:
+      $ref: "schemas/schedules.yaml#/ScheduleListResponse"
+    CreateOnceScheduleRequest:
+      $ref: "schemas/schedules.yaml#/CreateOnceScheduleRequest"
+    ScheduleOnceResponse:
+      $ref: "schemas/schedules.yaml#/ScheduleOnceResponse"
+    CreateRecurringScheduleRequest:
+      $ref: "schemas/schedules.yaml#/CreateRecurringScheduleRequest"
+    ScheduleRecurringResponse:
+      $ref: "schemas/schedules.yaml#/ScheduleRecurringResponse"
+    UpdateScheduleRequest:
+      $ref: "schemas/schedules.yaml#/UpdateScheduleRequest"
+    UpdateScheduleResponse:
+      $ref: "schemas/schedules.yaml#/UpdateScheduleResponse"

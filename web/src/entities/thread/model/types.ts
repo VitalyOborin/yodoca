@@ -1,6 +1,6 @@
 /**
  * Thread type aligned with backend API schema.
- * @see docs/api/web-channel-openapi.yaml
+ * @see docs/api/openapi.yaml
  */
 export interface Thread {
   id: string;

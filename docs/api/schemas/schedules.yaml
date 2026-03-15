@@ -1,0 +1,234 @@
+# Schedule domain schemas.
+# Referenced from the main OpenAPI document.
+
+ScheduleItem:
+  type: object
+  description: >
+    A single schedule entry (one-shot or recurring). Fields `cron_expr`,
+    `every_seconds`, and `until_iso` are only present for recurring entries.
+    `fires_at_iso` is the next (or only) fire time in ISO 8601.
+  properties:
+    id: { type: integer }
+    type:
+      type: string
+      enum: [one_shot, recurring]
+    topic: { type: string }
+    message: { type: string, nullable: true }
+    channel_id: { type: string, nullable: true }
+    payload:
+      type: object
+      additionalProperties: true
+      description: Raw Event Bus payload that will be emitted when the schedule fires.
+    fires_at_iso:
+      type: string
+      format: date-time
+      description: Next (or only) scheduled fire time in ISO 8601.
+    status:
+      type: string
+      description: >
+        One-shot statuses: `scheduled`, `fired`, `cancelled`.
+        Recurring statuses: `active`, `paused`, `cancelled`.
+    cron_expr:
+      type: string
+      nullable: true
+      description: Cron expression — present only for recurring schedules.
+    every_seconds:
+      type: number
+      nullable: true
+      description: Fixed interval in seconds — present only for recurring schedules.
+    until_iso:
+      type: string
+      format: date-time
+      nullable: true
+      description: Optional expiry datetime — present only for recurring schedules.
+    created_at: { type: integer, description: Unix timestamp of creation. }
+  required: [id, type, topic, payload, fires_at_iso, status, created_at]
+
+ScheduleListResponse:
+  type: object
+  properties:
+    schedules:
+      type: array
+      items:
+        $ref: "#/components/schemas/ScheduleItem"
+    count: { type: integer, minimum: 0 }
+  required: [schedules, count]
+
+CreateOnceScheduleRequest:
+  type: object
+  description: >
+    Payload for creating a one-shot schedule. Exactly one of `delay_seconds`
+    or `at_iso` must be supplied.
+  properties:
+    topic:
+      type: string
+      description: >
+        Event Bus topic to emit when the schedule fires.
+        Built-in system topics: `system.user.notify` (delivers `message` as
+        text to the user), `system.agent.task` (sends `message` as a prompt
+        to the agent), `system.agent.background` (agent task without a
+        user-facing response). Any custom topic requires `payload_extra`.
+      examples:
+        - system.user.notify
+        - system.agent.task
+        - system.agent.background
+    message:
+      type: string
+      description: >
+        Human-readable text (for `system.user.notify`) or instruction prompt
+        (for `system.agent.task` / `system.agent.background`). For custom
+        topics this becomes the `message` field of `payload_extra` unless
+        overridden there.
+    channel_id:
+      type: string
+      nullable: true
+      description: >
+        Optional delivery channel ID (e.g. `telegram_channel`).
+        If omitted, the default channel is used.
+    payload_extra:
+      type: object
+      additionalProperties: true
+      nullable: true
+      description: >
+        Additional key/value fields merged into the Event Bus payload.
+        Intended for custom (non-system) topics only.
+    delay_seconds:
+      type: integer
+      minimum: 1
+      nullable: true
+      description: >
+        Number of seconds from now until the schedule fires.
+        Mutually exclusive with `at_iso`.
+    at_iso:
+      type: string
+      format: date-time
+      nullable: true
+      description: >
+        Absolute fire time as ISO 8601 datetime (e.g. `2026-03-16T09:00:00`).
+        Must be in the future. Mutually exclusive with `delay_seconds`.
+  required: [topic, message]
+
+ScheduleOnceResponse:
+  type: object
+  properties:
+    success: { type: boolean }
+    schedule_id: { type: integer }
+    topic: { type: string }
+    fires_in_seconds: { type: integer, minimum: 0 }
+    status: { type: string, enum: [scheduled] }
+    error: { type: string, nullable: true }
+  required: [success, schedule_id, topic, fires_in_seconds, status]
+
+CreateRecurringScheduleRequest:
+  type: object
+  description: >
+    Payload for creating a recurring schedule. Exactly one of `cron` or
+    `every_seconds` must be supplied.
+  properties:
+    topic:
+      type: string
+      description: >
+        Event Bus topic to emit on each fire. Same semantics as for
+        `CreateOnceScheduleRequest.topic`.
+      examples:
+        - system.user.notify
+        - system.agent.background
+    message:
+      type: string
+      description: >
+        Text or prompt delivered with each event. Same semantics as for
+        `CreateOnceScheduleRequest.message`.
+    channel_id:
+      type: string
+      nullable: true
+      description: Optional delivery channel ID.
+    payload_extra:
+      type: object
+      additionalProperties: true
+      nullable: true
+      description: >
+        Additional key/value fields merged into the Event Bus payload for
+        custom topics.
+    cron:
+      type: string
+      nullable: true
+      description: >
+        Standard 5-field cron expression (e.g. `0 9 * * *` for daily at
+        09:00, `*/15 * * * *` for every 15 minutes).
+        Mutually exclusive with `every_seconds`.
+    every_seconds:
+      type: number
+      minimum: 1
+      nullable: true
+      description: >
+        Fixed repeat interval in seconds (positive number).
+        Mutually exclusive with `cron`.
+    until_iso:
+      type: string
+      format: date-time
+      nullable: true
+      description: >
+        Optional ISO 8601 datetime after which the schedule is
+        auto-cancelled. Must be in the future.
+  required: [topic, message]
+
+ScheduleRecurringResponse:
+  type: object
+  properties:
+    success: { type: boolean }
+    schedule_id: { type: integer }
+    next_fire_iso:
+      type: string
+      format: date-time
+    status: { type: string, enum: [created] }
+    error: { type: string, nullable: true }
+  required: [success, schedule_id, next_fire_iso, status]
+
+UpdateScheduleRequest:
+  type: object
+  description: >
+    Partial update for a **recurring** schedule. All fields are optional;
+    supply only those you want to change. At most one of `cron` /
+    `every_seconds` may be present. Changing `cron` or `every_seconds`
+    immediately recalculates `next_fire_at`.
+  properties:
+    cron:
+      type: string
+      nullable: true
+      description: >
+        New cron expression. Clears any existing `every_seconds` on the
+        schedule. Mutually exclusive with `every_seconds` in this request.
+    every_seconds:
+      type: number
+      minimum: 1
+      nullable: true
+      description: >
+        New fixed interval in seconds. Clears any existing `cron` on the
+        schedule. Mutually exclusive with `cron` in this request.
+    until_iso:
+      type: string
+      format: date-time
+      nullable: true
+      description: >
+        New or updated end datetime in ISO 8601. Pass `null` explicitly to
+        remove an existing expiry and make the schedule open-ended.
+    status:
+      type: string
+      enum: [active, paused]
+      nullable: true
+      description: >
+        Set to `paused` to suspend firing without cancelling; set back to
+        `active` to resume. Use `DELETE` to permanently cancel.
+
+UpdateScheduleResponse:
+  type: object
+  properties:
+    success: { type: boolean }
+    schedule_id: { type: integer }
+    next_fire_iso:
+      type: string
+      format: date-time
+      description: Next scheduled fire time after the update.
+    message: { type: string, nullable: true }
+    error: { type: string, nullable: true }
+  required: [success, schedule_id, next_fire_iso]

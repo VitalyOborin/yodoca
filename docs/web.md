@@ -368,7 +368,7 @@ sandbox/extensions/web_channel/
 
 ## OpenAPI Specification
 
-The full API specification is available at [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml) (OpenAPI 3.1, version 0.4.0). It covers all endpoint groups, request/response schemas, authentication, and error responses.
+The full API specification is available at [api/openapi.yaml](api/openapi.yaml) (OpenAPI 3.1, version 0.5.0). It covers all endpoint groups, request/response schemas, authentication, and error responses.
 
 When the backend is running, FastAPI also serves auto-generated interactive documentation at `http://127.0.0.1:8080/docs` (Swagger UI) and `http://127.0.0.1:8080/redoc` (ReDoc).
 
@@ -432,7 +432,7 @@ Add `-H "Authorization: Bearer <key>"` if authentication is enabled.
 ## References
 
 - [channels.md](channels.md) — Channel system overview (CLI, Telegram, Web)
-- [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml) — OpenAPI specification
+- [api/openapi.yaml](api/openapi.yaml) — OpenAPI specification
 - [ADR 026](adr/026-web-channel.md) — Web Channel architectural decision
 - [ADR 027](adr/027-session-project-domain-model.md) — Thread and Project domain model
 - [extensions.md](extensions.md) — Extension architecture

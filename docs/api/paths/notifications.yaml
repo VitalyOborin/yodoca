@@ -1,0 +1,26 @@
+# Notification path: /api/notifications
+
+/api/notifications:
+  get:
+    tags: [notifications]
+    summary: Long-poll proactive notifications
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: timeout
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 60
+          default: 30
+    responses:
+      "200":
+        description: Notification batch (possibly empty)
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationsResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"

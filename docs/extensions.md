@@ -235,7 +235,7 @@ The Web Channel extension ([ADR 026](adr/026-web-channel.md)) implements `Channe
 
 Unlike CLI and Telegram, `web_channel` can pass `thread_id` from the `X-Thread-Id` header into `router.handle_user_message(...)`, which activates named thread pooling in `ThreadManager`.
 
-See [channels.md](channels.md#web-channel) and [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml).
+See [channels.md](channels.md#web-channel) and [api/openapi.yaml](api/openapi.yaml).
 
 ### Web Search (`web_search` extension)
 

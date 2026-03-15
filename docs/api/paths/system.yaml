@@ -1,0 +1,17 @@
+# System path: /api/health
+
+/api/health:
+  get:
+    tags: [system]
+    summary: Health check
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: Service health
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HealthResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"

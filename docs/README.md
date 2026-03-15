@@ -22,7 +22,7 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [memory.md](memory.md) | Memory system: layers, extensions, database, search, tools |
 | [channels.md](channels.md) | Channel providers: CLI, Telegram, Web |
 | [web.md](web.md) | Web interface: frontend app, backend API, architecture, getting started |
-| [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml) | OpenAPI spec for Web Channel (ADR 026) |
+| [api/openapi.yaml](api/openapi.yaml) | OpenAPI spec for Web Channel (ADR 026); see [api/README.md](api/README.md) for split structure |
 | [scheduler.md](scheduler.md) | Scheduler extension: one-shot and recurring events |
 | [task_engine.md](task_engine.md) | Task Engine: durable background tasks, checkpointing, HITL |
 | [llm.md](llm.md) | Model routing, providers, configuration |
