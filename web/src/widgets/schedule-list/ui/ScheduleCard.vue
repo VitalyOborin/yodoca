@@ -32,6 +32,13 @@ const cronLabel = computed(() => {
     return props.item.cron_expr;
   }
 });
+
+const statusBadgeClass = computed(() => {
+  if (props.item.status === 'paused') {
+    return 'border-yellow-300 bg-yellow-300 text-black';
+  }
+  return 'border-border text-muted-foreground';
+});
 </script>
 
 <template>
@@ -53,7 +60,10 @@ const cronLabel = computed(() => {
             <Bot v-else class="h-3.5 w-3.5" />
             {{ topicLabel }}
           </span>
-          <span class="inline-flex rounded-full border border-border px-2.5 py-1 text-xs uppercase text-muted-foreground">
+          <span
+            class="inline-flex rounded-full border px-2.5 py-1 text-xs uppercase"
+            :class="statusBadgeClass"
+          >
             {{ item.status }}
           </span>
         </div>

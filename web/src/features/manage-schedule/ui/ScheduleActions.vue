@@ -44,6 +44,7 @@ const emit = defineEmits<{
       v-if="type === 'recurring' && status === 'paused'"
       variant="secondary"
       size="sm"
+      class="bg-lime-400 text-black hover:bg-lime-300"
       :disabled="disabled"
       @click="emit('resume')"
     >
