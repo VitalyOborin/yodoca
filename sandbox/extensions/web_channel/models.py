@@ -250,9 +250,7 @@ class CreateOnceScheduleRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_time_selector(self) -> "CreateOnceScheduleRequest":
         if (self.delay_seconds is None) == (self.at_iso is None):
-            raise ValueError(
-                "provide exactly one of delay_seconds or at_iso"
-            )
+            raise ValueError("provide exactly one of delay_seconds or at_iso")
         return self
 
 
@@ -349,4 +347,3 @@ class ErrorResponse(BaseModel):
     """Error response body."""
 
     error: dict[str, Any]
-

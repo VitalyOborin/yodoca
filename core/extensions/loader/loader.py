@@ -528,9 +528,7 @@ class Loader:
             manifest = self._get_manifest(ext_id)
             if not manifest or not manifest.setup_instructions.strip():
                 continue
-            parts.append(
-                f"- {ext_id}: {manifest.setup_instructions.strip()}"
-            )
+            parts.append(f"- {ext_id}: {manifest.setup_instructions.strip()}")
         return parts
 
     def _collect_mcp_aliases(self) -> list[str]:
@@ -560,9 +558,7 @@ class Loader:
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
         if setup_parts:
-            sections.append(
-                "Extensions needing setup:\n" + "\n".join(setup_parts)
-            )
+            sections.append("Extensions needing setup:\n" + "\n".join(setup_parts))
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))
         if self._agent_registry and self._agent_registry.list_agents():

@@ -67,9 +67,7 @@ class TelegramChannelExtension:
     def context_priority(self) -> int:
         return 10  # inject before Memory (priority=100)
 
-    async def get_context(
-        self, prompt: str, turn_context: "TurnContext"
-    ) -> str | None:
+    async def get_context(self, prompt: str, turn_context: "TurnContext") -> str | None:
         if self._bot and self._token and self._chat_id:
             return (
                 "## Available channels\n"

@@ -50,4 +50,3 @@ MCP_TOOL_APPROVAL_RESPONSE_PAYLOAD = {
     "approved": "bool",
     "reason": "str | None",
 }
-

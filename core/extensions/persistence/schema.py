@@ -15,8 +15,7 @@ def ensure_thread_schema(db_path: str) -> None:
         ddl: str,
     ) -> None:
         existing = {
-            row[1]
-            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
         }
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
@@ -79,4 +78,3 @@ def ensure_thread_schema(db_path: str) -> None:
         conn.commit()
     finally:
         conn.close()
-

@@ -106,6 +106,3 @@ class TestThreadRotation:
             await router.handle_user_message("second", "u1", ch, "cli")
 
         assert mock_event_bus.publish.call_count == 0
-
-
-

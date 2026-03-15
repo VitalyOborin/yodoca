@@ -76,7 +76,7 @@ async def collect_subtask_results(
     results = []
     failures = []
     for row in rows:
-        d = dict(zip(cols, row))
+        d = dict(zip(cols, row, strict=False))
         task_id = d["task_id"]
         status = d["status"]
         result = None

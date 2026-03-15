@@ -272,4 +272,3 @@ class MessageRouter:
         if channel is None:
             channel = next(iter(self._channels.values()))
         await channel.send_message(text)
-

@@ -152,7 +152,9 @@ async def get_chain_tasks(db: Any, chain_id: str) -> list[dict]:
     for row in rows:
         d = dict(zip(cols, row, strict=True))
         payload = (
-            json.loads(d["payload"]) if isinstance(d["payload"], str) else (d["payload"] or {})
+            json.loads(d["payload"])
+            if isinstance(d["payload"], str)
+            else (d["payload"] or {})
         )
         d["goal"] = payload.get("goal", "")
         result.append(d)

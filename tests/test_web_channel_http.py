@@ -560,4 +560,3 @@ def test_scheduler_endpoints_return_503_when_extension_missing(mock_context):
     resp = client.get("/api/schedules")
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "scheduler_unavailable"
-

@@ -85,7 +85,11 @@ def _build_step_prompt(
         f"Step {state.step + 1} of {max_steps}.",
     ]
     if predecessor_result:
-        content = predecessor_result[:500] if len(predecessor_result) > 500 else predecessor_result
+        content = (
+            predecessor_result[:500]
+            if len(predecessor_result) > 500
+            else predecessor_result
+        )
         parts.append(f"Previous step result (from predecessor task):\n{content}")
     if state.context.get("subtask_results"):
         parts.append("Subtask results:")
@@ -221,7 +225,7 @@ async def _load_task(db: Any, task_id: str) -> TaskRecord | None:
     if not row:
         return None
     columns = [d[0] for d in cursor.description]
-    d = dict(zip(columns, row))
+    d = dict(zip(columns, row, strict=False))
     payload = (
         json.loads(d["payload"]) if isinstance(d["payload"], str) else d["payload"]
     )
@@ -552,9 +556,7 @@ async def run_agent_loop(
 
     async def invoke_fn() -> StepOutcome:
         response = await agent.invoke(
-            _build_step_prompt(
-                state, max_steps, output_channel, predecessor_result
-            ),
+            _build_step_prompt(state, max_steps, output_channel, predecessor_result),
             step_context,
         )
         return StepOutcome(
@@ -592,9 +594,7 @@ async def run_orchestrator_loop(
 
     async def invoke_fn() -> StepOutcome:
         content = await ctx.invoke_agent_background(
-            _build_step_prompt(
-                state, max_steps, output_channel, predecessor_result
-            )
+            _build_step_prompt(state, max_steps, output_channel, predecessor_result)
         )
         return StepOutcome(content=content, status="success")
 

@@ -18,4 +18,3 @@ __all__ = [
     "UnicodeSQLiteSession",
     "ensure_thread_schema",
 ]
-

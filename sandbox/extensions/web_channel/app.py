@@ -119,4 +119,3 @@ def create_app(extension: Any) -> FastAPI:
     app.include_router(agui_router)
 
     return app
-

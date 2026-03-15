@@ -134,7 +134,9 @@ class TestSchedulerExtension:
         await ext.destroy()
 
     @pytest.mark.asyncio
-    async def test_schedule_once_tool_returns_structured_result(self, tmp_path: Path) -> None:
+    async def test_schedule_once_tool_returns_structured_result(
+        self, tmp_path: Path
+    ) -> None:
         """schedule_once tool returns ScheduleOnceResult with success, schedule_id, topic."""
         data_dir = tmp_path / "scheduler"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -145,7 +147,9 @@ class TestSchedulerExtension:
         ctx.emit = AsyncMock()
         await ext.initialize(ctx)
         tools = ext.get_tools()
-        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        schedule_once = next(
+            t for t in tools if getattr(t, "name", None) == "schedule_once"
+        )
         args = json.dumps(
             {
                 "topic": "system.user.notify",
@@ -179,7 +183,9 @@ class TestSchedulerExtension:
         ctx.emit = AsyncMock()
         await ext.initialize(ctx)
         tools = ext.get_tools()
-        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        schedule_once = next(
+            t for t in tools if getattr(t, "name", None) == "schedule_once"
+        )
         args = json.dumps(
             {
                 "topic": "system.user.notify",
@@ -197,7 +203,9 @@ class TestSchedulerExtension:
         await ext.destroy()
 
     @pytest.mark.asyncio
-    async def test_list_schedules_returns_structured_result(self, tmp_path: Path) -> None:
+    async def test_list_schedules_returns_structured_result(
+        self, tmp_path: Path
+    ) -> None:
         """list_schedules returns ListSchedulesResult with success and schedules list."""
         data_dir = tmp_path / "scheduler"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +217,9 @@ class TestSchedulerExtension:
         await ext.initialize(ctx)
         await ext._store.insert_one_shot("test.topic", "{}", time.time() + 60)
         tools = ext.get_tools()
-        list_tool = next(t for t in tools if getattr(t, "name", None) == "list_schedules")
+        list_tool = next(
+            t for t in tools if getattr(t, "name", None) == "list_schedules"
+        )
         args = json.dumps({"status": "scheduled"}, ensure_ascii=False)
         result = await list_tool.on_invoke_tool(
             _make_tool_ctx(list_tool.name, args), args

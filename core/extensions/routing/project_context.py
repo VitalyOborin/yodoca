@@ -22,4 +22,3 @@ class ProjectInstructionsContextProvider:
         if not instructions:
             return None
         return "[Project Instructions]\n" + instructions.strip()
-

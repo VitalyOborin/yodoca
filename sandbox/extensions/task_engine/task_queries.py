@@ -31,7 +31,7 @@ async def get_task_status(db: Any, task_id: str) -> TaskStatusResult:
             error="Task not found",
         )
     cols = [d[0] for d in cursor.description]
-    d = dict(zip(cols, row))
+    d = dict(zip(cols, row, strict=False))
     payload = json.loads(d["payload"]) if isinstance(d["payload"], str) else {}
     checkpoint = None
     step_val = 0
@@ -71,7 +71,7 @@ async def list_active_tasks(db: Any) -> ActiveTasksResult:
     cols = [d[0] for d in cursor.description]
     tasks = []
     for row in rows:
-        d = dict(zip(cols, row))
+        d = dict(zip(cols, row, strict=False))
         payload = json.loads(d["payload"]) if isinstance(d["payload"], str) else {}
         checkpoint = None
         step_val = 0

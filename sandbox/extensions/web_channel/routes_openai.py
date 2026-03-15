@@ -407,4 +407,3 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
         bridge.release()
         bridge.clear_active()
         raise
-

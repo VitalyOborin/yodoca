@@ -1155,7 +1155,7 @@ class TestEntityEnrichment:
     async def test_get_entities_needing_enrichment(
         self, storage: MemoryStorage
     ) -> None:
-        now = int(time.time())
+        int(time.time())
         await storage.insert_entity(
             {
                 "canonical_name": "SparseEntity",
@@ -1181,7 +1181,7 @@ class TestEntityEnrichment:
 
     @pytest.mark.asyncio
     async def test_update_entity_summary_tool(self, storage: MemoryStorage) -> None:
-        now = int(time.time())
+        int(time.time())
         eid = await storage.insert_entity(
             {
                 "canonical_name": "ToEnrich",
@@ -1417,7 +1417,7 @@ class TestGraphStats:
         self, storage: MemoryStorage
     ) -> None:
         now = int(time.time())
-        orphan_id = storage.insert_node(
+        storage.insert_node(
             {
                 "type": "semantic",
                 "content": "orphan node",
@@ -1952,4 +1952,3 @@ class TestSearchMemoryTimestampEnrichment:
         data = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(data, dict) and "count" in data and "results" in data:
             assert data["count"] == len(data["results"])
-

@@ -91,9 +91,7 @@ class TaskEngineExtension:
             await try_resume_parent(self._db, parent_id)
 
         if self._db:
-            await unblock_successors(
-                self._db, task_id, status, payload.get("result")
-            )
+            await unblock_successors(self._db, task_id, status, payload.get("result"))
 
         if not parent_id and status in ("done", "failed"):
             await self._notify_task_completed(task_id, status, payload)

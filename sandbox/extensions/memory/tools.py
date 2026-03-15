@@ -597,4 +597,3 @@ def build_tools(
         forget_fact,
         weak_facts,
     ]
-

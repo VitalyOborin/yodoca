@@ -210,4 +210,3 @@ async def post_agent(request: Request) -> JSONResponse | StreamingResponse:
         bridge.release()
         bridge.clear_active()
         raise
-

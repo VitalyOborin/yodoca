@@ -59,6 +59,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]  # flake8 + isort + bugbear + pyupgrade
+ignore = ["E402", "E501"]
 
 [tool.ruff.format]
 # drop-in replacement for black

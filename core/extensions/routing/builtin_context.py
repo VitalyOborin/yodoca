@@ -61,4 +61,3 @@ class ActiveChannelContextProvider:
         if not parts:
             return None
         return "\n\n---\n\n".join(parts)
-

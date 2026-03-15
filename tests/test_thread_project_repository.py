@@ -58,6 +58,7 @@ def test_thread_repository_creates_and_retrieves_thread(tmp_path: Path) -> None:
     assert retrieved.id == "sess_1"
     assert retrieved.channel_id == "web_channel"
 
+
 def test_thread_repository_get_thread_history(tmp_path: Path) -> None:
     db_path = tmp_path / "thread.db"
     repo = ThreadRepository(str(db_path))
@@ -316,6 +317,3 @@ async def test_loader_injects_project_context_before_memory(tmp_path: Path) -> N
     )
 
     assert enriched.index("[Project Instructions]") < enriched.index("[Memory]")
-
-
-

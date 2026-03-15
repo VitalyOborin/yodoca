@@ -19,6 +19,7 @@ def _row_to_event_tuple(row: tuple) -> _EventRow:
     retry_count = row[6] if len(row) > 6 else 0
     return (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
 
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_journal (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,7 +239,11 @@ class EventJournal:
         return cursor.rowcount or 0
 
     async def _reset_stale_to_pending(
-        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+        self,
+        conn: aiosqlite.Connection,
+        now: float,
+        stale_threshold: float,
+        max_retries: int,
     ) -> int:
         """Reset events stuck in processing (retry_count < max) to pending. Return count."""
         cursor = await conn.execute(
@@ -252,7 +257,11 @@ class EventJournal:
         return cursor.rowcount or 0
 
     async def _dead_letter_stale(
-        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+        self,
+        conn: aiosqlite.Connection,
+        now: float,
+        stale_threshold: float,
+        max_retries: int,
     ) -> int:
         """Dead-letter events stuck in processing (retry_count >= max). Return count."""
         cursor = await conn.execute(

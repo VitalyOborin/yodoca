@@ -104,4 +104,3 @@ class ExtensionContextBuilder:
             extension_dir=extension_dir,
             template_vars={"sandbox_dir": str(self._extensions_dir.parent)},
         )
-

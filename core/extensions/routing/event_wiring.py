@@ -1,10 +1,10 @@
 """Event wiring between EventBus topics and kernel handlers."""
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-import asyncio
 
 from core.events import EventBus
 from core.events.models import Event
@@ -254,4 +254,3 @@ class EventWiringManager:
         self._wire_notify_user_handlers(event_bus)
         event_bus.subscribe("user.message", self._on_kernel_user_message, "kernel")
         self._wire_proactive_handlers(event_bus)
-

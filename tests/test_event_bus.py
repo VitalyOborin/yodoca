@@ -232,9 +232,7 @@ class TestUserMessageDedupJournal:
     """user_message_processing table: is_user_message_completed, record_user_message_completed."""
 
     @pytest.mark.asyncio
-    async def test_is_completed_false_when_not_recorded(
-        self, db_path: Path
-    ) -> None:
+    async def test_is_completed_false_when_not_recorded(self, db_path: Path) -> None:
         journal = EventJournal(db_path)
         await journal._ensure_conn()
         assert await journal.is_user_message_completed(1) is False
@@ -304,7 +302,11 @@ class TestSchedulePurgeJournal:
         deleted = await journal.purge_scheduled_events(
             schedule_id=7,
             schedule_type="recurring",
-            topics=["system.agent.task", "system.user.notify", "system.agent.background"],
+            topics=[
+                "system.agent.task",
+                "system.user.notify",
+                "system.agent.background",
+            ],
         )
         assert deleted == 2
 

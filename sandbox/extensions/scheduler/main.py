@@ -15,6 +15,19 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+TOPIC_FIELD = Field(
+    ...,
+    description=(
+        "Event topic. Use 'system.user.notify' to send a message to the user, "
+        "'system.agent.task' to delegate reasoning to an agent at fire time, "
+        "'system.agent.background' for maintenance tasks without user response."
+    ),
+)
+PAYLOAD_EXTRA_FIELD = Field(
+    default=None,
+    description="Optional extra payload fields for custom (non-system) topics only.",
+)
+
 
 def _to_utc_iso(timestamp: float) -> str:
     return (
@@ -22,6 +35,7 @@ def _to_utc_iso(timestamp: float) -> str:
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
+
 
 # --- Tool result models (structured output per agent_tools skill) ---
 
@@ -537,14 +551,7 @@ class SchedulerExtension:
 
         @function_tool(name_override="schedule_once", strict_mode=False)
         async def schedule_once(
-            topic: str = Field(
-                ...,
-                description=(
-                    "Event topic. Use 'system.user.notify' to send a message to the user, "
-                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
-                    "'system.agent.background' for maintenance tasks without user response."
-                ),
-            ),
+            topic: str = TOPIC_FIELD,
             message: str = Field(
                 ...,
                 description=(
@@ -553,10 +560,7 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra: dict[str, Any] | None = Field(
-                default=None,
-                description="Optional extra payload fields for custom (non-system) topics only.",
-            ),
+            payload_extra: dict[str, Any] | None = PAYLOAD_EXTRA_FIELD,
             delay_seconds: int | None = None,
             at_iso: str | None = None,
         ) -> ScheduleOnceResult:
@@ -615,14 +619,7 @@ class SchedulerExtension:
 
         @function_tool(name_override="schedule_recurring", strict_mode=False)
         async def schedule_recurring(
-            topic: str = Field(
-                ...,
-                description=(
-                    "Event topic. Use 'system.user.notify' to send a message to the user, "
-                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
-                    "'system.agent.background' for maintenance tasks without user response."
-                ),
-            ),
+            topic: str = TOPIC_FIELD,
             message: str = Field(
                 ...,
                 description=(
@@ -631,10 +628,7 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra: dict[str, Any] | None = Field(
-                default=None,
-                description="Optional extra payload fields for custom (non-system) topics only.",
-            ),
+            payload_extra: dict[str, Any] | None = PAYLOAD_EXTRA_FIELD,
             cron: str | None = None,
             every_seconds: float | None = None,
             until_iso: str | None = None,

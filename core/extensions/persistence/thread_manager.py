@@ -162,9 +162,7 @@ class ThreadManager:
         )
 
     async def archive_thread(self, thread_id: str) -> bool:
-        return await asyncio.to_thread(
-            self.thread_repository.archive_thread, thread_id
-        )
+        return await asyncio.to_thread(self.thread_repository.archive_thread, thread_id)
 
     async def update_thread(
         self,
@@ -226,4 +224,3 @@ class ThreadManager:
             title=None,
             now_ts=effective_now,
         )
-

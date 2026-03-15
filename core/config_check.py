@@ -70,7 +70,10 @@ def is_configured(
         return False, "No providers configured"
     env_vars = dict(dotenv_values(env_file)) if env_file.exists() else {}
     env_vars.update(get_current_env())
-    has_key = lambda cfg: _provider_has_key(cfg, env_vars)
+
+    def has_key(cfg):
+        return _provider_has_key(cfg, env_vars)
+
     return _check_default_agent(settings, providers, has_key)
 
 

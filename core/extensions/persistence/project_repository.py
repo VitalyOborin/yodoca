@@ -250,10 +250,16 @@ class ProjectRepository:
                 }
                 order.append(project_id)
             file_path = row["file_path"]
-            if isinstance(file_path, str) and file_path not in projects[project_id]["files"]:
+            if (
+                isinstance(file_path, str)
+                and file_path not in projects[project_id]["files"]
+            ):
                 projects[project_id]["files"].append(file_path)
             link_url = row["url"]
-            if isinstance(link_url, str) and link_url not in projects[project_id]["links"]:
+            if (
+                isinstance(link_url, str)
+                and link_url not in projects[project_id]["links"]
+            ):
                 projects[project_id]["links"].append(link_url)
         return [
             ProjectInfo(

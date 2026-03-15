@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 
-def _file_handler(project_root: Path, cfg: dict[str, Any], level: int) -> logging.Handler:
+def _file_handler(
+    project_root: Path, cfg: dict[str, Any], level: int
+) -> logging.Handler:
     log_file = cfg.get("file", "sandbox/logs/app.log")
     max_bytes = int(cfg.get("max_bytes", 10 * 1024 * 1024))
     backup_count = int(cfg.get("backup_count", 3))

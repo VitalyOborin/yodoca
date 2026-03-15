@@ -79,9 +79,7 @@ class ProjectService:
     def delete_project(self, project_id: str) -> bool:
         return self._projects.delete_project(project_id)
 
-    def bind_thread(
-        self, thread_id: str, project_id: str | None
-    ) -> ThreadInfo | None:
+    def bind_thread(self, thread_id: str, project_id: str | None) -> ThreadInfo | None:
         if project_id is not None and self._projects.get_project(project_id) is None:
             raise ValueError(f"Project {project_id} not found")
         return self._threads.update_thread(thread_id, project_id=project_id)
@@ -97,4 +95,3 @@ class ProjectService:
         if isinstance(instructions, str) and instructions.strip():
             return instructions
         return None
-

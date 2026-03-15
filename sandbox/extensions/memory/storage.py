@@ -652,7 +652,7 @@ class MemoryStorage:
         except ImportError:
             import struct
 
-            return struct.pack("%sf" % len(embedding), *embedding)
+            return struct.pack(f"{len(embedding)}f", *embedding)
 
     async def save_embedding(self, node_id: str, embedding: list[float]) -> None:
         """Update node embedding and vec_nodes. Awaitable via write queue."""
@@ -1492,4 +1492,3 @@ class MemoryStorage:
             }
             for r in rows
         ]
-

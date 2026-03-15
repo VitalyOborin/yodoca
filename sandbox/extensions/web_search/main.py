@@ -305,9 +305,7 @@ class WebSearchExtension:
         if max_length_per_page is None:
             per_page_cap = self._total_content_budget // n
         else:
-            per_page_cap = min(
-                max_length_per_page, self._total_content_budget // n
-            )
+            per_page_cap = min(max_length_per_page, self._total_content_budget // n)
 
         sem = asyncio.Semaphore(self._open_page_concurrency)
 

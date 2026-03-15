@@ -288,4 +288,3 @@ class AgentInvoker:
             on_tool_call=on_tool_call,
             use_background_lock=True,
         )
-

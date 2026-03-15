@@ -191,7 +191,7 @@ def build_write_path_tools(
         source_ids_per_node = [it[1] for it in items]
         logger.info("save_nodes_batch: saving %d nodes", len(node_dicts))
         node_ids = await storage.insert_nodes_batch(node_dicts)
-        for nid, ep_ids in zip(node_ids, source_ids_per_node):
+        for nid, ep_ids in zip(node_ids, source_ids_per_node, strict=False):
             for ep_id in ep_ids:
                 await storage.insert_edge_awaitable(
                     {
@@ -205,7 +205,7 @@ def build_write_path_tools(
         if embed_batch_fn:
             texts = [nd["content"] for nd in node_dicts]
             embeddings = await embed_batch_fn(texts)
-            for nid, emb in zip(node_ids, embeddings):
+            for nid, emb in zip(node_ids, embeddings, strict=False):
                 if emb:
                     await storage.save_embedding(nid, emb)
         logger.info("save_nodes_batch: saved %d nodes with embeddings", len(node_ids))
@@ -388,4 +388,3 @@ def build_write_path_tools(
         save_causal_edges,
         update_entity_summary,
     ]
-

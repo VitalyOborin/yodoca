@@ -56,4 +56,3 @@ class ProjectInfo:
             "files": list(self.files),
             "links": list(self.links),
         }
-

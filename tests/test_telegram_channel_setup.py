@@ -10,10 +10,8 @@ from sandbox.extensions.telegram_channel.main import TelegramChannelExtension
 def _make_context() -> MagicMock:
     ctx = MagicMock()
     ctx.extension_id = "telegram_channel"
-    ctx.get_config.side_effect = (
-        lambda key, default=None: "telegram_bot_token"
-        if key == "token_secret"
-        else default
+    ctx.get_config.side_effect = lambda key, default=None: (
+        "telegram_bot_token" if key == "token_secret" else default
     )
     ctx.logger = MagicMock()
     return ctx

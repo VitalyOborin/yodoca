@@ -48,7 +48,9 @@ def _build_loader_router(settings: dict) -> tuple:
     return loader, router, extensions_dir, data_dir, shutdown_event
 
 
-async def _wire_extensions(loader: Loader, router: MessageRouter, event_bus: EventBus) -> None:
+async def _wire_extensions(
+    loader: Loader, router: MessageRouter, event_bus: EventBus
+) -> None:
     await loader.discover()
     await loader.load_all()
     await loader.initialize_all(router)

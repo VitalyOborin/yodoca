@@ -1,8 +1,8 @@
 """Tests for Loader: dependency order, discover, protocol detection, lifecycle."""
 
 import asyncio
-from pathlib import Path
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -168,7 +168,7 @@ class TestLoadAllAndProtocolDetection:
         await loader.discover()
         await loader.load_all()
         assert len(loader._extensions) >= 1
-        for ext_id, ext in loader._extensions.items():
+        for _ext_id, ext in loader._extensions.items():
             assert isinstance(ext, Extension)
 
     @pytest.mark.asyncio
@@ -229,7 +229,9 @@ class TestProactiveLoop:
 
         manager = EventWiringManager(
             router=None,
-            manifests=[self._manifest_with_invoke_agent("email_agent", "email.received")],
+            manifests=[
+                self._manifest_with_invoke_agent("email_agent", "email.received")
+            ],
             state={"email_agent": ExtensionState.INACTIVE},
             extensions={"email_agent": mock_agent},
             agent_registry=registry,
@@ -323,9 +325,13 @@ class TestProactiveLoop:
             assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
 
     @pytest.mark.asyncio
-    async def test_on_agent_task_passes_turn_context_channel(self, tmp_path: Path) -> None:
+    async def test_on_agent_task_passes_turn_context_channel(
+        self, tmp_path: Path
+    ) -> None:
         """system.agent.task runs non-blocking and still passes channel_id into turn_context."""
-        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS
+        )
         router = MessageRouter()
 
         async def _slow_invoke(*_args, **_kwargs):
@@ -700,9 +706,7 @@ class TestSetupProviders:
     ) -> None:
         """_update_setup_providers_state stores False when on_setup_complete returns (False, msg)."""
         mock_ext = MagicMock(spec=SetupProvider)
-        mock_ext.on_setup_complete = AsyncMock(
-            return_value=(False, "token required")
-        )
+        mock_ext.on_setup_complete = AsyncMock(return_value=(False, "token required"))
 
         loader = Loader(
             extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
@@ -720,9 +724,7 @@ class TestSetupProviders:
     ) -> None:
         """get_capabilities_summary includes Extensions needing setup when SetupProvider is unconfigured."""
         mock_ext = MagicMock(spec=SetupProvider)
-        mock_ext.on_setup_complete = AsyncMock(
-            return_value=(False, "token required")
-        )
+        mock_ext.on_setup_complete = AsyncMock(return_value=(False, "token required"))
 
         loader = Loader(
             extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS

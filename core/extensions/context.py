@@ -362,4 +362,3 @@ class ExtensionContext:
         """Shut down the application."""
         if self._shutdown_event:
             self._shutdown_event.set()
-

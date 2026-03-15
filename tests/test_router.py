@@ -602,5 +602,3 @@ class TestUserMessageDeduplication:
             await router.handle_user_message("hi", "user1", ch, "cli")
 
         assert ch.sent == [("user1", "reply"), ("user1", "reply")]
-
-

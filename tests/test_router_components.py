@@ -198,6 +198,3 @@ class TestResponseDeliveryService:
         channel.on_stream_chunk.assert_any_await("u1", "world")
         channel.on_stream_status.assert_awaited_once_with("u1", "Using: calculator")
         channel.on_stream_end.assert_awaited_once_with("u1", "hi world")
-
-
-

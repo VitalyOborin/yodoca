@@ -285,4 +285,3 @@ class ThreadRepository:
             last_active_at=int(row["last_active_at"]),
             is_archived=bool(row["is_archived"]),
         )
-

@@ -353,12 +353,10 @@ class MemoryExtension:
                         "Thread switch: scheduling consolidation for %s",
                         prev_thread_id,
                     )
-                    task = asyncio.create_task(
-                        self._consolidate_thread(prev_thread_id)
-                    )
+                    task = asyncio.create_task(self._consolidate_thread(prev_thread_id))
                     task.add_done_callback(
-                        lambda _, tid=prev_thread_id: self._consolidation_pending.discard(
-                            tid
+                        lambda _, tid=prev_thread_id: (
+                            self._consolidation_pending.discard(tid)
                         )
                     )
             self._current_thread_id = thread_id

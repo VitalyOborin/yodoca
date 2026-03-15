@@ -8,10 +8,7 @@ from pathlib import Path
 import pytest
 
 _task_engine_dir = (
-    Path(__file__).resolve().parent.parent
-    / "sandbox"
-    / "extensions"
-    / "task_engine"
+    Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "task_engine"
 )
 if str(_task_engine_dir) not in sys.path:
     sys.path.insert(0, str(_task_engine_dir))
@@ -163,7 +160,9 @@ async def test_get_chain_tasks(temp_db: TaskEngineDb) -> None:
 
     conn = await temp_db.ensure_conn()
     now = 1000.0
-    for i, (tid, goal) in enumerate([("t1", "First"), ("t2", "Second"), ("t3", "Third")]):
+    for i, (tid, goal) in enumerate(
+        [("t1", "First"), ("t2", "Second"), ("t3", "Third")]
+    ):
         await conn.execute(
             """
             INSERT INTO agent_task (task_id, parent_id, run_id, agent_id, status, priority, payload, created_at, updated_at, chain_id, chain_order)

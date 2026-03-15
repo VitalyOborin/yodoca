@@ -145,9 +145,7 @@ def _schedule_item_model(row: dict) -> ScheduleItem:
         status=row["status"],
         cron_expr=row.get("cron_expr"),
         every_seconds=row.get("every_sec"),
-        until_iso=_to_utc_iso(float(until_ts))
-        if until_ts is not None
-        else None,
+        until_iso=_to_utc_iso(float(until_ts)) if until_ts is not None else None,
         created_at=int(row.get("created_at", 0)),
     )
 
@@ -630,11 +628,7 @@ async def delete_schedule(request: Request, type: str, id: int) -> JSONResponse:
 
     rows = await store.list_all()
     row = next(
-        (
-            item
-            for item in rows
-            if item.get("type") == type and item.get("id") == id
-        ),
+        (item for item in rows if item.get("type") == type and item.get("id") == id),
         None,
     )
     if row is None:
@@ -808,4 +802,3 @@ async def get_notifications(request: Request) -> NotificationsResponse:
         timeout = 30
     notifications = await bridge.wait_notification(timeout=float(timeout))
     return NotificationsResponse(notifications=notifications)
-

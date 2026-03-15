@@ -106,8 +106,7 @@ def make_delegation_tools(
         available_only: if True, only returns agents that are not currently busy."""
         records = registry.list_agents(available_only=available_only)
         infos = [
-            _record_to_agent_info(r, registry.is_busy(r.id), catalog)
-            for r in records
+            _record_to_agent_info(r, registry.is_busy(r.id), catalog) for r in records
         ]
         return ListAgentsResult(agents=infos)
 
@@ -203,9 +202,7 @@ def make_delegation_tools(
                 agent_id = factory.create(spec)
                 return CreateAgentResult(success=True, agent_id=agent_id, error=None)
             except Exception as e:
-                return CreateAgentResult(
-                    success=False, agent_id="", error=str(e)
-                )
+                return CreateAgentResult(success=False, agent_id="", error=str(e))
 
         tools_list.append(create_agent)
 
@@ -217,9 +214,7 @@ def make_delegation_tools(
 
             Use with create_agent: pass these IDs in the tools parameter.
             """
-            return ListAvailableToolsResult(
-                tool_ids=get_available_tool_ids()
-            )
+            return ListAvailableToolsResult(tool_ids=get_available_tool_ids())
 
         tools_list.append(list_available_tools)
 

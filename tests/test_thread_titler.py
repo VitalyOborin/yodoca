@@ -106,8 +106,7 @@ async def test_phase2_refines_only_if_title_still_matches_provisional():
         )
 
     assert (
-        ctx.update_thread.await_args.kwargs["title"]
-        == "Fixing parser errors in logs"
+        ctx.update_thread.await_args.kwargs["title"] == "Fixing parser errors in logs"
     )
     assert ctx.emit.await_args.args[0] == TITLE_UPDATED_TOPIC
 

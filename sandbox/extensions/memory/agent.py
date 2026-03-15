@@ -162,4 +162,3 @@ def create_memory_agent(
         causal_instructions=causal_instructions,
         model_settings=model_settings,
     )
-

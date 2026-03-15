@@ -20,7 +20,7 @@ class ExtensionState(Enum):
 class Extension(Protocol):
     """Base contract: lifecycle. Identity (id, name, version) comes from manifest."""
 
-    async def initialize(self, context: "ExtensionContext") -> None:
+    async def initialize(self, context: Any) -> None:
         """Called once on load. Subscriptions, dependency init."""
 
     async def start(self) -> None:
@@ -171,4 +171,3 @@ class AgentProvider(Protocol):
         self, task: str, context: AgentInvocationContext | None = None
     ) -> AgentResponse:
         """Execute a task and return structured result."""
-

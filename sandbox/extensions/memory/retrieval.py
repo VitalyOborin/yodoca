@@ -18,7 +18,7 @@ def cosine_sim(a: list[float], b: list[float]) -> float:
     """Cosine similarity: dot(a,b) / (norm(a) * norm(b))."""
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:
@@ -296,10 +296,7 @@ class MemoryRetrieval:
                 scores[nid] = scores.get(nid, 0) + self._w_graph / (self._k + rank)
                 all_items.setdefault(nid, item)
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
-        return [
-            {**all_items[nid], "_rrf_score": scores[nid]}
-            for nid in ranked
-        ]
+        return [{**all_items[nid], "_rrf_score": scores[nid]} for nid in ranked]
 
     async def search(
         self,

@@ -206,9 +206,11 @@ def _collect_lm_studio(state: WizardState) -> bool:
     return True
 
 
-_CREDENTIAL_COLLECTORS.update({
-    "openai": _collect_openai,
-    "anthropic": _collect_anthropic,
-    "openrouter": _collect_openrouter,
-    "lm_studio": _collect_lm_studio,
-})
+_CREDENTIAL_COLLECTORS.update(
+    {
+        "openai": _collect_openai,
+        "anthropic": _collect_anthropic,
+        "openrouter": _collect_openrouter,
+        "lm_studio": _collect_lm_studio,
+    }
+)
