@@ -21,4 +21,21 @@ export {
   type CreateThreadRequest,
   type UpdateThreadRequest,
 } from './threads';
+export {
+  fetchSchedules,
+  createOnceSchedule,
+  createRecurringSchedule,
+  deleteSchedule,
+  updateRecurringSchedule,
+  type ScheduleType,
+  type ScheduleStatus,
+  type ScheduleTopic,
+  type ScheduleItem,
+  type CreateOnceRequest,
+  type CreateRecurringRequest,
+  type UpdateRecurringRequest,
+  type ScheduleOnceResponse,
+  type ScheduleRecurringResponse,
+  type UpdateScheduleResponse,
+} from './schedules';
 export { runAgent, type ChatMessage, type RunAgentOptions } from './agent';

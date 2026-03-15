@@ -21,3 +21,25 @@ export function formatRelativeTime(date: Date): string {
 export function formatMessageTime(date: Date): string {
   return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
+
+export function formatScheduleAbsolute(iso: string): string {
+  const date = new Date(iso);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function formatScheduleRelative(iso: string): string {
+  const target = new Date(iso).getTime();
+  const diffMs = target - Date.now();
+  const absMs = Math.abs(diffMs);
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+  if (absMs < 60_000) return rtf.format(Math.round(diffMs / 1000), 'second');
+  if (absMs < 3_600_000) return rtf.format(Math.round(diffMs / 60_000), 'minute');
+  if (absMs < 86_400_000) return rtf.format(Math.round(diffMs / 3_600_000), 'hour');
+  return rtf.format(Math.round(diffMs / 86_400_000), 'day');
+}
