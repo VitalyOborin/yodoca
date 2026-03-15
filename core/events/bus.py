@@ -117,8 +117,41 @@ class EventBus:
             logger.info("EventBus: recovered %d events", count)
         return count
 
+    async def get_status_counts(self) -> dict[str, int]:
+        """Return grouped queue counts by status."""
+        return await self._journal.get_status_counts()
+
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+        topics: list[str] | None = None,
+    ) -> int:
+        """Delete pending/processing events bound to schedule metadata."""
+        allowed_topics = topics or [
+            "system.agent.task",
+            "system.agent.background",
+            "system.user.notify",
+        ]
+        deleted = await self._journal.purge_scheduled_events(
+            schedule_id=schedule_id,
+            schedule_type=schedule_type,
+            topics=allowed_topics,
+        )
+        if deleted:
+            logger.info(
+                "EventBus purge: removed %d queued events for %s#%s",
+                deleted,
+                schedule_type,
+                schedule_id,
+            )
+        return deleted
+
     async def _claim_and_deliver_batch(self) -> None:
         """Claim one batch of pending events and deliver each to handlers."""
+        counts = await self._journal.get_status_counts()
+        if counts.get("pending", 0) or counts.get("processing", 0):
+            logger.debug("EventBus queue counts: %s", counts)
         events = await self._journal.claim_pending(limit=self._batch_size)
         for (
             event_id,

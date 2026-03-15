@@ -1,6 +1,8 @@
 """Tests for Loader: dependency order, discover, protocol detection, lifecycle."""
 
+import asyncio
 from pathlib import Path
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -322,17 +324,29 @@ class TestProactiveLoop:
 
     @pytest.mark.asyncio
     async def test_on_agent_task_passes_turn_context_channel(self, tmp_path: Path) -> None:
-        """system.agent.task passes channel_id into background invoke turn_context."""
+        """system.agent.task runs non-blocking and still passes channel_id into turn_context."""
         loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
         router = MessageRouter()
-        router.invoke_agent_background = AsyncMock(return_value="done")  # type: ignore[method-assign]
+
+        async def _slow_invoke(*_args, **_kwargs):
+            await asyncio.sleep(0.2)
+            return "done"
+
+        router.invoke_agent_background = AsyncMock(side_effect=_slow_invoke)  # type: ignore[method-assign]
         router.notify_user = AsyncMock()  # type: ignore[method-assign]
         loader._router = router
 
         event = SimpleNamespace(
-            payload={"prompt": "run this", "channel_id": "telegram_channel"}
+            id=42,
+            correlation_id="corr-1",
+            payload={"prompt": "run this", "channel_id": "telegram_channel"},
         )
+        started_at = time.perf_counter()
         await loader._on_agent_task(event)
+        elapsed = time.perf_counter() - started_at
+        assert elapsed < 0.1
+
+        await asyncio.sleep(0.3)
 
         assert router.invoke_agent_background.await_count == 1
         _args, kwargs = router.invoke_agent_background.await_args

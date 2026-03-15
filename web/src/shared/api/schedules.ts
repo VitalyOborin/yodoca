@@ -120,10 +120,11 @@ export async function deleteSchedule(
 }
 
 export async function updateRecurringSchedule(
+  type: ScheduleType,
   id: number,
   payload: UpdateRecurringRequest,
 ): Promise<UpdateScheduleResponse> {
-  return apiFetch<UpdateScheduleResponse>(`/api/schedules/recurring/${id}`, {
+  return apiFetch<UpdateScheduleResponse>(`/api/schedules/${type}/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });

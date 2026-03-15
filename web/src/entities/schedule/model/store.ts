@@ -112,7 +112,7 @@ export const useScheduleStore = defineStore('schedules', () => {
     saving.value = true;
     error.value = null;
     try {
-      await updateRecurringSchedule(id, payload);
+      await updateRecurringSchedule('recurring', id, payload);
       await loadSchedules();
     } catch (cause) {
       error.value =

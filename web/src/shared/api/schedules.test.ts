@@ -96,7 +96,7 @@ describe('schedules api client', () => {
       message: 'Check',
       every_seconds: 60,
     });
-    await updateRecurringSchedule(11, { status: 'paused' });
+    await updateRecurringSchedule('one_shot', 11, { status: 'paused' });
     await deleteSchedule('recurring', 11);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -111,7 +111,7 @@ describe('schedules api client', () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      '/api/schedules/recurring/11',
+      '/api/schedules/one_shot/11',
       expect.objectContaining({ method: 'PATCH' }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

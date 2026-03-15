@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+import asyncio
 
 from core.events import EventBus
 from core.events.models import Event
@@ -41,6 +42,7 @@ class EventWiringManager:
         self._state = state
         self._extensions = extensions
         self._agent_registry = agent_registry
+        self._agent_tasks: set[asyncio.Task[Any]] = set()
 
     def _collect_proactive_subscriptions(self) -> dict[str, str]:
         """Return {topic: ext_id} for invoke_agent subscriptions."""
@@ -65,18 +67,52 @@ class EventWiringManager:
             )
 
     async def _on_agent_task(self, event: Event) -> None:
-        if self._router:
-            prompt = event.payload.get("prompt", "")
-            channel_id = event.payload.get("channel_id")
-            turn_context = TurnContext(
-                agent_id="orchestrator",
-                channel_id=channel_id,
+        if not self._router:
+            return
+        prompt = event.payload.get("prompt", "")
+        channel_id = event.payload.get("channel_id")
+        correlation_id = event.payload.get("correlation_id") or event.correlation_id
+
+        async def _run_agent_task() -> None:
+            started_at = time.perf_counter()
+            logger.info(
+                "agent task: start",
+                extra={
+                    "event_id": event.id,
+                    "correlation_id": correlation_id,
+                    "prompt_len": len(prompt),
+                },
             )
-            response = await self._router.invoke_agent_background(
-                prompt, turn_context=turn_context
-            )
-            if response:
-                await self._router.notify_user(response, channel_id)
+            try:
+                turn_context = TurnContext(
+                    agent_id="orchestrator",
+                    channel_id=channel_id,
+                )
+                response = await self._router.invoke_agent_background(
+                    prompt, turn_context=turn_context
+                )
+                if response:
+                    await self._router.notify_user(response, channel_id)
+                duration_ms = int((time.perf_counter() - started_at) * 1000)
+                logger.info(
+                    "agent task: done",
+                    extra={
+                        "event_id": event.id,
+                        "correlation_id": correlation_id,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            except Exception as e:
+                logger.exception(
+                    "agent task: failed event_id=%s correlation_id=%s: %s",
+                    event.id,
+                    correlation_id,
+                    e,
+                )
+
+        task = asyncio.create_task(_run_agent_task())
+        self._agent_tasks.add(task)
+        task.add_done_callback(self._agent_tasks.discard)
 
     async def _on_agent_background(self, event: Event) -> None:
         if not self._router:

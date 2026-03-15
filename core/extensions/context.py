@@ -153,6 +153,19 @@ class ExtensionContext:
             {"prompt": prompt, "correlation_id": correlation_id},
         )
 
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+    ) -> int:
+        """Purge queued event_journal items linked to a cancelled schedule."""
+        if not self._event_bus:
+            return 0
+        return await self._event_bus.purge_scheduled_events(
+            schedule_id=schedule_id,
+            schedule_type=schedule_type,
+        )
+
     def subscribe_event(
         self,
         topic: str,

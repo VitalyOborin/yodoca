@@ -303,3 +303,35 @@ class EventJournal:
             (event_id, now),
         )
         await conn.commit()
+
+    async def get_status_counts(self) -> dict[str, int]:
+        """Return event counts grouped by status."""
+        conn = await self._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT status, COUNT(*) FROM event_journal GROUP BY status"
+        )
+        rows = await cursor.fetchall()
+        return {str(status): int(count) for status, count in rows}
+
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+        topics: list[str],
+    ) -> int:
+        """Delete pending/processing events bound to a schedule metadata marker."""
+        conn = await self._ensure_conn()
+        placeholders = ",".join("?" * len(topics))
+        cursor = await conn.execute(
+            f"""
+            DELETE FROM event_journal
+            WHERE status IN ('pending', 'processing')
+              AND topic IN ({placeholders})
+              AND json_valid(payload) = 1
+              AND json_extract(payload, '$.__schedule.id') = ?
+              AND json_extract(payload, '$.__schedule.type') = ?
+            """,
+            [*topics, schedule_id, schedule_type],
+        )
+        await conn.commit()
+        return cursor.rowcount or 0
