@@ -281,7 +281,9 @@ class TestInboxRepository:
         assert read_rows[0]["id"] == inbox_id
 
     @pytest.mark.asyncio
-    async def test_mark_all_read_with_source_filter(self, repo: InboxRepository) -> None:
+    async def test_mark_all_read_with_source_filter(
+        self, repo: InboxRepository
+    ) -> None:
         await repo.upsert_item(
             InboxItemInput(
                 source_type="mail",
