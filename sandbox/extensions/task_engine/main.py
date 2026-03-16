@@ -38,6 +38,7 @@ from task_engine_tools import build_tools
 from task_queries import cancel_task as query_cancel_task
 from task_queries import get_task_status as query_get_task_status
 from task_queries import list_active_tasks as query_list_active_tasks
+from task_queries import list_tasks as query_list_tasks
 from worker import (
     claim_next_task,
     execute_task,
@@ -312,6 +313,16 @@ class TaskEngineExtension:
             return ActiveTasksResult(tasks=[], total=0)
         return await query_list_active_tasks(self._db)
 
+    async def list_tasks(self, status: str = "active") -> ActiveTasksResult:
+        """Public API for list tasks with optional status filter."""
+        if not self._db:
+            return ActiveTasksResult(tasks=[], total=0)
+        return await query_list_tasks(self._db, status=status)
+
+    async def get_task(self, task_id: str) -> TaskStatusResult:
+        """Public API for get task status/details."""
+        return await self._get_task_status(task_id)
+
     def _get_agent_provider(self, agent_id: str) -> "AgentProvider | None":
         """Resolve agent_id to AgentProvider via registry."""
         pair = self._registry.get(agent_id) if self._registry else None
@@ -324,6 +335,10 @@ class TaskEngineExtension:
                 task_id=task_id, status="error", message="Extension not initialized"
             )
         return await query_cancel_task(self._db, task_id, reason)
+
+    async def cancel_task(self, task_id: str, reason: str = "") -> CancelTaskResult:
+        """Public API for cancel task."""
+        return await self._cancel_task(task_id, reason)
 
     async def submit_chain(
         self,

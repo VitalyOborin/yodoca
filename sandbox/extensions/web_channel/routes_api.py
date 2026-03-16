@@ -14,6 +14,8 @@ from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.update_fields import UNSET
 from sandbox.extensions.inbox.models import InboxItemInput
 from sandbox.extensions.web_channel.models import (
+    CancelTaskRequest,
+    CancelTaskResponse,
     CreateOnceScheduleRequest,
     CreateProjectRequest,
     CreateRecurringScheduleRequest,
@@ -28,6 +30,8 @@ from sandbox.extensions.web_channel.models import (
     ScheduleListResponse,
     ScheduleOnceResponse,
     ScheduleRecurringResponse,
+    TaskItem,
+    TaskListResponse,
     Thread,
     ThreadDetailResponse,
     UpdateProjectRequest,
@@ -37,6 +41,20 @@ from sandbox.extensions.web_channel.models import (
 )
 
 router = APIRouter(include_in_schema=True)
+
+_TASK_STATUSES = {
+    "active",
+    "all",
+    "pending",
+    "blocked",
+    "running",
+    "retry_scheduled",
+    "waiting_subtasks",
+    "human_review",
+    "done",
+    "failed",
+    "cancelled",
+}
 
 
 def _get_extension(request: Request):
@@ -182,9 +200,21 @@ def _inbox_unavailable_response() -> JSONResponse:
     )
 
 
+def _task_engine_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "task_engine extension unavailable"},
+    )
+
+
 def _get_inbox_extension(request: Request):
     ext = _get_extension(request)
     return ext.get_inbox()
+
+
+def _get_task_engine(request: Request):
+    ext = _get_extension(request)
+    return ext.get_task_engine()
 
 
 def _to_mapping(data: object) -> dict:
@@ -200,6 +230,25 @@ def _to_mapping(data: object) -> dict:
         dumped = to_dict()
         return dumped if isinstance(dumped, dict) else {}
     return {}
+
+
+def _task_item_model(data: object) -> TaskItem:
+    mapped = _to_mapping(data)
+    return TaskItem(
+        task_id=str(mapped.get("task_id", "")),
+        status=str(mapped.get("status", "")),
+        agent_id=str(mapped.get("agent_id", "")),
+        goal=str(mapped.get("goal", "")),
+        step=int(mapped.get("step", 0) or 0),
+        max_steps=int(mapped.get("max_steps", 0) or 0),
+        attempt_no=int(mapped.get("attempt_no", 0) or 0),
+        partial_result=mapped.get("partial_result"),
+        error=mapped.get("error"),
+        chain_id=mapped.get("chain_id"),
+        chain_order=mapped.get("chain_order"),
+        created_at=int(mapped.get("created_at", 0) or 0),
+        updated_at=int(mapped.get("updated_at", 0) or 0),
+    )
 
 
 @router.get("/health")
@@ -1037,6 +1086,90 @@ async def patch_schedule(request: Request, type: str, id: int) -> JSONResponse:
         schedule_id=id,
         next_fire_iso=_to_utc_iso(next_fire),
         message=f"Schedule #{id} updated.",
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/tasks")
+async def get_tasks(request: Request, status: str = "active") -> JSONResponse:
+    """List tasks from task_engine with status filter."""
+    if status not in _TASK_STATUSES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+    result = await task_engine.list_tasks(status=status)
+    response = TaskListResponse(
+        tasks=[_task_item_model(task) for task in result.tasks],
+        total=int(result.total),
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/tasks/{task_id}")
+async def get_task(request: Request, task_id: str) -> JSONResponse:
+    """Get one task details."""
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+    task = await task_engine.get_task(task_id)
+    task_data = _to_mapping(task)
+    if task_data.get("status") == "not_found":
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Task {task_id} not found",
+                    "type": "not_found",
+                    "code": "task_not_found",
+                }
+            },
+        )
+    return JSONResponse(content=_task_item_model(task).model_dump())
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def post_task_cancel(request: Request, task_id: str) -> JSONResponse:
+    """Cancel a task."""
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+
+    reason = ""
+    try:
+        raw = await request.json()
+    except json.JSONDecodeError:
+        raw = {}
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid request payload",
+                    "type": "invalid_request_error",
+                    "code": "invalid_task_payload",
+                }
+            },
+        )
+    payload = CancelTaskRequest.model_validate(raw)
+    reason = payload.reason or ""
+
+    result = await task_engine.cancel_task(task_id, reason)
+    response = CancelTaskResponse(
+        task_id=result.task_id,
+        status=result.status,
+        message=result.message,
     )
     return JSONResponse(content=response.model_dump())
 

@@ -348,6 +348,48 @@ class UpdateScheduleResponse(BaseModel):
     error: str | None = None
 
 
+# --- Tasks API ---
+
+
+class TaskItem(BaseModel):
+    """Single task status/details item."""
+
+    task_id: str
+    status: str
+    agent_id: str
+    goal: str
+    step: int
+    max_steps: int
+    attempt_no: int
+    partial_result: str | None = None
+    error: str | None = None
+    chain_id: str | None = None
+    chain_order: int | None = None
+    created_at: int
+    updated_at: int
+
+
+class TaskListResponse(BaseModel):
+    """GET /api/tasks response."""
+
+    tasks: list[TaskItem]
+    total: int
+
+
+class CancelTaskRequest(BaseModel):
+    """POST /api/tasks/{task_id}/cancel request."""
+
+    reason: str = ""
+
+
+class CancelTaskResponse(BaseModel):
+    """POST /api/tasks/{task_id}/cancel response."""
+
+    task_id: str
+    status: str
+    message: str
+
+
 # --- AG-UI (Agent-User Interaction Protocol) ---
 
 

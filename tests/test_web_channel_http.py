@@ -31,6 +31,28 @@ def mock_context():
     inbox_ext.mark_all_read = AsyncMock(return_value=0)
     inbox_ext.get_unread_count = AsyncMock(return_value=0)
     inbox_ext.upsert_item = AsyncMock(return_value=MagicMock(success=True, error=None))
+    task_engine_ext = MagicMock()
+    task_engine_ext.list_tasks = AsyncMock(return_value=MagicMock(tasks=[], total=0))
+    task_engine_ext.get_task = AsyncMock(
+        return_value={
+            "task_id": "",
+            "status": "not_found",
+            "agent_id": "",
+            "goal": "",
+            "step": 0,
+            "max_steps": 0,
+            "attempt_no": 0,
+            "partial_result": None,
+            "error": "Task not found",
+            "chain_id": None,
+            "chain_order": None,
+            "created_at": 0,
+            "updated_at": 0,
+        }
+    )
+    task_engine_ext.cancel_task = AsyncMock(
+        return_value=MagicMock(task_id="", status="not_found", message="Task not found")
+    )
     event_handlers = {}
 
     ctx.get_config = MagicMock(
@@ -51,6 +73,8 @@ def mock_context():
             if extension_id == "scheduler"
             else inbox_ext
             if extension_id == "inbox"
+            else task_engine_ext
+            if extension_id == "task_engine"
             else None
         )
     )
@@ -108,6 +132,7 @@ def mock_context():
     ctx._scheduler_store = scheduler_store
     ctx._scheduler_ext = scheduler_ext
     ctx._inbox_ext = inbox_ext
+    ctx._task_engine_ext = task_engine_ext
     ctx._event_handlers = event_handlers
     return ctx
 
@@ -430,6 +455,125 @@ def test_post_inbox_read_all_with_source_filter(web_channel_app, mock_context):
     mock_context._inbox_ext.mark_all_read.assert_awaited_once_with("mail")
 
 
+def test_get_tasks_default_active(web_channel_app, mock_context):
+    mock_context._task_engine_ext.list_tasks.return_value = MagicMock(
+        tasks=[
+            {
+                "task_id": "a1",
+                "status": "running",
+                "agent_id": "orchestrator",
+                "goal": "Task one",
+                "step": 1,
+                "max_steps": 20,
+                "attempt_no": 0,
+                "partial_result": "working",
+                "error": None,
+                "chain_id": None,
+                "chain_order": None,
+                "created_at": 100,
+                "updated_at": 101,
+            }
+        ],
+        total=1,
+    )
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/tasks")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["tasks"][0]["status"] == "running"
+    mock_context._task_engine_ext.list_tasks.assert_awaited_with(status="active")
+
+
+def test_get_tasks_status_filters(web_channel_app, mock_context):
+    client = TestClient(web_channel_app)
+    resp_all = client.get("/api/tasks?status=all")
+    assert resp_all.status_code == 200
+    resp_done = client.get("/api/tasks?status=done")
+    assert resp_done.status_code == 200
+    mock_context._task_engine_ext.list_tasks.assert_any_await(status="all")
+    mock_context._task_engine_ext.list_tasks.assert_any_await(status="done")
+
+
+def test_get_tasks_invalid_status(web_channel_app):
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/tasks?status=invalid")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "invalid_status"
+
+
+def test_get_task_ok(web_channel_app, mock_context):
+    mock_context._task_engine_ext.get_task.return_value = {
+        "task_id": "task-1",
+        "status": "running",
+        "agent_id": "orchestrator",
+        "goal": "Do work",
+        "step": 2,
+        "max_steps": 20,
+        "attempt_no": 0,
+        "partial_result": "progress",
+        "error": None,
+        "chain_id": None,
+        "chain_order": None,
+        "created_at": 100,
+        "updated_at": 120,
+    }
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/tasks/task-1")
+    assert resp.status_code == 200
+    assert resp.json()["task_id"] == "task-1"
+
+
+def test_get_task_not_found(web_channel_app, mock_context):
+    mock_context._task_engine_ext.get_task.return_value = {
+        "task_id": "task-missing",
+        "status": "not_found",
+        "agent_id": "",
+        "goal": "",
+        "step": 0,
+        "max_steps": 0,
+        "attempt_no": 0,
+        "partial_result": None,
+        "error": "Task not found",
+        "chain_id": None,
+        "chain_order": None,
+        "created_at": 0,
+        "updated_at": 0,
+    }
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/tasks/task-missing")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "task_not_found"
+
+
+def test_post_task_cancel_with_reason(web_channel_app, mock_context):
+    mock_context._task_engine_ext.cancel_task.return_value = MagicMock(
+        task_id="task-1",
+        status="cancelled",
+        message="Task cancelled",
+    )
+    client = TestClient(web_channel_app)
+    resp = client.post("/api/tasks/task-1/cancel", json={"reason": "No longer needed"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    mock_context._task_engine_ext.cancel_task.assert_awaited_once_with(
+        "task-1", "No longer needed"
+    )
+
+
+def test_post_task_cancel_without_body(web_channel_app, mock_context):
+    mock_context._task_engine_ext.cancel_task.return_value = MagicMock(
+        task_id="task-2",
+        status="not_found",
+        message="Task not found or already completed",
+    )
+    client = TestClient(web_channel_app)
+    resp = client.post("/api/tasks/task-2/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "not_found"
+    mock_context._task_engine_ext.cancel_task.assert_awaited_once_with("task-2", "")
+
+
 def test_post_chat_completions_no_user_message(web_channel_app):
     client = TestClient(web_channel_app)
     resp = client.post(
@@ -674,3 +818,28 @@ def test_inbox_endpoints_return_503_when_extension_missing(mock_context):
     stream_resp = client.get("/api/inbox/stream")
     assert stream_resp.status_code == 503
     assert stream_resp.json() == {"detail": "inbox extension unavailable"}
+
+
+def test_task_endpoints_return_503_when_extension_missing(mock_context):
+    def get_extension_without_task_engine(extension_id):
+        if extension_id == "scheduler":
+            return mock_context._scheduler_ext
+        if extension_id == "inbox":
+            return mock_context._inbox_ext
+        return None
+
+    mock_context.get_extension = MagicMock(side_effect=get_extension_without_task_engine)
+    ext = WebChannelExtension()
+    asyncio.run(ext.initialize(mock_context))
+    from sandbox.extensions.web_channel.app import create_app
+
+    client = TestClient(create_app(ext))
+    list_resp = client.get("/api/tasks")
+    assert list_resp.status_code == 503
+    assert list_resp.json() == {"detail": "task_engine extension unavailable"}
+    get_resp = client.get("/api/tasks/task-1")
+    assert get_resp.status_code == 503
+    assert get_resp.json() == {"detail": "task_engine extension unavailable"}
+    cancel_resp = client.post("/api/tasks/task-1/cancel")
+    assert cancel_resp.status_code == 503
+    assert cancel_resp.json() == {"detail": "task_engine extension unavailable"}

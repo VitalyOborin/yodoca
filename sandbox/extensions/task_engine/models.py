@@ -29,6 +29,8 @@ class TaskStatusResult(BaseModel):
     error: str | None = None
     created_at: int = 0
     updated_at: int = 0
+    chain_id: str | None = None
+    chain_order: int | None = None
 
 
 class ActiveTasksResult(BaseModel):

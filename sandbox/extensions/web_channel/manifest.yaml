@@ -12,6 +12,7 @@ description: |
 depends_on:
   - scheduler
   - inbox
+  - task_engine
 
 config:
   host: "127.0.0.1"

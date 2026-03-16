@@ -24,6 +24,7 @@ class WebChannelExtension:
         self._bridge: RequestBridge | None = None
         self._scheduler: Any = None
         self._inbox: Any = None
+        self._task_engine: Any = None
         self._request_logger: logging.Logger | None = None
         self._app: Any = None
         self._server: Any = None
@@ -63,6 +64,7 @@ class WebChannelExtension:
         self._context = context
         self._scheduler = None
         self._inbox = None
+        self._task_engine = None
         self._config = {
             "host": context.get_config("host", "127.0.0.1"),
             "port": context.get_config("port", 8080),
@@ -125,6 +127,18 @@ class WebChannelExtension:
         except Exception:
             self._inbox = None
         return self._inbox
+
+    def get_task_engine(self) -> Any | None:
+        """Resolve task_engine extension lazily. Returns None when unavailable."""
+        if self._task_engine is not None:
+            return self._task_engine
+        if not self._context:
+            return None
+        try:
+            self._task_engine = self._context.get_extension("task_engine")
+        except Exception:
+            self._task_engine = None
+        return self._task_engine
 
     async def start(self) -> None:
         pass
