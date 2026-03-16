@@ -828,7 +828,9 @@ def test_task_endpoints_return_503_when_extension_missing(mock_context):
             return mock_context._inbox_ext
         return None
 
-    mock_context.get_extension = MagicMock(side_effect=get_extension_without_task_engine)
+    mock_context.get_extension = MagicMock(
+        side_effect=get_extension_without_task_engine
+    )
     ext = WebChannelExtension()
     asyncio.run(ext.initialize(mock_context))
     from sandbox.extensions.web_channel.app import create_app
