@@ -23,6 +23,11 @@ const router = createRouter({
       component: () => import('@/pages/inbox/InboxPage.vue'),
     },
     {
+      path: '/tasks',
+      name: 'tasks',
+      component: () => import('@/pages/tasks/TasksPage.vue'),
+    },
+    {
       path: '/projects',
       name: 'projects',
       component: () => import('@/pages/projects/ProjectsPage.vue'),

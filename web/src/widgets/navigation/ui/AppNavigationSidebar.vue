@@ -1,20 +1,33 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Bot, CalendarClock, FolderKanban, Inbox, MessageSquareText, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next';
+import {
+  Bot,
+  CalendarClock,
+  FolderKanban,
+  Inbox,
+  ListTodo,
+  MessageSquareText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+} from 'lucide-vue-next';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useInboxStore } from '@/entities/inbox';
+import { useTaskStore } from '@/entities/task';
 
 const STORAGE_KEY = 'yodoca.nav.expanded';
 const expanded = ref(false);
 const route = useRoute();
 const router = useRouter();
 const inboxStore = useInboxStore();
+const taskStore = useTaskStore();
 
 const navItems = [
   { id: 'chat', label: 'Chat', icon: MessageSquareText, path: '/chat' },
   { id: 'inbox', label: 'Inbox', icon: Inbox, path: '/inbox' },
+  { id: 'tasks', label: 'Tasks', icon: ListTodo, path: '/tasks' },
   { id: 'projects', label: 'Projects', icon: FolderKanban, path: '/projects' },
   { id: 'schedule', label: 'Schedule', icon: CalendarClock, path: '/schedule' },
   { id: 'agents', label: 'Agents', icon: Bot, path: '/agents' },
@@ -22,6 +35,7 @@ const navItems = [
 
 const currentPath = computed(() => route.path);
 const unreadCount = computed(() => inboxStore.unreadCount);
+const activeTaskCount = computed(() => taskStore.activeCount);
 
 function navigateTo(path: string) {
   if (route.path === path) return;
@@ -33,6 +47,11 @@ onMounted(() => {
   if (saved === '1') expanded.value = true;
   if (saved === '0') expanded.value = false;
   void inboxStore.bootstrap();
+  void taskStore.bootstrap();
+});
+
+onUnmounted(() => {
+  taskStore.stopPolling();
 });
 
 watch(expanded, (value) => {
@@ -82,6 +101,12 @@ watch(expanded, (value) => {
                   class="absolute -right-1.5 -top-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] leading-4 text-white"
                 >
                   {{ unreadCount > 99 ? '99+' : unreadCount }}
+                </span>
+                <span
+                  v-if="item.id === 'tasks' && activeTaskCount > 0"
+                  class="absolute -right-1.5 -top-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-info px-1 text-[10px] leading-4 text-white"
+                >
+                  {{ activeTaskCount > 99 ? '99+' : activeTaskCount }}
                 </span>
               </span>
               <span v-if="expanded" class="truncate">{{ item.label }}</span>
