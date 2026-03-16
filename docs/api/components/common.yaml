@@ -31,6 +31,14 @@ parameters:
     schema:
       type: integer
       minimum: 1
+  TaskId:
+    name: task_id
+    in: path
+    required: true
+    description: UUID of the task.
+    schema:
+      type: string
+      format: uuid
 
 responses:
   UnauthorizedError:

@@ -245,7 +245,7 @@ class TaskEngineExtension:
         }
         initial_status = "blocked" if after_task_id else "pending"
         conn = await self._db.ensure_conn()
-        now = time.time()
+        now = int(time.time())
         await conn.execute(
             """
             INSERT INTO agent_task (
@@ -362,7 +362,7 @@ class TaskEngineExtension:
 
         chain_id = str(uuid.uuid4())
         conn = await self._db.ensure_conn()
-        now = time.time()
+        now = int(time.time())
         task_infos: list[ChainTaskInfo] = []
         prev_task_id: str | None = None
 

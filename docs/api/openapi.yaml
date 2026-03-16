@@ -20,6 +20,7 @@ tags:
   - name: projects
   - name: notifications
   - name: schedules
+  - name: tasks
   - name: inbox
 paths:
   /v1/models:
@@ -50,6 +51,14 @@ paths:
     $ref: "paths/schedules.yaml#/~1api~1schedules~1recurring"
   /api/schedules/{type}/{id}:
     $ref: "paths/schedules.yaml#/~1api~1schedules~1{type}~1{id}"
+  /api/tasks:
+    $ref: "paths/tasks.yaml#/~1api~1tasks"
+  /api/tasks/stream:
+    $ref: "paths/tasks.yaml#/~1api~1tasks~1stream"
+  /api/tasks/{task_id}:
+    $ref: "paths/tasks.yaml#/~1api~1tasks~1{task_id}"
+  /api/tasks/{task_id}/cancel:
+    $ref: "paths/tasks.yaml#/~1api~1tasks~1{task_id}~1cancel"
   /api/inbox:
     $ref: "paths/inbox.yaml#/~1api~1inbox"
   /api/inbox/stream:
@@ -71,6 +80,8 @@ components:
       $ref: "components/common.yaml#/parameters/ScheduleType"
     ScheduleId:
       $ref: "components/common.yaml#/parameters/ScheduleId"
+    TaskId:
+      $ref: "components/common.yaml#/parameters/TaskId"
   responses:
     UnauthorizedError:
       $ref: "components/common.yaml#/responses/UnauthorizedError"
@@ -145,6 +156,22 @@ components:
       $ref: "schemas/schedules.yaml#/UpdateScheduleRequest"
     UpdateScheduleResponse:
       $ref: "schemas/schedules.yaml#/UpdateScheduleResponse"
+    TaskStatus:
+      $ref: "schemas/tasks.yaml#/TaskStatus"
+    TaskItem:
+      $ref: "schemas/tasks.yaml#/TaskItem"
+    TaskListResponse:
+      $ref: "schemas/tasks.yaml#/TaskListResponse"
+    CancelTaskRequest:
+      $ref: "schemas/tasks.yaml#/CancelTaskRequest"
+    CancelTaskResponse:
+      $ref: "schemas/tasks.yaml#/CancelTaskResponse"
+    TaskSubmittedEvent:
+      $ref: "schemas/tasks.yaml#/TaskSubmittedEvent"
+    TaskCompletedEvent:
+      $ref: "schemas/tasks.yaml#/TaskCompletedEvent"
+    TaskProgressEvent:
+      $ref: "schemas/tasks.yaml#/TaskProgressEvent"
     InboxPayload:
       $ref: "schemas/inbox.yaml#/InboxPayload"
     InboxItem:

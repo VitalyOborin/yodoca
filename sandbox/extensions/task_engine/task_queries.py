@@ -52,8 +52,8 @@ async def get_task_status(db: Any, task_id: str) -> TaskStatusResult:
         attempt_no=d.get("attempt_no") or 0,
         partial_result=checkpoint,
         error=d.get("error"),
-        created_at=d.get("created_at") or 0,
-        updated_at=d.get("updated_at") or 0,
+        created_at=int(d.get("created_at") or 0),
+        updated_at=int(d.get("updated_at") or 0),
     )
 
 
@@ -93,8 +93,8 @@ async def list_active_tasks(db: Any) -> ActiveTasksResult:
                 attempt_no=d.get("attempt_no") or 0,
                 partial_result=checkpoint,
                 error=d.get("error"),
-                created_at=d.get("created_at") or 0,
-                updated_at=d.get("updated_at") or 0,
+                created_at=int(d.get("created_at") or 0),
+                updated_at=int(d.get("updated_at") or 0),
             )
         )
     return ActiveTasksResult(tasks=tasks, total=len(tasks))
@@ -115,7 +115,7 @@ async def cancel_task(db: Any, task_id: str, reason: str = "") -> CancelTaskResu
     placeholders = ",".join("?" for _ in cancellable)
     cursor = await conn.execute(
         f"UPDATE agent_task SET status = 'cancelled', error = ?, updated_at = ? WHERE task_id = ? AND status IN ({placeholders})",
-        (reason or "Cancelled by user", time.time(), task_id, *cancellable),
+        (reason or "Cancelled by user", int(time.time()), task_id, *cancellable),
     )
     await conn.commit()
     if cursor.rowcount:

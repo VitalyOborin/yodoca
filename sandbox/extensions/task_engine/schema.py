@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS agent_task (
     leased_by     TEXT,
     lease_exp     REAL,
     -- strftime('%s') gives second precision; unixepoch('subsec') needs SQLite 3.38+
-    created_at    REAL    DEFAULT (cast(strftime('%s','now') as real)),
-    updated_at    REAL    DEFAULT (cast(strftime('%s','now') as real))
+    created_at    INTEGER DEFAULT (cast(strftime('%s','now') as integer)),
+    updated_at    INTEGER DEFAULT (cast(strftime('%s','now') as integer))
 );
 
 CREATE INDEX IF NOT EXISTS idx_at_status_schedule ON agent_task(status, schedule_at);
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS task_step (
     duration_ms      INTEGER,
     error_code       TEXT,
     -- see agent_task comment on strftime vs unixepoch
-    created_at       REAL DEFAULT (cast(strftime('%s','now') as real))
+    created_at       INTEGER DEFAULT (cast(strftime('%s','now') as integer))
 );
 
 CREATE INDEX IF NOT EXISTS idx_ts_task ON task_step(task_id, step_no);

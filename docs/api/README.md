@@ -18,6 +18,7 @@ docs/api/
 │   ├── projects.yaml          # /api/projects, /api/projects/{project_id}
 │   ├── notifications.yaml    # /api/notifications
 │   ├── schedules.yaml         # /api/schedules, /api/schedules/once, etc.
+│   ├── tasks.yaml             # /api/tasks, /api/tasks/{task_id}, etc.
 │   └── inbox.yaml             # /api/inbox, /api/inbox/{id}, etc.
 └── schemas/
     ├── common.yaml            # ErrorResponse, OperationResult, HealthResponse
@@ -27,6 +28,7 @@ docs/api/
     ├── projects.yaml          # Project, CreateProjectRequest, UpdateProjectRequest
     ├── notifications.yaml    # Notification, NotificationsResponse
     ├── schedules.yaml         # ScheduleItem, CreateOnce/Recurring, Update
+    ├── tasks.yaml             # TaskItem, TaskListResponse, CancelTaskRequest/Response, SSE events
     └── inbox.yaml             # InboxItem, InboxListResponse, InboxReadAllRequest
 ```
 

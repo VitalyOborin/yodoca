@@ -1,0 +1,181 @@
+# Task Engine domain schemas.
+# Mirrors Pydantic models from sandbox/extensions/task_engine/models.py.
+
+TaskStatus:
+  type: string
+  description: Task lifecycle status.
+  enum:
+    - pending
+    - blocked
+    - running
+    - retry_scheduled
+    - waiting_subtasks
+    - human_review
+    - done
+    - failed
+    - cancelled
+
+TaskItem:
+  type: object
+  description: >
+    Status snapshot of a single task. Corresponds to `TaskStatusResult`
+    in the Task Engine extension.
+  properties:
+    task_id:
+      type: string
+      format: uuid
+      description: Unique task identifier.
+    status:
+      $ref: "#/TaskStatus"
+    agent_id:
+      type: string
+      description: >
+        Agent executing the task (`orchestrator` or a registered AgentProvider id).
+    goal:
+      type: string
+      description: Human-readable task objective.
+    step:
+      type: integer
+      minimum: 0
+      description: Current step number in the agent loop (from checkpoint).
+    max_steps:
+      type: integer
+      minimum: 1
+      description: Maximum steps allowed for this task.
+    attempt_no:
+      type: integer
+      minimum: 0
+      description: Current retry attempt number (0 = first run).
+    partial_result:
+      type: string
+      nullable: true
+      description: Intermediate result from the last checkpoint (may be null if no checkpoint yet).
+    error:
+      type: string
+      nullable: true
+      description: Error message if the task failed or was cancelled.
+    created_at:
+      type: integer
+      description: Task creation timestamp (Unix seconds).
+    updated_at:
+      type: integer
+      description: Last update timestamp (Unix seconds).
+  required:
+    - task_id
+    - status
+    - agent_id
+    - goal
+    - step
+    - max_steps
+    - attempt_no
+    - created_at
+    - updated_at
+
+TaskListResponse:
+  type: object
+  description: Paginated list of tasks.
+  properties:
+    tasks:
+      type: array
+      items:
+        $ref: "#/TaskItem"
+    total:
+      type: integer
+      minimum: 0
+      description: Total number of tasks matching the filter.
+  required: [tasks, total]
+
+CancelTaskRequest:
+  type: object
+  description: Request body for task cancellation.
+  properties:
+    reason:
+      type: string
+      description: Optional human-readable cancellation reason. Stored in the task's `error` field.
+      default: ""
+  additionalProperties: false
+
+CancelTaskResponse:
+  type: object
+  description: >
+    Result of a cancel operation. Corresponds to `CancelTaskResult`
+    in the Task Engine extension.
+  properties:
+    task_id:
+      type: string
+      format: uuid
+    status:
+      type: string
+      description: >
+        `cancelled` on success, or `not_found` if the task does not exist
+        or is already in a terminal state.
+      enum: [cancelled, not_found]
+    message:
+      type: string
+      description: Human-readable result description.
+  required: [task_id, status, message]
+
+# --- SSE event payloads ---
+
+TaskSubmittedEvent:
+  type: object
+  description: >
+    Payload of the `task.submitted` event. Emitted when a new task
+    enters the queue.
+  properties:
+    task_id:
+      type: string
+      format: uuid
+    goal:
+      type: string
+    agent_id:
+      type: string
+    priority:
+      type: integer
+      minimum: 1
+      maximum: 10
+  required: [task_id, goal, agent_id, priority]
+
+TaskCompletedEvent:
+  type: object
+  description: >
+    Payload of the `task.completed` event. Emitted when a task
+    reaches a terminal state (done, failed, cancelled).
+  properties:
+    task_id:
+      type: string
+      format: uuid
+    parent_id:
+      type: string
+      format: uuid
+      nullable: true
+      description: Parent task id if this is a subtask.
+    status:
+      type: string
+      enum: [done, failed, cancelled]
+    result:
+      type: object
+      nullable: true
+      description: Task result payload (present when status is `done`).
+    error:
+      type: string
+      nullable: true
+      description: Error description (present when status is `failed`).
+  required: [task_id, status]
+
+TaskProgressEvent:
+  type: object
+  description: >
+    Payload of the `task.progress` event. Emitted after each
+    agent loop step completes.
+  properties:
+    task_id:
+      type: string
+      format: uuid
+    step:
+      type: integer
+      minimum: 1
+    max_steps:
+      type: integer
+      minimum: 1
+  required: [task_id, step, max_steps]

@@ -59,7 +59,7 @@ async def unblock_successors(
                 UPDATE agent_task SET payload = ?, status = 'pending', updated_at = ?
                 WHERE task_id = ?
                 """,
-                (json_dumps_unicode(payload), time.time(), task_id),
+                (json_dumps_unicode(payload), int(time.time()), task_id),
             )
             logger.info(
                 "task_engine: unblocked successor %s (predecessor %s done)",
@@ -77,7 +77,7 @@ async def unblock_successors(
                 UPDATE agent_task SET status = 'failed', error = ?, updated_at = ?
                 WHERE task_id = ? AND status = 'blocked'
                 """,
-                (error_msg, time.time(), task_id),
+                (error_msg, int(time.time()), task_id),
             )
             # Recursively cascade to this task's successors
             await unblock_successors(db, task_id, "failed", None)
@@ -118,7 +118,7 @@ async def cancel_chain_downstream(db: Any, task_id: str, reason: str = "") -> in
                 UPDATE agent_task SET status = 'cancelled', error = ?, updated_at = ?
                 WHERE task_id = ?
                 """,
-                (error_msg, time.time(), succ_id),
+                (error_msg, int(time.time()), succ_id),
             )
             total += 1
 
