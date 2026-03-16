@@ -54,6 +54,16 @@ TaskItem:
       type: string
       nullable: true
       description: Error message if the task failed or was cancelled.
+    chain_id:
+      type: string
+      format: uuid
+      nullable: true
+      description: Chain identifier if this task belongs to a chain.
+    chain_order:
+      type: integer
+      nullable: true
+      minimum: 0
+      description: Step index within the chain (0-based).
     created_at:
       type: integer
       description: Task creation timestamp (Unix seconds).

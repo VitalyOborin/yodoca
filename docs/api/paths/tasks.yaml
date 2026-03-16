@@ -81,7 +81,75 @@
         $ref: "#/components/responses/UnauthorizedError"
       "503":
         $ref: "#/components/responses/ServiceUnavailableError"
+/api/tasks/stream:
+  get:
+    tags: [tasks]
+    summary: Stream task events (SSE)
+    description: >
+      Server-Sent Events stream for real-time task status updates.
+      The server subscribes to three Task Engine event topics and forwards
+      them as SSE frames:
 
+      | SSE `event:` field   | Topic             | Payload schema         |
+      |----------------------|-------------------|------------------------|
+      | `task.submitted`     | task.submitted    | TaskSubmittedEvent     |
+      | `task.completed`     | task.completed    | TaskCompletedEvent     |
+      | `task.progress`      | task.progress     | TaskProgressEvent      |
+
+      Each frame has the format:
+
+      ```
+      event: <topic>
+      data: <JSON payload>
+
+      ```
+
+      The connection stays open until the client disconnects. The server
+      sends periodic `:keepalive` comments (every ~30 s) to prevent
+      proxy/load-balancer timeouts.
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: SSE stream (`text/event-stream`)
+        content:
+          text/event-stream:
+            schema:
+              type: string
+              description: >
+                Newline-delimited SSE frames. Each frame contains an `event:`
+                line with the topic name and a `data:` line with the JSON payload.
+            examples:
+              task_submitted:
+                summary: Task submitted event
+                value: |
+                  event: task.submitted
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","goal":"Research latest AI papers","agent_id":"orchestrator","priority":5}
+
+              task_progress:
+                summary: Task progress event
+                value: |
+                  event: task.progress
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","step":3,"max_steps":20}
+
+              task_completed:
+                summary: Task completed event
+                value: |
+                  event: task.completed
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","parent_id":null,"status":"done","result":{"content":"Final result text"},"error":null}
+
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        description: Task Engine extension is unavailable.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                detail:
+                  type: string
+              required: [detail]
 /api/tasks/{task_id}:
   get:
     tags: [tasks]
@@ -180,73 +248,3 @@
         $ref: "#/components/responses/UnauthorizedError"
       "503":
         $ref: "#/components/responses/ServiceUnavailableError"
-
-/api/tasks/stream:
-  get:
-    tags: [tasks]
-    summary: Stream task events (SSE)
-    description: >
-      Server-Sent Events stream for real-time task status updates.
-      The server subscribes to three Task Engine event topics and forwards
-      them as SSE frames:
-
-      | SSE `event:` field   | Topic             | Payload schema         |
-      |----------------------|-------------------|------------------------|
-      | `task.submitted`     | task.submitted    | TaskSubmittedEvent     |
-      | `task.completed`     | task.completed    | TaskCompletedEvent     |
-      | `task.progress`      | task.progress     | TaskProgressEvent      |
-
-      Each frame has the format:
-
-      ```
-      event: <topic>
-      data: <JSON payload>
-
-      ```
-
-      The connection stays open until the client disconnects. The server
-      sends periodic `:keepalive` comments (every ~30 s) to prevent
-      proxy/load-balancer timeouts.
-    security:
-      - bearerAuth: []
-    responses:
-      "200":
-        description: SSE stream (`text/event-stream`)
-        content:
-          text/event-stream:
-            schema:
-              type: string
-              description: >
-                Newline-delimited SSE frames. Each frame contains an `event:`
-                line with the topic name and a `data:` line with the JSON payload.
-            examples:
-              task_submitted:
-                summary: Task submitted event
-                value: |
-                  event: task.submitted
-                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","goal":"Research latest AI papers","agent_id":"orchestrator","priority":5}
-
-              task_progress:
-                summary: Task progress event
-                value: |
-                  event: task.progress
-                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","step":3,"max_steps":20}
-
-              task_completed:
-                summary: Task completed event
-                value: |
-                  event: task.completed
-                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","parent_id":null,"status":"done","result":{"content":"Final result text"},"error":null}
-
-      "401":
-        $ref: "#/components/responses/UnauthorizedError"
-      "503":
-        description: Task Engine extension is unavailable.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                detail:
-                  type: string
-              required: [detail]
