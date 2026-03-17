@@ -43,7 +43,7 @@ In `manifest.yaml` (and overrides in `settings.yaml` under `extensions.task_engi
 
 **Dependencies:** `depends_on: [kv]`.
 
-**Agent resolution:** tasks with `agent_id="orchestrator"` are executed via `ctx.invoke_agent_background(prompt)`. All other agent ids are resolved from `context.agent_registry`, which is populated by extensions that implement `AgentProvider`.
+**Agent resolution:** tasks with `agent_id="orchestrator"` are executed via `ctx.invoke_agent_background(prompt)`. All other agent ids are resolved from `context.agent_registry`, which is populated by extensions that implement `AgentProvider` plus dynamic agents created via delegation `create_agent`. Task Engine does not mutate tool sets; dynamic-agent tools are fixed at creation time.
 
 ## Tools (Orchestrator)
 

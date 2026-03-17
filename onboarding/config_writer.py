@@ -46,9 +46,7 @@ def write_config(
         base["agents"]["orchestrator"] = {
             k: v
             for k, v in {
-                "instructions": default_cfg.get(
-                    "instructions", "sandbox/prompts/default.jinja2"
-                ),
+                "instructions": "sandbox/prompts/orchestrator.jinja2",
                 "model": default_cfg.get("model"),
                 "provider": default_cfg.get("provider"),
             }.items()

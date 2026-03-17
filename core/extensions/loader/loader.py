@@ -492,6 +492,36 @@ class Loader:
                 ids.append(ext_id)
         return sorted(set(ids))
 
+    def get_tool_catalog(self) -> dict[str, dict[str, Any]]:
+        """Return tool metadata for create_agent/list_available_tools.
+
+        Format:
+        {
+            "tool_id": {
+                "description": str,
+            },
+            ...
+        }
+        """
+        catalog: dict[str, dict[str, Any]] = {
+            "core_tools": {
+                "description": "Built-in core tools (file, apply_patch, restart).",
+            }
+        }
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if not isinstance(ext, ToolProvider):
+                continue
+            manifest = self._get_manifest(ext_id)
+            description = ""
+            if manifest:
+                description = manifest.description.strip()
+            catalog[ext_id] = {
+                "description": description,
+            }
+        return catalog
+
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
         tools: list[Any] = []

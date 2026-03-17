@@ -88,7 +88,11 @@ def _create_agent(
         settings=settings,
         extension_tools=loader.get_all_tools(),
         delegation_tools=make_delegation_tools(
-            registry, factory, loader.get_available_tool_ids, catalog
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=loader.get_available_tool_ids,
+            catalog=catalog,
+            get_tool_catalog=loader.get_tool_catalog,
         ),
         capabilities_summary=loader.get_capabilities_summary(),
         channel_tools=channel_tools,

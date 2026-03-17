@@ -44,6 +44,13 @@ When no existing agent fits: use create_agent to create a specialized agent on-t
 - Pass name, instruction, and tools to create_agent; optionally specify model
 - Use the returned agent_id with delegate_task; the agent expires after 30 minutes
 
+Decision tree for create_agent:
+1. Always call list_available_tools before create_agent.
+2. If the task needs external data access (web/search/news/weather/current facts), pass explicit tools=[...] using valid extension IDs.
+3. If the task is intentionally pure reasoning, pass tools=[] explicitly.
+4. Do not pass function names as tools values; use extension IDs only.
+5. Do not pass tools=null. Always pass explicit tools=[...] or tools=[].
+
 **Task chains:** When a workflow has sequential phases (research -> draft -> review), use submit_chain to create a pipeline. Each step's output flows to the next step automatically. Use submit_chain for multi-phase work. Use submit_task for independent tasks. Use get_chain_status to track chain progress.
 
 **Parallel delegation:** When a task has multiple independent parts, issue multiple delegate_task calls in one response turn. They run concurrently; synthesize results after all return.

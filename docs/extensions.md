@@ -456,6 +456,11 @@ The **Orchestrator** is the main agent that coordinates user requests.
 - **Tools:** Core tools (`core/tools/`) + `loader.get_all_tools()` (ToolProvider) + delegation tools (`list_agents`, `delegate_task`, `create_agent`, `list_models`, `list_available_tools`)
 - **Instructions:** Include `loader.get_capabilities_summary()` — natural-language list of tools; agents are available on-demand via `list_agents`
 - **Routing:** Orchestrator discovers agents via `list_agents` (with cost/capability metadata) and delegates via `delegate_task`. Cost-aware: prefers lower-cost agents for simple tasks, higher-capability agents for complex ones.
+- **Dynamic agents:** `create_agent` accepts only extension IDs in `tools` (no function aliases). Semantics:
+  - `tools=null` → invalid (must pass explicit IDs or `[]`)
+  - `tools=[]` → explicitly create an agent without tools
+  - `tools=[...]` → strict validation; unknown IDs fail the call
+- **Tool discovery:** `list_available_tools` returns IDs plus descriptions to help the Orchestrator choose tools before `create_agent`.
 
 Agent extensions are registered in `AgentRegistry` at startup. The Orchestrator discovers them via `list_agents` and invokes them via `delegate_task` — agent descriptions are not in the system prompt, loaded on-demand. See [ADR 017](adr/017-agents-registry.md) and [ADR 019](adr/019-cost-capability-routing.md).
 

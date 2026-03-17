@@ -62,6 +62,10 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [027](adr/027-session-project-domain-model.md) | Thread and Project Domain Model in `session.db` |
 | [028](adr/028-unified-threads-table.md) | Unified Threads Table |
 | [029](adr/029-refactor-core-extensions-boundaries.md) | Refactor `core.extensions` Boundaries |
+| [030](adr/030-agui-endpoint.md) | AG-UI Endpoint for Web Channel |
+| [031](adr/031-remove-matryoshka-embeddings.md) | Remove Matryoshka Embedding Support |
+| [032](adr/032-setup-instructions-flow.md) | Wire setup_instructions for Extension Setup Flow |
+| [033](adr/033-dynamic-agent-tool-assignment-v1.md) | Dynamic Agent Tool Assignment v1 (Strict IDs) |
 
 ---
 

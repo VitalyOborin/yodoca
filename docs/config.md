@@ -33,7 +33,7 @@ agents:
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: sandbox/prompts/default.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
     model: gpt-5.2
     provider: openai
 ```
@@ -158,7 +158,7 @@ agents:
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: sandbox/prompts/default.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
     model: gpt-5.2
     provider: openai
 

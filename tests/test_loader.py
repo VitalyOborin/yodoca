@@ -193,6 +193,33 @@ class TestLoadAllAndProtocolDetection:
         has_tools = len(tools) > 0  # kv provides kv_set, kv_get
         assert has_channel or has_tools or len(loader._extensions) == 0
 
+    def test_get_tool_catalog_includes_manifest_description(self) -> None:
+        class _ToolExt:
+            def get_tools(self) -> list:
+                return []
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [
+            ExtensionManifest.model_validate(
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "entrypoint": "main:Cls",
+                    "description": "Search and read web pages",
+                }
+            ),
+        ]
+        loader._extensions = {"web_search": _ToolExt()}
+        loader._state = {"web_search": ExtensionState.ACTIVE}
+
+        catalog = loader.get_tool_catalog()
+
+        assert "core_tools" in catalog
+        assert "web_search" in catalog
+        assert catalog["web_search"]["description"] == "Search and read web pages"
+
 
 class TestProactiveLoop:
     """invoke_agent subscriptions: _collect_proactive_subscriptions and wire_event_subscriptions."""
