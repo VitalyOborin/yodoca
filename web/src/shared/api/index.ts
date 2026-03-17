@@ -53,4 +53,15 @@ export {
   type InboxStatusFilter,
   type InboxStreamEvent,
 } from './inbox';
+export {
+  fetchTasks,
+  fetchTask,
+  cancelTask,
+  type TaskStatus,
+  type TaskStatusFilter,
+  type TaskItem,
+  type TaskListResponse,
+  type CancelTaskRequest,
+  type CancelTaskResponse,
+} from './tasks';
 export { runAgent, type ChatMessage, type RunAgentOptions } from './agent';
