@@ -7,12 +7,11 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
-from typing import cast
 
 from dotenv import load_dotenv
 
 from core.config_check import is_configured
-from core.settings import get_setting, load_settings, reload_settings
+from core.settings import load_settings, reload_settings
 
 # Project root: parent of supervisor package
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -26,13 +25,12 @@ _ONBOARDING_RETRY = 2
 
 def _get_restart_file() -> Path:
     settings = load_settings()
-    rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
-    return _PROJECT_ROOT / cast(str, rel)
+    return _PROJECT_ROOT / settings.supervisor.restart_file
 
 
 def _get_poll_interval() -> int:
     settings = load_settings()
-    return int(get_setting(settings, "supervisor.restart_file_check_interval", 5))
+    return int(settings.supervisor.restart_file_check_interval)
 
 
 _AGENT_CMD = [sys.executable, "-m", "core"]

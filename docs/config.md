@@ -11,6 +11,12 @@ Configuration is stored in `config/settings.yaml`. The file is optional: missing
 - **Loading:** On startup the app loads the file and merges it with internal defaults. Later changes require an app restart (or use the supervisor restart file).
 - **Example template:** `config/settings.example.yaml` can be copied to `config/settings.yaml` and edited.
 
+### Validation
+
+After the merge, settings are validated with Pydantic models in `core/settings_models.py` (`AppSettings` and nested section models). Invalid types or structure cause startup to fail with **path → message** diagnostics printed to stderr.
+
+Extension-specific merged config (manifest `config` + `extensions.<id>` overrides) can be validated when an extension class defines an optional **`ConfigModel`** class attribute (`pydantic.BaseModel`). If validation fails for any loaded extension, startup fails with a clear error (see ADR 035).
+
 ---
 
 ## Structure of `config/settings.yaml`
@@ -187,6 +193,10 @@ logging:
 thread:
   timeout_sec: 3600
 ```
+
+### `models`
+
+Optional overrides for the model catalog (delegation / cost routing). Keys are model IDs; values include `cost_tier`, `capability_tier`, `strengths`, `context_window`. Validated as part of `AppSettings`.
 
 ---
 

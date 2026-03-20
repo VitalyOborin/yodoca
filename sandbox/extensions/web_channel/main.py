@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from sandbox.extensions.web_channel.app import create_app
 from sandbox.extensions.web_channel.bridge import RequestBridge
 
@@ -15,8 +17,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class WebChannelExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.web_channel overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+    api_key: str = ""
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    request_timeout_seconds: int = 120
+    model_name: str = "yodoca"
+    default_user_id: str = "web_user"
+    log_file: str = "sandbox/logs/web.log"
+
+
 class WebChannelExtension:
     """ChannelProvider + StreamingChannelProvider + ServiceProvider for HTTP API."""
+
+    ConfigModel = WebChannelExtensionConfig
 
     def __init__(self) -> None:
         self._context: ExtensionContext | None = None

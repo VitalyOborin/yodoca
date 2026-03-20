@@ -383,6 +383,8 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent thread metadata and history access |
 | `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
 
+**Extension class `ConfigModel` (optional):** On the extension entrypoint class, set `ConfigModel` to a Pydantic `BaseModel` matching the merged manifest + `settings.extensions.<id>` keys (e.g. `model_config = ConfigDict(extra="forbid")` for strict validation). The Loader validates before `initialize()`; failures abort startup with diagnostics. See [ADR 035](adr/035-pydantic-settings-models.md).
+
 ### Event Bus
 
 | Method | Description |

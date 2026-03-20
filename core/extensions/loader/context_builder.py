@@ -12,10 +12,19 @@ from core.extensions.persistence.project_service import ProjectService
 from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.llm import ModelRouterProtocol
+from core.settings_models import AppSettings
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
     from core.events.bus import EventBus
+
+
+def merge_extension_config(
+    settings: AppSettings, ext_id: str, manifest: ExtensionManifest
+) -> dict[str, Any]:
+    """Merge manifest config with settings.extensions.<ext_id> overrides (overrides win)."""
+    overrides = settings.extensions.get(ext_id, {}) or {}
+    return {**manifest.config, **overrides}
 
 
 class ExtensionContextBuilder:
@@ -25,7 +34,7 @@ class ExtensionContextBuilder:
         self,
         extensions_dir: Path,
         data_dir: Path,
-        settings: dict[str, Any],
+        settings: AppSettings,
         model_router: ModelRouterProtocol | None,
         shutdown_event: Any,
         event_bus: "EventBus | None",
@@ -55,8 +64,7 @@ class ExtensionContextBuilder:
     ) -> ExtensionContext:
         """Create ExtensionContext for ext_id and manifest."""
         data_dir_path = self._data_dir / ext_id
-        overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
-        config = {**manifest.config, **overrides}
+        config = merge_extension_config(self._settings, ext_id, manifest)
         resolved_tools = self._resolve_agent_tools(manifest)
         resolved_instructions = self._resolve_agent_instructions(manifest, ext_id)
         agent_model = manifest.agent.model if manifest.agent else ""

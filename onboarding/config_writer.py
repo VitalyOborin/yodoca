@@ -9,7 +9,7 @@ import yaml
 from dotenv import dotenv_values
 
 from core.secrets import is_keyring_available, set_secret
-from core.settings import get_default_settings, get_setting, load_settings
+from core.settings import get_default_settings, load_settings
 from onboarding.state import WizardState
 
 logger = logging.getLogger(__name__)
@@ -82,10 +82,7 @@ def write_config(
     )
 
     settings = load_settings(project_root / "config")
-    restart_rel = get_setting(
-        settings, "supervisor.restart_file", "sandbox/.restart_requested"
-    )
-    restart_file = project_root / restart_rel
+    restart_file = project_root / settings.supervisor.restart_file
     restart_file.parent.mkdir(parents=True, exist_ok=True)
     restart_file.touch()
 

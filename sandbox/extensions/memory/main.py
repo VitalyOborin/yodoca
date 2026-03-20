@@ -6,6 +6,7 @@ import time
 import uuid
 
 from agents import ModelSettings
+from pydantic import BaseModel, ConfigDict
 
 from core.events.topics import SystemTopics
 from core.extensions.contract import TurnContext
@@ -24,6 +25,28 @@ from sandbox.extensions.memory.storage import MemoryStorage
 from sandbox.extensions.memory.tools import build_tools
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.memory overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    embedding_model: str = "text-embedding-3-large"
+    decay_threshold: float = 0.05
+    decay_rate_default: float = 0.1
+    entity_enrichment_min_mentions: int = 3
+    causal_inference_batch_size: int = 50
+    consolidation_episodes_per_chunk: int = 30
+    conflict_min_confidence: float = 0.8
+    context_token_budget: int = 2000
+    rrf_k: int = 60
+    rrf_weight_vector: float = 1.0
+    rrf_weight_fts: float = 1.0
+    rrf_weight_graph: float = 1.0
+    rrf_min_score_ratio: float = 0.4
+    intent_similarity_threshold: float = 0.45
+    remember_fact_dedup_threshold: float = 0.92
 
 
 def _build_embed_fns_from_capability(
@@ -63,6 +86,8 @@ async def _probe_embedding_dimension(
 
 class MemoryExtension:
     """Graph-based cognitive memory. Phase 1: episodes, FTS5, temporal edges."""
+
+    ConfigModel = MemoryExtensionConfig
 
     def __init__(self) -> None:
         self._storage: MemoryStorage | None = None

@@ -6,6 +6,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ConfigDict
+
 from sandbox.extensions.task_engine.chains import get_chain_tasks, unblock_successors
 from sandbox.extensions.task_engine.cleanup import cleanup_old_tasks
 from sandbox.extensions.task_engine.hitl import (
@@ -56,8 +58,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class TaskEngineExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.task_engine overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tick_sec: float = 1.0
+    max_concurrent_tasks: int = 3
+    lease_ttl_sec: float = 90.0
+    max_retries: int = 5
+    default_max_steps: int = 20
+    step_timeout_sec: int = 120
+    retention_days: int = 30
+
+
 class TaskEngineExtension:
     """ServiceProvider + ToolProvider: task queue, worker loop, tools for Orchestrator."""
+
+    ConfigModel = TaskEngineExtensionConfig
 
     def __init__(self) -> None:
         self._ctx: ExtensionContext | None = None

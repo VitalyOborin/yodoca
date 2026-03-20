@@ -40,13 +40,20 @@ async def main() -> None:
     model_router = ModelRouter(settings=settings, secrets_getter=secrets.get_secret)
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
-    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir)
+    loader = Loader(extensions_dir=extensions_dir, data_dir=data_dir, settings=settings)
     loader.set_model_router(model_router)
     router = MessageRouter()
 
-    eb_cfg = settings.get("event_bus", {})
-    db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
-    event_bus = EventBus(db_path=db_path, poll_interval=5.0, batch_size=3)
+    eb = settings.event_bus
+    db_path = _PROJECT_ROOT / eb.db_path
+    event_bus = EventBus(
+        db_path=db_path,
+        poll_interval=eb.poll_interval,
+        batch_size=eb.batch_size,
+        max_retries=eb.max_retries,
+        busy_timeout=eb.busy_timeout,
+        stale_timeout=eb.stale_timeout,
+    )
     await event_bus.recover()
     loader.set_event_bus(event_bus)
 

@@ -7,6 +7,7 @@ import pytest
 
 from core.extensions.loader import Loader
 from core.extensions.routing.router import MessageRouter
+from core.settings_models import AppSettings
 
 
 def _make_tool_ctx(tool_name: str, tool_arguments: str):
@@ -31,7 +32,7 @@ async def test_kv_set_returns_structured_result(tmp_path: Path) -> None:
     loader = Loader(
         extensions_dir=extensions_dir,
         data_dir=data_dir,
-        settings={"extensions": {}},
+        settings=AppSettings(),
     )
     await loader.discover()
     await loader.load_all()
@@ -61,7 +62,7 @@ async def test_kv_get_exact_match_returns_structured_result(tmp_path: Path) -> N
     loader = Loader(
         extensions_dir=extensions_dir,
         data_dir=data_dir,
-        settings={"extensions": {}},
+        settings=AppSettings(),
     )
     await loader.discover()
     await loader.load_all()
@@ -93,7 +94,7 @@ async def test_kv_get_not_found_returns_structured_result(tmp_path: Path) -> Non
     loader = Loader(
         extensions_dir=extensions_dir,
         data_dir=data_dir,
-        settings={"extensions": {}},
+        settings=AppSettings(),
     )
     await loader.discover()
     await loader.load_all()

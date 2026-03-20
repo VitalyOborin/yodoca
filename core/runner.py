@@ -1,6 +1,7 @@
 """Entry point for the AI agent process: bootstrap Loader, Router, Agent; extensions run the UI."""
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,12 @@ from core.agents.orchestrator import create_orchestrator_agent
 from core.agents.registry import AgentRegistry
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
+from core.extensions.loader import ExtensionConfigValidationError
 from core.llm import ModelRouter
 from core.llm.catalog import ModelCatalog
 from core.logging_config import setup_logging
-from core.settings import get_setting, load_settings
+from core.settings import load_settings
+from core.settings_models import AppSettings
 from core.terminal import reset_terminal_for_input
 from core.tools.channel import make_channel_tools
 from core.tools.configure_extension import make_configure_extension_tool
@@ -25,21 +28,21 @@ from core.tools.secure_input import make_secure_input_tool
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _build_event_bus(settings: dict[str, Any]) -> EventBus:
-    eb_cfg = settings.get("event_bus", {})
-    db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
+def _build_event_bus(settings: AppSettings) -> EventBus:
+    eb = settings.event_bus
+    db_path = _PROJECT_ROOT / eb.db_path
     return EventBus(
         db_path=db_path,
-        poll_interval=eb_cfg.get("poll_interval", 5.0),
-        batch_size=eb_cfg.get("batch_size", 3),
-        max_retries=eb_cfg.get("max_retries", 3),
-        busy_timeout=eb_cfg.get("busy_timeout", 5000),
-        stale_timeout=eb_cfg.get("stale_timeout", 300),
+        poll_interval=eb.poll_interval,
+        batch_size=eb.batch_size,
+        max_retries=eb.max_retries,
+        busy_timeout=eb.busy_timeout,
+        stale_timeout=eb.stale_timeout,
     )
 
 
 def _build_loader_router(
-    settings: dict[str, Any],
+    settings: AppSettings,
 ) -> tuple[Loader, MessageRouter, Path, Path, asyncio.Event]:
     extensions_dir = _PROJECT_ROOT / "sandbox" / "extensions"
     data_dir = _PROJECT_ROOT / "sandbox" / "data"
@@ -55,7 +58,11 @@ async def _wire_extensions(
 ) -> None:
     await loader.discover()
     await loader.load_all()
-    await loader.initialize_all(router)
+    try:
+        await loader.initialize_all(router)
+    except ExtensionConfigValidationError as e:
+        print(e.message, file=sys.stderr)
+        sys.exit(1)
     await loader._update_setup_providers_state()
     loader.detect_and_wire_all(router)
     loader.wire_event_subscriptions(event_bus)
@@ -65,7 +72,7 @@ def _create_agent(
     loader: Loader,
     router: MessageRouter,
     event_bus: EventBus,
-    settings: dict[str, Any],
+    settings: AppSettings,
     model_router: ModelRouter,
     registry: AgentRegistry,
 ) -> Any:
@@ -75,7 +82,11 @@ def _create_agent(
         return loader.resolve_tools(tool_ids, agent_id)
 
     factory = AgentFactory(model_router, tool_resolver, registry)
-    catalog = ModelCatalog(overrides=settings.get("models"))
+    catalog = ModelCatalog(
+        overrides={
+            mid: m.model_dump(mode="python") for mid, m in settings.models.items()
+        }
+    )
     channel_tools = make_channel_tools(router) + [
         make_secure_input_tool(event_bus),
         make_configure_extension_tool(
@@ -101,11 +112,11 @@ def _create_agent(
 
 def _configure_thread(
     router: MessageRouter,
-    settings: dict[str, Any],
+    settings: AppSettings,
     data_dir: Path,
     event_bus: EventBus,
 ) -> None:
-    thread_timeout = get_setting(settings, "thread.timeout_sec", 1800)
+    thread_timeout = settings.thread.timeout_sec
     thread_dir = data_dir / "memory"
     thread_dir.mkdir(parents=True, exist_ok=True)
     router.configure_thread(

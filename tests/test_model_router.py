@@ -5,6 +5,7 @@ from agents import OpenAIChatCompletionsModel, OpenAIResponsesModel
 
 from core.llm import ModelRouter
 from core.llm.capabilities import EmbeddingCapability
+from core.settings_models import AppSettings
 
 
 def _mock_secrets(key: str) -> str | None:
@@ -15,43 +16,50 @@ def _mock_secrets(key: str) -> str | None:
     return None
 
 
+def _router_settings(**top_level: object) -> AppSettings:
+    """Build AppSettings from defaults shallow-merged with top-level keys."""
+    data = AppSettings().model_dump(mode="python")
+    data.update(top_level)
+    return AppSettings.model_validate(data)
+
+
 class TestModelRouterGetCapability:
     """get_capability resolution."""
 
     def test_get_capability_returns_embedder_for_openai_compatible(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"default": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         embedder = router.get_capability(EmbeddingCapability)
         assert embedder is not None
         assert hasattr(embedder, "embed_batch")
 
     def test_get_capability_returns_none_for_anthropic(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "anthropic": {
                     "type": "anthropic",
                     "api_key_secret": "anthropic_api_key",
                 },
             },
-            "agents": {
+            agents={
                 "default": {"provider": "anthropic", "model": "claude-3-5-sonnet"}
             },
-        }
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         embedder = router.get_capability(EmbeddingCapability)
         assert embedder is None
 
     def test_get_capability_with_provider_id(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
@@ -62,8 +70,8 @@ class TestModelRouterGetCapability:
                     "api_key_literal": "lm",
                 },
             },
-            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"default": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         embedder = router.get_capability(EmbeddingCapability, provider_id="lm_studio")
         assert embedder is not None
@@ -73,26 +81,28 @@ class TestModelRouterConfig:
     """Config loading and defaults."""
 
     def test_empty_settings_raises_on_get_model(self) -> None:
-        router = ModelRouter(settings={}, secrets_getter=_mock_secrets)
+        settings = _router_settings(agents={}, providers={})
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         with pytest.raises(KeyError, match="No model config"):
             router.get_model("orchestrator")
 
     def test_default_provider_none_when_no_agents(self) -> None:
-        router = ModelRouter(settings={}, secrets_getter=_mock_secrets)
+        settings = _router_settings(agents={}, providers={})
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         assert router.get_default_provider() is None
 
     def test_loads_providers_and_agents(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {
+            agents={
                 "default": {"provider": "openai", "model": "gpt-4"},
             },
-        }
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         assert router.get_default_provider() == "openai"
         model = router.get_model("default")
@@ -100,8 +110,8 @@ class TestModelRouterConfig:
 
     def test_routes_openai_compatible_with_api_mode_chat_completions(self) -> None:
         """api_mode=chat_completions returns OpenAIChatCompletionsModel."""
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "zai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
@@ -109,25 +119,25 @@ class TestModelRouterConfig:
                     "api_mode": "chat_completions",
                 },
             },
-            "agents": {
+            agents={
                 "default": {"provider": "zai", "model": "glm-4.7-flash"},
             },
-        }
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         model = router.get_model("default")
         assert isinstance(model, OpenAIChatCompletionsModel)
 
     def test_routes_openai_compatible_with_api_mode_responses(self) -> None:
         """api_mode=responses (default) returns OpenAIResponsesModel."""
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"default": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         model = router.get_model("default")
         assert isinstance(model, OpenAIResponsesModel)
@@ -137,15 +147,15 @@ class TestModelRouterRegisterAgentConfig:
     """Dynamic agent config registration."""
 
     def test_register_agent_config_adds_new_agent(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"default": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         router.register_agent_config(
             "builder", {"provider": "openai", "model": "gpt-4"}
@@ -154,15 +164,15 @@ class TestModelRouterRegisterAgentConfig:
         assert model is not None
 
     def test_register_agent_config_skips_if_already_configured(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {"builder": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"builder": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         router.register_agent_config(
             "builder", {"provider": "openai", "model": "gpt-4o"}
@@ -176,20 +186,21 @@ class TestModelRouterSupportsHostedTools:
     """supports_hosted_tools check."""
 
     def test_supports_hosted_tools_true_when_no_config(self) -> None:
-        router = ModelRouter(settings={}, secrets_getter=_mock_secrets)
+        settings = _router_settings(agents={}, providers={})
+        router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         assert router.supports_hosted_tools("unknown") is True
 
     def test_supports_hosted_tools_from_provider_config(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "local": {
                     "type": "openai_compatible",
                     "base_url": "http://localhost:1234",
                     "supports_hosted_tools": False,
                 },
             },
-            "agents": {"default": {"provider": "local", "model": "local-model"}},
-        }
+            agents={"default": {"provider": "local", "model": "local-model"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=lambda _: None)
         assert router.supports_hosted_tools("default") is False
 
@@ -198,15 +209,15 @@ class TestModelRouterInvalidate:
     """Cache invalidation."""
 
     def test_invalidate_clears_cache(self) -> None:
-        settings = {
-            "providers": {
+        settings = _router_settings(
+            providers={
                 "openai": {
                     "type": "openai_compatible",
                     "api_key_secret": "openai_api_key",
                 },
             },
-            "agents": {"default": {"provider": "openai", "model": "gpt-4"}},
-        }
+            agents={"default": {"provider": "openai", "model": "gpt-4"}},
+        )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         m1 = router.get_model("default")
         router.invalidate("default")

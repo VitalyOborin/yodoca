@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from agents import function_tool
+from pydantic import BaseModel, ConfigDict
 
 from sandbox.extensions.web_search.interfaces import (
     OpenPageToolResult,
@@ -22,6 +23,20 @@ from sandbox.extensions.web_search.providers.searxng import SearXngSearchProvide
 from sandbox.extensions.web_search.providers.tavily import TavilyProvider
 
 logger = logging.getLogger(__name__)
+
+
+class WebSearchExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.web_search overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    search_provider: str = "duckduckgo"
+    read_provider: str = "jina"
+    max_page_length: int = 15000
+    searxng_base_url: str = "http://localhost:8080"
+    max_urls_per_call: int = 10
+    total_content_budget: int = 40000
+    open_page_concurrency: int = 5
 
 
 def _validate_url(url: str) -> tuple[bool, str]:
@@ -53,6 +68,8 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 class WebSearchExtension:
     """Extension providing web_search and open_page tools."""
+
+    ConfigModel = WebSearchExtensionConfig
 
     def __init__(self) -> None:
         self._ctx: Any = None

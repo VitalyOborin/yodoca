@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from core.agents.registry import AgentRecord, AgentRegistry
 from core.events import EventBus
@@ -19,12 +20,13 @@ from core.extensions.contract import (
     Extension,
     SetupProvider,
 )
-from core.extensions.loader import ExtensionState, Loader
+from core.extensions.loader import ExtensionConfigValidationError, ExtensionState, Loader
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.router import MessageRouter
+from core.settings_models import AppSettings
 
-_EMPTY_SETTINGS: dict = {"extensions": {}}
+_EMPTY_SETTINGS = AppSettings()
 
 
 def _manifest(
@@ -450,7 +452,9 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        settings_with_override = {"extensions": {"x": {"tick_interval": 120}}}
+        settings_with_override = AppSettings(
+            extensions={"x": {"tick_interval": 120}},
+        )
         loader = Loader(
             extensions_dir=Path("."),
             data_dir=Path("."),
@@ -487,7 +491,7 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        settings_no_override = {"extensions": {}}
+        settings_no_override = AppSettings()
         loader = Loader(
             extensions_dir=Path("."), data_dir=Path("."), settings=settings_no_override
         )
@@ -500,6 +504,42 @@ class TestInitializeAndLifecycle:
         ctx = received_ctx[0]
         assert ctx.get_config("tick_interval", 10) == 30  # manifest wins
         assert ctx.get_config("missing_key", 10) == 10  # default wins
+
+    @pytest.mark.asyncio
+    async def test_initialize_all_raises_when_configmodel_validation_fails(self) -> None:
+        class StrictConfig(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            allowed: int = 1
+
+        class MockExtWithSchema:
+            ConfigModel = StrictConfig
+
+            async def initialize(self, context: object) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("x", config={"bad_key": 99})]
+        loader._extensions = {"x": MockExtWithSchema()}
+        loader._state = {"x": ExtensionState.INACTIVE}
+        router = MessageRouter()
+        with pytest.raises(ExtensionConfigValidationError) as exc_info:
+            await loader.initialize_all(router)
+        assert "x" in exc_info.value.message
+        assert "bad_key" in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_start_all_calls_start_and_sets_active(self) -> None:

@@ -6,6 +6,7 @@ from typing import Any, TypeVar, cast
 
 from core.llm.protocol import ModelConfig, ModelProvider, ProviderConfig
 from core.llm.providers import AnthropicProvider, OpenAICompatibleProvider
+from core.settings_models import AgentEntry, AppSettings, ProviderEntry
 
 T = TypeVar("T")
 
@@ -15,48 +16,45 @@ logger = logging.getLogger(__name__)
 # --- Settings parsing (internal, not part of public API) ---
 
 
-def _parse_provider_config(provider_id: str, data: dict[str, Any]) -> ProviderConfig:
-    """Parse raw provider dict from settings into ProviderConfig."""
+def _provider_config_from_entry(provider_id: str, data: ProviderEntry) -> ProviderConfig:
+    """Build ProviderConfig from validated settings entry."""
     return ProviderConfig(
         id=provider_id,
-        type=str(data.get("type", "openai_compatible")),
-        api_mode=str(data.get("api_mode", "responses")),
-        base_url=data.get("base_url"),
-        api_key_secret=data.get("api_key_secret"),
-        api_key_literal=data.get("api_key_literal"),
-        default_headers=dict(data.get("default_headers") or {}),
-        supports_hosted_tools=bool(data.get("supports_hosted_tools", True)),
+        type=data.type,
+        api_mode=data.api_mode,
+        base_url=data.base_url,
+        api_key_secret=data.api_key_secret,
+        api_key_literal=data.api_key_literal,
+        default_headers=dict(data.default_headers),
+        supports_hosted_tools=data.supports_hosted_tools,
     )
 
 
-def _parse_model_config(data: dict[str, Any], provider_id: str) -> ModelConfig:
-    """Parse raw agent dict from settings into ModelConfig."""
+def _model_config_from_entry(data: AgentEntry, provider_id: str) -> ModelConfig:
+    """Build ModelConfig from validated settings entry."""
     return ModelConfig(
-        provider=provider_id or str(data.get("provider", "")),
-        model=str(data.get("model", "")),
-        temperature=float(data.get("temperature", 0.7)),
-        max_tokens=data.get("max_tokens"),
-        extra=dict(data.get("extra") or {}),
+        provider=provider_id or data.provider,
+        model=data.model,
+        temperature=data.temperature,
+        max_tokens=data.max_tokens,
+        extra=dict(data.extra),
     )
 
 
-def _load_provider_configs(settings: dict[str, Any]) -> dict[str, ProviderConfig]:
+def _load_provider_configs(settings: AppSettings) -> dict[str, ProviderConfig]:
     """Extract provider configs from settings. Returns provider_id -> ProviderConfig."""
-    result: dict[str, ProviderConfig] = {}
-    for pid, pdata in (settings.get("providers") or {}).items():
-        if isinstance(pdata, dict):
-            result[str(pid)] = _parse_provider_config(str(pid), pdata)
-    return result
+    return {
+        str(pid): _provider_config_from_entry(str(pid), pdata)
+        for pid, pdata in settings.providers.items()
+    }
 
 
-def _load_agent_configs(settings: dict[str, Any]) -> dict[str, ModelConfig]:
+def _load_agent_configs(settings: AppSettings) -> dict[str, ModelConfig]:
     """Extract agent configs from settings. Returns agent_id -> ModelConfig."""
     result: dict[str, ModelConfig] = {}
-    for aid, adata in (settings.get("agents") or {}).items():
-        if isinstance(adata, dict):
-            provider_id = adata.get("provider")
-            if provider_id:
-                result[str(aid)] = _parse_model_config(adata, str(provider_id))
+    for aid, adata in settings.agents.items():
+        if adata.provider:
+            result[str(aid)] = _model_config_from_entry(adata, adata.provider)
     return result
 
 
@@ -81,7 +79,7 @@ class ModelRouter:
 
     def __init__(
         self,
-        settings: dict[str, Any],
+        settings: AppSettings,
         secrets_getter: Callable[[str], str | None],
     ) -> None:
         self._secrets = secrets_getter
@@ -112,7 +110,10 @@ class ModelRouter:
         provider_id = config.get("provider")
         if not provider_id:
             return
-        self._agent_configs[agent_id] = _parse_model_config(config, str(provider_id))
+        entry = AgentEntry.model_validate(config)
+        self._agent_configs[agent_id] = _model_config_from_entry(
+            entry, str(provider_id)
+        )
 
     def remove_agent_config(self, agent_id: str) -> None:
         """Remove a dynamic agent's config and cached model instance."""

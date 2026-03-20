@@ -25,6 +25,7 @@ from core.runner import (
     main,
     main_async,
 )
+from core.settings_models import AppSettings, EventBusSettings, LoggingSettings, ThreadSettings
 
 
 @pytest.fixture
@@ -79,9 +80,6 @@ def test_create_orchestrator_agent_merges_tools(
     fake_agent_ctor = MagicMock(return_value={"ok": True})
     monkeypatch.setattr(orchestrator, "Agent", fake_agent_ctor)
     monkeypatch.setattr(
-        orchestrator, "get_setting", lambda *_args, **_kwargs: "literal"
-    )
-    monkeypatch.setattr(
         orchestrator,
         "_resolve_instructions",
         lambda *_args, **_kwargs: "resolved",
@@ -91,7 +89,7 @@ def test_create_orchestrator_agent_merges_tools(
 
     result = orchestrator.create_orchestrator_agent(
         model_router=model_router,
-        settings={},
+        settings=AppSettings(),
         extension_tools=["ext1"],
         delegation_tools=["del1"],
         channel_tools=["chan1"],
@@ -114,15 +112,15 @@ def test_setup_logging_file_handler_only(
 
     setup_logging(
         tmp_path,
-        {
-            "logging": {
-                "file": "logs/app.log",
-                "level": "DEBUG",
-                "log_to_console": False,
-                "max_bytes": 2048,
-                "backup_count": 2,
-            }
-        },
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="DEBUG",
+                log_to_console=False,
+                max_bytes=2048,
+                backup_count=2,
+            ),
+        ),
     )
     root = logging.getLogger()
     assert root.level == logging.DEBUG
@@ -138,7 +136,13 @@ def test_setup_logging_adds_console_when_enabled(
 
     setup_logging(
         tmp_path,
-        {"logging": {"file": "logs/app.log", "log_to_console": True, "level": "INFO"}},
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                log_to_console=True,
+                level="INFO",
+            ),
+        ),
     )
     root = logging.getLogger()
     assert any(
@@ -373,17 +377,17 @@ async def test_scheduler_loop_executes_due_task_and_notifies_user(
 
 
 def test_runner_build_helpers_and_configure_calls(tmp_path: Path) -> None:
-    settings = {
-        "event_bus": {
-            "db_path": "sandbox/data/custom_event_journal.db",
-            "poll_interval": 1.5,
-            "batch_size": 7,
-            "max_retries": 4,
-            "busy_timeout": 2000,
-            "stale_timeout": 42,
-        },
-        "thread": {"timeout_sec": 55},
-    }
+    settings = AppSettings(
+        event_bus=EventBusSettings(
+            db_path="sandbox/data/custom_event_journal.db",
+            poll_interval=1.5,
+            batch_size=7,
+            max_retries=4,
+            busy_timeout=2000,
+            stale_timeout=42,
+        ),
+        thread=ThreadSettings(timeout_sec=55),
+    )
     event_bus = _build_event_bus(settings)
     assert event_bus._poll_interval == 1.5
     assert event_bus._batch_size == 7
@@ -472,7 +476,7 @@ def test_create_agent_builds_orchestrator_with_combined_tools(
         loader,
         router,
         event_bus,
-        {"models": {}},
+        AppSettings(models={}),
         model_router,
         registry,
     )
@@ -493,7 +497,7 @@ def test_create_agent_builds_orchestrator_with_combined_tools(
 async def test_main_async_runs_bootstrap_and_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = {"thread": {"timeout_sec": 10}}
+    settings = AppSettings(thread=ThreadSettings(timeout_sec=10))
     model_router = MagicMock()
     model_router.remove_agent_config = MagicMock()
     registry = MagicMock()

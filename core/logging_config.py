@@ -3,15 +3,16 @@
 import logging
 import logging.handlers
 from pathlib import Path
-from typing import Any
+
+from core.settings_models import AppSettings, LoggingSettings
 
 
 def _file_handler(
-    project_root: Path, cfg: dict[str, Any], level: int
+    project_root: Path, cfg: LoggingSettings, level: int
 ) -> logging.Handler:
-    log_file = cfg.get("file", "sandbox/logs/app.log")
-    max_bytes = int(cfg.get("max_bytes", 10 * 1024 * 1024))
-    backup_count = int(cfg.get("backup_count", 3))
+    log_file = cfg.file
+    max_bytes = int(cfg.max_bytes)
+    backup_count = int(cfg.backup_count)
     log_path = project_root / log_file
     log_path.parent.mkdir(parents=True, exist_ok=True)
     h = logging.handlers.RotatingFileHandler(
@@ -27,15 +28,15 @@ def _console_handler(level: int) -> logging.Handler:
     return h
 
 
-def setup_logging(project_root: Path, settings: dict[str, Any]) -> None:
+def setup_logging(project_root: Path, settings: AppSettings) -> None:
     """Configure the root logger: file handler with optional console output.
 
-    Reads config from settings.get("logging", {}). Creates log directory
+    Reads config from settings.logging. Creates log directory
     if needed. By default logs only to file to keep CLI clean.
     """
-    cfg = settings.get("logging", {})
-    level_name = cfg.get("level", "INFO").upper()
-    log_to_console = cfg.get("log_to_console", False)
+    cfg = settings.logging
+    level_name = cfg.level.upper()
+    log_to_console = cfg.log_to_console
     level = getattr(logging, level_name, logging.INFO)
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
