@@ -87,7 +87,7 @@ def main() -> None:
     restart_requested = False
     shutdown_requested = False
 
-    def on_signal(signum: int, frame: object) -> None:
+    def on_signal(_signum: int, _frame: object) -> None:
         nonlocal shutdown_requested
         _log("Shutdown requested.")
         shutdown_requested = True

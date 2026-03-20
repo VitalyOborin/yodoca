@@ -42,7 +42,7 @@ class ExtensionContext(Protocol):
 
     data_dir: Path
 
-    def get_config(self, key: str, default: Any = None) -> Any: ...
+    def get_config(self, _key: str, _default: Any = None) -> Any: ...
 
 
 class ShellExecExtension:

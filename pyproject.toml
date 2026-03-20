@@ -46,6 +46,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-httpx>=0.30.0",
+    "vulture>=2.14",
+    "pre-commit>=4.0.0",
 ]
 
 [build-system]
@@ -107,6 +109,17 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.vulture]
+min_confidence = 80
+paths = [
+    "core",
+    "sandbox/extensions",
+    "onboarding",
+    "supervisor",
+    "scripts/vulture_allowlist.py",
+]
+exclude = [".venv", "tests", "**/__pycache__"]
 
 [dependency-groups]
 dev = [
