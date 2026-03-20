@@ -1,7 +1,6 @@
 """ExtensionContext: kernel API for extensions."""
 
 import asyncio
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -15,6 +14,7 @@ from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.extensions.update_fields import UNSET, UnsetType
 from core.llm import ModelRouterProtocol
+from core.logging_config import SubsystemLogger
 from core.secrets import get_secret_async, set_secret_async
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ class ExtensionContext:
         self,
         extension_id: str,
         config: dict[str, Any],
-        logger: logging.Logger,
+        logger: SubsystemLogger,
         router: MessageRouter,
         thread_manager: ThreadManager,
         project_service: ProjectService | None,

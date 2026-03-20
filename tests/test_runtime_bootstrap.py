@@ -2,6 +2,7 @@
 
 import asyncio
 import ctypes
+import json
 import logging
 import logging.handlers
 import sys
@@ -124,8 +125,10 @@ def test_setup_logging_file_handler_only(
     )
     root = logging.getLogger()
     assert root.level == logging.DEBUG
-    assert len(root.handlers) == 1
-    assert isinstance(root.handlers[0], logging.handlers.RotatingFileHandler)
+    assert len(root.handlers) == 2
+    assert sum(
+        1 for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+    ) == 1
     assert (tmp_path / "logs" / "app.log").exists()
 
 
@@ -149,6 +152,245 @@ def test_setup_logging_adds_console_when_enabled(
         isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers
     )
     assert any(type(h) is logging.StreamHandler for h in root.handlers)
+    assert len(root.handlers) == 3
+
+
+def test_subsystem_level_override(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=False,
+                subsystems={"ext.memory": "DEBUG"},
+            ),
+        ),
+    )
+    log_path = tmp_path / "logs" / "app.log"
+    logging.getLogger("ext.memory").debug("mem-debug")
+    logging.getLogger("ext.other").debug("other-debug")
+    text = log_path.read_text(encoding="utf-8")
+    assert "mem-debug" in text
+    assert "other-debug" not in text
+
+
+def test_console_level_independent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], _restore_root_logger: None
+) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                console_level="WARNING",
+                log_to_console=True,
+            ),
+        ),
+    )
+    logging.getLogger("demo").info("to-file-not-console")
+    logging.getLogger("demo").warning("to-both")
+    err = capsys.readouterr().err
+    assert "to-file-not-console" not in err
+    assert "to-both" in err
+    log_path = tmp_path / "logs" / "app.log"
+    body = log_path.read_text(encoding="utf-8")
+    assert "to-file-not-console" in body
+    assert "to-both" in body
+
+
+def test_json_console_formatter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], _restore_root_logger: None
+) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=True,
+                console_style="json",
+            ),
+        ),
+    )
+    logging.getLogger("jsoncon").info("hello-json")
+    err = capsys.readouterr().err.strip()
+    row = json.loads(err)
+    assert row["level"] == "INFO"
+    assert row["logger"] == "jsoncon"
+    assert row["message"] == "hello-json"
+    assert "timestamp" in row
+
+
+def test_json_file_formatter(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=False,
+                file_style="json",
+            ),
+        ),
+    )
+    logging.getLogger("jf").warning("w")
+    log_path = tmp_path / "logs" / "app.log"
+    line = log_path.read_text(encoding="utf-8").strip().splitlines()[-1]
+    row = json.loads(line)
+    assert row["level"] == "WARNING"
+    assert row["logger"] == "jf"
+    assert row["message"] == "w"
+
+
+def test_meta_in_json_output(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import create_subsystem_logger, setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=False,
+                file_style="json",
+            ),
+        ),
+    )
+    create_subsystem_logger("meta.sub").info("x", meta={"request_id": "abc"})
+    log_path = tmp_path / "logs" / "app.log"
+    line = log_path.read_text(encoding="utf-8").strip().splitlines()[-1]
+    row = json.loads(line)
+    assert row["meta"] == {"request_id": "abc"}
+
+
+def test_child_logger(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import create_subsystem_logger, setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=False,
+                subsystems={"ext.memory": "DEBUG"},
+            ),
+        ),
+    )
+    parent = create_subsystem_logger("ext.memory")
+    child = parent.child("query")
+    assert child.unwrap.name == "ext.memory.query"
+    child.debug("q-debug")
+    log_path = tmp_path / "logs" / "app.log"
+    assert "q-debug" in log_path.read_text(encoding="utf-8")
+
+
+def test_subsystem_filter_prefix_match(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=False,
+                subsystems={"ext.memory": "DEBUG"},
+            ),
+        ),
+    )
+    logging.getLogger("ext.memory.tools").debug("tools-debug")
+    log_path = tmp_path / "logs" / "app.log"
+    assert "tools-debug" in log_path.read_text(encoding="utf-8")
+
+
+def test_is_enabled(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import create_subsystem_logger, setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                console_level="DEBUG",
+                log_to_console=True,
+            ),
+        ),
+    )
+    log = create_subsystem_logger("is.en")
+    assert log.is_enabled("debug", "console") is True
+    assert log.is_enabled("debug", "file") is False
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="DEBUG",
+                log_to_console=True,
+                console_level="INFO",
+            ),
+        ),
+    )
+    log2 = create_subsystem_logger("is.en2")
+    assert log2.is_enabled("debug", "console") is False
+    assert log2.is_enabled("debug", "file") is True
+
+
+def test_console_subsystems_filter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], _restore_root_logger: None
+) -> None:
+    from core.logging_config import setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(
+                file="logs/app.log",
+                level="INFO",
+                log_to_console=True,
+                console_subsystems=["ext.memory"],
+            ),
+        ),
+    )
+    logging.getLogger("ext.memory").info("mem-msg")
+    logging.getLogger("ext.other").info("other-msg")
+    err = capsys.readouterr().err
+    assert "mem-msg" in err
+    assert "other-msg" not in err
+
+
+def test_register_transport(tmp_path: Path, _restore_root_logger: None) -> None:
+    from core.logging_config import register_log_transport, setup_logging
+
+    setup_logging(
+        tmp_path,
+        AppSettings(
+            logging=LoggingSettings(file="logs/app.log", level="INFO", log_to_console=False),
+        ),
+    )
+    received: list[str] = []
+
+    def cb(record: logging.LogRecord) -> None:
+        received.append(record.getMessage())
+
+    unreg = register_log_transport(cb)
+    logging.getLogger("tr").info("one")
+    assert received == ["one"]
+    unreg()
+    logging.getLogger("tr").info("two")
+    assert received == ["one"]
 
 
 def test_reset_terminal_for_input_skips_non_tty(

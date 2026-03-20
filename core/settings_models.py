@@ -1,6 +1,6 @@
 """Pydantic models for config/settings.yaml (validated after YAML merge)."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,9 +41,14 @@ class EventBusSettings(BaseModel):
 class LoggingSettings(BaseModel):
     file: str = "sandbox/logs/app.log"
     level: str = "INFO"
+    console_level: str | None = None
+    console_style: Literal["text", "json"] = "text"
+    file_style: Literal["text", "json"] = "text"
     log_to_console: bool = False
     max_bytes: int = 10485760
     backup_count: int = 3
+    subsystems: dict[str, str] = Field(default_factory=dict)
+    console_subsystems: list[str] = Field(default_factory=list)
 
 
 class ThreadSettings(BaseModel):

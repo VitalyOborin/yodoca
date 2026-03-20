@@ -22,8 +22,15 @@ logging:
   backup_count: 3
   file: sandbox/logs/app.log
   level: INFO
+  # console_level: WARNING   # optional; defaults to level (independent from file)
+  # console_style: text      # text | json
+  # file_style: text         # text | json
   log_to_console: false
   max_bytes: 10485760
+  # subsystems:
+  #   ext.memory: DEBUG
+  #   core.events.bus: INFO
+  # console_subsystems: []    # if set, only these prefixes on console
 providers:
   openai:
     api_key_secret: OPENAI_API_KEY

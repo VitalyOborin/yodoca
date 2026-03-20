@@ -82,10 +82,17 @@ Durable event journal and polling.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `file` | `sandbox/logs/app.log` | Log file path. |
-| `level` | `INFO` | Log level. |
+| `level` | `INFO` | Minimum level for the file handler (global default; per-prefix overrides via `subsystems`). |
+| `console_level` | *(same as `level`)* | Minimum level for the console handler when `log_to_console` is true. |
+| `console_style` | `text` | `text` or `json` (stderr). |
+| `file_style` | `text` | `text` or `json` (line-delimited JSON in the file). |
 | `log_to_console` | `false` | Whether to duplicate logs to stderr. |
 | `max_bytes` | `10485760` | Max size per log file (bytes). |
 | `backup_count` | `3` | Number of rotated backup files. |
+| `subsystems` | `{}` | Map of logger name prefix → level (e.g. `ext.memory: DEBUG`). Longest prefix wins. |
+| `console_subsystems` | `[]` | If non-empty, only these prefixes are printed to the console. |
+
+See [ADR 036](adr/036-subsystem-logging.md).
 
 ### `thread`
 

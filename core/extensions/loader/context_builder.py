@@ -1,11 +1,11 @@
 """ExtensionContextBuilder: construct ExtensionContext for one extension."""
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.extensions.context import ExtensionContext
+from core.logging_config import create_subsystem_logger
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.persistence.project_service import ProjectService
@@ -74,7 +74,7 @@ class ExtensionContextBuilder:
         return ExtensionContext(
             extension_id=ext_id,
             config=config,
-            logger=logging.getLogger(f"ext.{ext_id}"),
+            logger=create_subsystem_logger(f"ext.{ext_id}"),
             router=router,
             thread_manager=thread_manager,
             project_service=project_service,

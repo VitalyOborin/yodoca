@@ -370,7 +370,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 |--------|-------------|
 | `extension_id` | Extension id from manifest |
 | `config` | Merged config: `settings.extensions.<id>` overrides + manifest `config` |
-| `logger` | `logging.getLogger(f"ext.{extension_id}")` |
+| `logger` | `create_subsystem_logger(f"ext.{extension_id}")` — [`SubsystemLogger`](../core/logging_config.py): `.child()`, `.is_enabled()`, optional `meta=` on level methods; see [ADR 036](adr/036-subsystem-logging.md) |
 | `data_dir` | `sandbox/data/<extension_id>/` (created on access) |
 
 ### Configuration & Dependencies
