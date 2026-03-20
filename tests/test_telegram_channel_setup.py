@@ -23,6 +23,7 @@ async def test_initialize_invalid_saved_token_does_not_raise() -> None:
     ctx = _make_context()
     kv = MagicMock()
     kv.get = AsyncMock(return_value=None)
+    kv.set = AsyncMock()
     ctx.get_extension.return_value = kv
     ctx.get_secret = AsyncMock(return_value="invalid-token")
 
@@ -39,6 +40,7 @@ async def test_apply_config_token_activates_runtime_without_restart() -> None:
     ctx = _make_context()
     kv = MagicMock()
     kv.get = AsyncMock(return_value=None)
+    kv.set = AsyncMock()
     ctx.get_extension.return_value = kv
     ctx.get_secret = AsyncMock(return_value=None)
     ctx.set_secret = AsyncMock()

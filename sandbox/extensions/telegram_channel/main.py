@@ -3,7 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -20,6 +20,7 @@ from sandbox.extensions.telegram_channel.formatting import (
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext
     from core.extensions.contract import TurnContext
+    from sandbox.extensions.kv.main import KvStoreProtocol
 
 
 # Typing action is shown for 5 seconds; repeat every 4 seconds while agent is working.
@@ -49,14 +50,11 @@ class StreamState:
 
 
 class TelegramChannelExtension:
-    """Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider.
-
-    Single-user app: always sends to self._chat_id regardless of user_id argument.
-    """
+    """Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider."""
 
     def __init__(self) -> None:
         self._ctx: ExtensionContext | None = None
-        self._kv: Any = None
+        self._kv: KvStoreProtocol | None = None
         self._bot: Bot | None = None
         self._dp: Dispatcher | None = None
         self._token: str | None = None
@@ -66,10 +64,6 @@ class TelegramChannelExtension:
         self._stream_edit_interval_ms = 500
         self._stream_min_chunk_chars = 20
         self._streams: dict[str, StreamState] = {}
-
-    # ------------------------------------------------------------------ #
-    # ContextProvider                                                       #
-    # ------------------------------------------------------------------ #
 
     @property
     def context_priority(self) -> int:
@@ -97,16 +91,8 @@ class TelegramChannelExtension:
             "Ask the user to run Telegram setup before attempting to send.\n"
         )
 
-    # ------------------------------------------------------------------ #
-    # SetupProvider                                                         #
-    # ------------------------------------------------------------------ #
-
     def get_setup_schema(self) -> list[dict]:
-        """SetupProvider: schema for interactive configuration.
-
-        Only token is exposed. chat_id is auto-captured from the first
-        Telegram message and must NOT be set manually by the agent.
-        """
+        """SetupProvider: schema for interactive configuration."""
         return [
             {
                 "name": "token",
@@ -269,10 +255,6 @@ class TelegramChannelExtension:
         self._wire_dispatcher()
         await self._load_chat_id()
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle                                                             #
-    # ------------------------------------------------------------------ #
-
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
         self._kv = context.get_extension("kv")
@@ -340,10 +322,6 @@ class TelegramChannelExtension:
             return "TOKEN OK — waiting for user to /start the bot in Telegram"
         return "NOT CONFIGURED — token missing"
 
-    # ------------------------------------------------------------------ #
-    # ServiceProvider                                                       #
-    # ------------------------------------------------------------------ #
-
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""
         backoff = 1.0
@@ -367,10 +345,6 @@ class TelegramChannelExtension:
                     self._ctx.logger.exception("Telegram polling failed: %s", e)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
-
-    # ------------------------------------------------------------------ #
-    # Streaming helpers                                                     #
-    # ------------------------------------------------------------------ #
 
     async def _typing_heartbeat(self) -> None:
         """Send typing action every 4 seconds (Telegram shows it for 5s). Run as task until cancelled."""
@@ -483,17 +457,8 @@ class TelegramChannelExtension:
                     "Failed to finalize stream for %s: %s", user_id, e
                 )
 
-    # ------------------------------------------------------------------ #
-    # ChannelProvider                                                       #
-    # ------------------------------------------------------------------ #
-
     async def send_to_user(self, user_id: str, message: str) -> None:
-        """ChannelProvider: deliver message to the configured chat_id.
-
-        Single-user app: user_id argument is ignored — always sends to self._chat_id.
-        Raises RuntimeError if the channel is not ready so the agent gets an explicit
-        error instead of a silent no-op.
-        """
+        """ChannelProvider: deliver message to configured chat_id or raise RuntimeError."""
         if not self._bot or not self._token:
             raise RuntimeError(
                 "telegram_channel: bot token is not configured. "

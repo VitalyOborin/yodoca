@@ -5,13 +5,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.extensions.context import ExtensionContext
-from core.logging_config import create_subsystem_logger
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.persistence.project_service import ProjectService
 from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.llm import ModelRouterProtocol
+from core.logging_config import create_subsystem_logger
 from core.settings_models import AppSettings
 
 if TYPE_CHECKING:
