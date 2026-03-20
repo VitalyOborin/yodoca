@@ -8,7 +8,7 @@ This document describes the extension architecture in the assistant4 system: how
 
 Extensions are **pluggable modules** that extend the system with tools, channels, agents, schedulers, and services. They live in `sandbox/extensions/<id>/` and are discovered, loaded, and wired by the **Loader** at startup. Capabilities are detected via **`@runtime_checkable` Protocol classes** (`core/extensions/contract.py`), not via manifest fields.
 
-**Key principle:** Extensions interact with the system **only** through `ExtensionContext` and protocol contracts — no direct imports of loader, routing, or persistence internals.
+**Key principle:** Extensions interact with the system **only** through `ExtensionContext` and protocol contracts — no direct imports of loader, routing, or persistence internals. Automated boundary checks enforce this at CI time; see [boundary-checks.md](boundary-checks.md).
 
 ---
 
@@ -648,6 +648,7 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 ## References
 
 - [architecture.md](architecture.md) — System overview and bootstrap
+- [boundary-checks.md](boundary-checks.md) — Architecture boundary enforcement scripts
 - [event_bus.md](event_bus.md) — Event Bus architecture and topics
 - [channels.md](channels.md) — Channel providers (CLI, Telegram, Web)
 - [scheduler.md](scheduler.md) — Scheduler extension

@@ -255,6 +255,7 @@ See [event_bus-memory-flow.md](event_bus-memory-flow.md) for detailed flow and [
 ## References
 
 - [extensions.md](extensions.md) — Extension architecture and manifest
+- [boundary-checks.md](boundary-checks.md) — Architecture boundary enforcement scripts
 - [event_bus.md](event_bus.md) — Event Bus
 - [event_bus-memory-flow.md](event_bus-memory-flow.md) — Detailed message flow
 - [memory.md](memory.md) — Memory system

@@ -28,6 +28,7 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [llm.md](llm.md) | Model routing, providers, configuration |
 | [configuration.md](configuration.md) | Settings reference (config/settings.yaml) |
 | [config.md](config.md) | Application config: file location, structure, extension config priority |
+| [boundary-checks.md](boundary-checks.md) | Architecture boundary enforcement scripts (CI + pre-commit) |
 
 ---
 
