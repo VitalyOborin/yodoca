@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 # --- Settings parsing (internal, not part of public API) ---
 
 
-def _provider_config_from_entry(provider_id: str, data: ProviderEntry) -> ProviderConfig:
+def _provider_config_from_entry(
+    provider_id: str, data: ProviderEntry
+) -> ProviderConfig:
     """Build ProviderConfig from validated settings entry."""
     return ProviderConfig(
         id=provider_id,

@@ -72,7 +72,9 @@ def get_default_settings() -> dict[str, Any]:
     return AppSettings().model_dump(mode="python")
 
 
-def get_setting(settings: AppSettings | dict[str, Any], path: str, default: Any = None) -> Any:
+def get_setting(
+    settings: AppSettings | dict[str, Any], path: str, default: Any = None
+) -> Any:
     """Get a nested value by dot path (e.g. 'supervisor.restart_file')."""
     if isinstance(settings, AppSettings):
         current: Any = settings.model_dump(mode="python")

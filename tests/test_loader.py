@@ -20,7 +20,11 @@ from core.extensions.contract import (
     Extension,
     SetupProvider,
 )
-from core.extensions.loader import ExtensionConfigValidationError, ExtensionState, Loader
+from core.extensions.loader import (
+    ExtensionConfigValidationError,
+    ExtensionState,
+    Loader,
+)
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.router import MessageRouter
@@ -506,7 +510,9 @@ class TestInitializeAndLifecycle:
         assert ctx.get_config("missing_key", 10) == 10  # default wins
 
     @pytest.mark.asyncio
-    async def test_initialize_all_raises_when_configmodel_validation_fails(self) -> None:
+    async def test_initialize_all_raises_when_configmodel_validation_fails(
+        self,
+    ) -> None:
         class StrictConfig(BaseModel):
             model_config = ConfigDict(extra="forbid")
             allowed: int = 1

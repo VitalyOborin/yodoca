@@ -49,9 +49,7 @@ class TestModelRouterGetCapability:
                     "api_key_secret": "anthropic_api_key",
                 },
             },
-            agents={
-                "default": {"provider": "anthropic", "model": "claude-3-5-sonnet"}
-            },
+            agents={"default": {"provider": "anthropic", "model": "claude-3-5-sonnet"}},
         )
         router = ModelRouter(settings=settings, secrets_getter=_mock_secrets)
         embedder = router.get_capability(EmbeddingCapability)

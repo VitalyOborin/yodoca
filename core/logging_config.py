@@ -209,9 +209,7 @@ class SubsystemLogger:
             return console_ok()
         return file_ok() or console_ok()
 
-    def _merge_extra(
-        self, meta: dict[str, Any] | None, kwargs: dict[str, Any]
-    ) -> None:
+    def _merge_extra(self, meta: dict[str, Any] | None, kwargs: dict[str, Any]) -> None:
         extra = dict(kwargs.pop("extra", None) or {})
         if meta is not None:
             extra["_meta"] = meta

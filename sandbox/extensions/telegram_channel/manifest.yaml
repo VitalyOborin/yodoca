@@ -3,17 +3,17 @@ name: Telegram Channel
 version: "0.2.0"
 description: |
   Telegram Bot API channel via aiogram long-polling.
-  Setup: save secret 'telegram_bot_token' (Bot API token from @BotFather),
-  then call request_restart(). The bot will auto-capture chat_id from the
-  first message the user sends to it in Telegram (/start).
+  Two-step setup: save Bot API token from @BotFather, then the user sends /start
+  to the bot so chat_id is auto-captured. No restart required after token save.
 entrypoint: main:TelegramChannelExtension
 
 setup_instructions: |
-  To connect Telegram, a Bot API token from @BotFather is needed.
-  Use request_secure_input(secret_id="telegram_bot_token", prompt_message="Enter Telegram Bot API token from @BotFather")
-  to securely collect the token from the user (it will be saved to keyring, never exposed to the LLM).
-  After the token is saved, call request_restart() to apply the new configuration.
-  The bot will auto-capture chat_id from the first /start message the user sends in Telegram.
+  Telegram setup is a TWO-STEP process:
+  1. Collect the Bot API token via request_secure_input(secret_id="telegram_bot_token", ...).
+     Then call configure_extension to save it. The bot will connect but cannot send messages yet.
+  2. Ask the user to open Telegram and send /start to the bot.
+     The bot auto-captures chat_id from the first message. After that, telegram_channel is fully ready.
+  Do NOT call request_restart — the bot activates immediately after token is saved.
 
 depends_on:
   - kv

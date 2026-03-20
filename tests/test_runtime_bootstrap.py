@@ -26,7 +26,12 @@ from core.runner import (
     main,
     main_async,
 )
-from core.settings_models import AppSettings, EventBusSettings, LoggingSettings, ThreadSettings
+from core.settings_models import (
+    AppSettings,
+    EventBusSettings,
+    LoggingSettings,
+    ThreadSettings,
+)
 
 
 @pytest.fixture
@@ -126,9 +131,14 @@ def test_setup_logging_file_handler_only(
     root = logging.getLogger()
     assert root.level == logging.DEBUG
     assert len(root.handlers) == 2
-    assert sum(
-        1 for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
-    ) == 1
+    assert (
+        sum(
+            1
+            for h in root.handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        )
+        == 1
+    )
     assert (tmp_path / "logs" / "app.log").exists()
 
 
@@ -295,7 +305,9 @@ def test_child_logger(tmp_path: Path, _restore_root_logger: None) -> None:
     assert "q-debug" in log_path.read_text(encoding="utf-8")
 
 
-def test_subsystem_filter_prefix_match(tmp_path: Path, _restore_root_logger: None) -> None:
+def test_subsystem_filter_prefix_match(
+    tmp_path: Path, _restore_root_logger: None
+) -> None:
     from core.logging_config import setup_logging
 
     setup_logging(
@@ -377,7 +389,9 @@ def test_register_transport(tmp_path: Path, _restore_root_logger: None) -> None:
     setup_logging(
         tmp_path,
         AppSettings(
-            logging=LoggingSettings(file="logs/app.log", level="INFO", log_to_console=False),
+            logging=LoggingSettings(
+                file="logs/app.log", level="INFO", log_to_console=False
+            ),
         ),
     )
     received: list[str] = []

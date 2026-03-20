@@ -24,8 +24,12 @@ class ActiveChannelContextProvider:
         for cid in ids:
             desc = descriptions.get(cid) or cid
             ch = self._router.get_channel(cid)
-            ready = getattr(ch, "health_check", lambda: True)()
-            status = "READY" if ready else "NOT CONFIGURED"
+            get_status = getattr(ch, "get_channel_status", None)
+            if callable(get_status):
+                status = get_status()
+            else:
+                ready = getattr(ch, "health_check", lambda: True)()
+                status = "READY" if ready else "NOT CONFIGURED"
             lines.append(f"- {cid} ({desc}) — {status}")
         return (
             "[Available Channels]\n"

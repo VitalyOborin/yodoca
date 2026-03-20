@@ -24,7 +24,8 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "openai": [
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.4-nanogpt-5.3",
+        "gpt-5.4-nano",
+        "gpt-5.3",
         "gpt-5.3-codex",
         "gpt-5.2",
         "gpt-5.2-pro",

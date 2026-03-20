@@ -298,9 +298,7 @@ async def test_loader_injects_project_context_before_memory(tmp_path: Path) -> N
         now_ts=1773096501,
     )
 
-    loader = Loader(
-        extensions_dir=tmp_path, data_dir=tmp_path, settings=AppSettings()
-    )
+    loader = Loader(extensions_dir=tmp_path, data_dir=tmp_path, settings=AppSettings())
     loader._extensions = {"memory": DummyMemoryProvider()}
     loader._state = {"memory": ExtensionState.ACTIVE}
     router.register_channel("cli_channel", MagicMock())
