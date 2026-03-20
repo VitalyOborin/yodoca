@@ -9,11 +9,12 @@ from dotenv import load_dotenv
 
 from core import secrets
 from core.agents.delegation_tools import make_delegation_tools
+from core.agents.factory import AgentFactory
 from core.agents.lifecycle import start_lifecycle_loop
-from core.agents.orchestrator import create_orchestrator_agent
 from core.agents.registry import AgentRegistry
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
+from core.extensions.contract import AgentProvider
 from core.extensions.loader import ExtensionConfigValidationError
 from core.llm import ModelRouter
 from core.llm.catalog import ModelCatalog
@@ -68,7 +69,7 @@ async def _wire_extensions(
     loader.wire_event_subscriptions(event_bus)
 
 
-def _create_agent(
+def _resolve_default_agent(
     loader: Loader,
     router: MessageRouter,
     event_bus: EventBus,
@@ -76,7 +77,24 @@ def _create_agent(
     model_router: ModelRouter,
     registry: AgentRegistry,
 ) -> Any:
-    from core.agents.factory import AgentFactory
+    """Load the declarative default-agent extension and attach the full orchestrator tool set."""
+    from agents import ModelSettings
+
+    ext_id = (settings.default_agent or "").strip()
+    if not ext_id:
+        raise RuntimeError("default_agent not configured in settings")
+
+    ext = loader.get_extensions().get(ext_id)
+    if ext is None:
+        raise RuntimeError(f"default_agent {ext_id!r} not found in loaded extensions")
+    if not isinstance(ext, AgentProvider):
+        raise RuntimeError(f"default_agent {ext_id!r} does not implement AgentProvider")
+    inner = getattr(ext, "agent", None)
+    if inner is None:
+        raise RuntimeError(
+            f"default_agent {ext_id!r} has no initialized agent "
+            "(extension initialize() did not run or is not a declarative agent)"
+        )
 
     def tool_resolver(tool_ids: list[str], agent_id: str | None = None) -> list[Any]:
         return loader.resolve_tools(tool_ids, agent_id)
@@ -94,20 +112,21 @@ def _create_agent(
             secret_resolver=secrets.get_secret_async,
         ),
     ]
-    return create_orchestrator_agent(
-        model_router=model_router,
-        settings=settings,
-        extension_tools=loader.get_all_tools(),
-        delegation_tools=make_delegation_tools(
-            registry=registry,
-            factory=factory,
-            get_available_tool_ids=loader.get_available_tool_ids,
-            catalog=catalog,
-            get_tool_catalog=loader.get_tool_catalog,
-        ),
-        capabilities_summary=loader.get_capabilities_summary(),
-        channel_tools=channel_tools,
+    delegation_tools = make_delegation_tools(
+        registry=registry,
+        factory=factory,
+        get_available_tool_ids=loader.get_available_tool_ids,
+        catalog=catalog,
+        get_tool_catalog=loader.get_tool_catalog,
     )
+    tools: list[Any] = []
+    tools.extend(loader.get_all_tools())
+    tools.extend(delegation_tools)
+    tools.extend(channel_tools)
+
+    inner.tools = tools
+    inner.model_settings = ModelSettings(parallel_tool_calls=True)
+    return inner
 
 
 def _configure_thread(
@@ -152,8 +171,10 @@ async def main_async() -> None:
     loader.set_event_bus(event_bus)
     _configure_thread(router, settings, data_dir, event_bus)
     await _wire_extensions(loader, router, event_bus)
-    agent = _create_agent(loader, router, event_bus, settings, model_router, registry)
-    router.set_agent(agent)
+    agent = _resolve_default_agent(
+        loader, router, event_bus, settings, model_router, registry
+    )
+    router.set_agent(agent, agent_id=settings.default_agent)
     _configure_agent_mcp_and_context(loader, router, agent)
     await event_bus.start()
     await loader.start_all()

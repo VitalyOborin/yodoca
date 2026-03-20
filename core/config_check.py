@@ -29,14 +29,25 @@ def _check_default_agent(
     providers: dict[str, Any],
     provider_has_key: Callable[[dict[str, Any]], bool],
 ) -> tuple[bool, str]:
-    default_agent = (settings_dict.get("agents") or {}).get("default")
-    if not default_agent or not isinstance(default_agent, dict):
-        return False, "agents.default not configured"
-    default_provider = default_agent.get("provider")
+    agent_id = (settings_dict.get("default_agent") or "").strip()
+    if not agent_id:
+        return False, "default_agent not configured in settings"
+
+    agents = settings_dict.get("agents") or {}
+    agent_cfg = agents.get(agent_id) or agents.get("default")
+    if not agent_cfg or not isinstance(agent_cfg, dict):
+        return (
+            False,
+            f"No model config for default_agent {agent_id!r} (agents.{agent_id} or agents.default)",
+        )
+    default_provider = agent_cfg.get("provider")
     if not default_provider:
-        return False, "agents.default.provider not set"
+        return False, f"agents.{agent_id}.provider not set"
     if default_provider not in providers:
-        return False, f"agents.default references unknown provider {default_provider!r}"
+        return (
+            False,
+            f"agents.{agent_id} references unknown provider {default_provider!r}",
+        )
     default_provider_cfg = providers.get(default_provider)
     if not isinstance(default_provider_cfg, dict) or not provider_has_key(
         default_provider_cfg

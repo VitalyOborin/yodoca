@@ -122,3 +122,62 @@ def test_is_configured_unknown_provider_reference(tmp_path: Path) -> None:
     ok, reason = is_configured(project_root=tmp_path)
     assert ok is False
     assert "unknown provider" in reason or "nonexistent" in reason
+
+
+def test_is_configured_empty_default_agent(tmp_path: Path) -> None:
+    """When default_agent is explicitly empty, returns False."""
+    (tmp_path / "config").mkdir()
+    settings = {
+        "default_agent": "",
+        "providers": {
+            "openai": {"type": "openai_compatible", "api_key_literal": "sk-test"},
+        },
+        "agents": {"default": {"provider": "openai", "model": "gpt-5"}},
+    }
+    (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
+    ok, reason = is_configured(project_root=tmp_path)
+    assert ok is False
+    assert "default_agent not configured" in reason
+
+
+def test_is_configured_agent_id_config_takes_priority(tmp_path: Path) -> None:
+    """When agents.<default_agent> exists, it is used instead of agents.default."""
+    (tmp_path / "config").mkdir()
+    settings = {
+        "default_agent": "orchestrator_agent",
+        "providers": {
+            "openai": {"type": "openai_compatible", "api_key_literal": "sk-test"},
+            "local": {
+                "type": "openai_compatible",
+                "api_key_literal": "lm-studio",
+            },
+        },
+        "agents": {
+            "default": {"provider": "openai", "model": "gpt-5"},
+            "orchestrator_agent": {"provider": "local", "model": "local-model"},
+        },
+    }
+    (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
+    ok, reason = is_configured(project_root=tmp_path)
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_is_configured_agent_id_unknown_provider(tmp_path: Path) -> None:
+    """When agents.<default_agent> references unknown provider, fails even if agents.default is valid."""
+    (tmp_path / "config").mkdir()
+    settings = {
+        "default_agent": "orchestrator_agent",
+        "providers": {
+            "openai": {"type": "openai_compatible", "api_key_literal": "sk-test"},
+        },
+        "agents": {
+            "default": {"provider": "openai", "model": "gpt-5"},
+            "orchestrator_agent": {"provider": "missing", "model": "x"},
+        },
+    }
+    (tmp_path / "config" / "settings.yaml").write_text(yaml.safe_dump(settings))
+    ok, reason = is_configured(project_root=tmp_path)
+    assert ok is False
+    assert "orchestrator_agent" in reason
+    assert "unknown provider" in reason

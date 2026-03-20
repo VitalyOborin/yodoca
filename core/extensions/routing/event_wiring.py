@@ -86,7 +86,7 @@ class EventWiringManager:
             )
             try:
                 turn_context = TurnContext(
-                    agent_id="orchestrator",
+                    agent_id=router.agent_id,
                     channel_id=channel_id,
                 )
                 response = await router.invoke_agent_background(

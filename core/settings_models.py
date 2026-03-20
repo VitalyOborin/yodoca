@@ -67,6 +67,9 @@ def _default_agents() -> dict[str, AgentEntry]:
 
 
 class AppSettings(BaseModel):
+    """Top-level application settings (config/settings.yaml)."""
+
+    default_agent: str = "orchestrator_agent"
     supervisor: SupervisorSettings = Field(default_factory=SupervisorSettings)
     agents: dict[str, AgentEntry] = Field(default_factory=_default_agents)
     providers: dict[str, ProviderEntry] = Field(default_factory=dict)

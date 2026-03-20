@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 FINAL_MARKER = "<<TASK_COMPLETE>>"
 
 
+def _is_router_agent_task(agent_id: str, default_router_agent_id: str) -> bool:
+    """True if the task targets the primary MessageRouter agent (legacy or configured id)."""
+    return agent_id == default_router_agent_id or agent_id == "orchestrator"
+
+
 @dataclass
 class StepOutcome:
     """Normalized result of one step invocation (agent or orchestrator)."""
@@ -388,6 +393,7 @@ async def execute_task(
     db: Any,
     ctx: Any,
     task: TaskRecord,
+    default_router_agent_id: str,
     get_agent: Callable[[str], AgentProvider | None],
     worker_id: str,
     lease_ttl: float,
@@ -404,7 +410,7 @@ async def execute_task(
             )
 
     try:
-        if task.agent_id == "orchestrator":
+        if _is_router_agent_task(task.agent_id, default_router_agent_id):
             result = await run_orchestrator_loop(
                 state, task, db, ctx, worker_id, lease_ttl
             )

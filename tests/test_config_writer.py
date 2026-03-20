@@ -46,10 +46,9 @@ def test_write_config_creates_settings_and_env(tmp_path: Path) -> None:
     assert data["agents"]["default"]["provider"] == "openai"
     assert data["agents"]["default"]["model"] == "gpt-4o-mini"
     assert data["agents"]["default"]["instructions"] == "sandbox/prompts/default.jinja2"
-    assert (
-        data["agents"]["orchestrator"]["instructions"]
-        == "sandbox/prompts/orchestrator.jinja2"
-    )
+    assert data.get("default_agent") == "orchestrator_agent"
+    assert data["agents"]["orchestrator_agent"]["provider"] == "openai"
+    assert data["agents"]["orchestrator_agent"]["model"] == "gpt-4o-mini"
     assert "embedding" not in data["agents"]
     assert data["extensions"]["embedding"]["provider"] == "openai"
     assert data["extensions"]["embedding"]["default_model"] == "text-embedding-3-small"

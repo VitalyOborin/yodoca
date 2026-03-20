@@ -42,6 +42,11 @@ class DeclarativeAgentAdapter:
     def health_check(self) -> bool:
         return self._agent is not None
 
+    @property
+    def agent(self) -> Agent | None:
+        """Underlying SDK Agent after initialize(); None before init."""
+        return self._agent
+
     def get_agent_descriptor(self) -> AgentDescriptor:
         agent_cfg = self._manifest.agent
         if agent_cfg is None:

@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.agents import lifecycle, orchestrator
-from core.extensions.contract import ExtensionState
+from core.agents import lifecycle
+from core.extensions.contract import AgentProvider, ExtensionState
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.routing.scheduler_manager import SchedulerManager
 from core.runner import (
@@ -21,7 +21,7 @@ from core.runner import (
     _build_loader_router,
     _configure_agent_mcp_and_context,
     _configure_thread,
-    _create_agent,
+    _resolve_default_agent,
     _wire_extensions,
     main,
     main_async,
@@ -52,63 +52,92 @@ def _restore_root_logger() -> None:
         root.addHandler(h)
 
 
-def test_resolve_instructions_returns_literal_when_path_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(orchestrator, "_PROJECT_ROOT", tmp_path)
-    assert orchestrator._resolve_instructions("  literal text  ") == "literal text"
-
-
-def test_resolve_instructions_reads_plain_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    prompt = tmp_path / "plain.txt"
-    prompt.write_text("  from-file  \n", encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "_PROJECT_ROOT", tmp_path)
-    assert orchestrator._resolve_instructions("plain.txt") == "from-file"
-
-
-def test_resolve_instructions_renders_jinja_template(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    prompt = tmp_path / "prompt.jinja2"
-    prompt.write_text("Capabilities: {{ capabilities }}", encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "_PROJECT_ROOT", tmp_path)
-    rendered = orchestrator._resolve_instructions(
-        "prompt.jinja2", {"capabilities": "memory, web"}
-    )
-    assert rendered == "Capabilities: memory, web"
-
-
-def test_create_orchestrator_agent_merges_tools(
+def test_resolve_default_agent_merges_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_agent_ctor = MagicMock(return_value={"ok": True})
-    monkeypatch.setattr(orchestrator, "Agent", fake_agent_ctor)
-    monkeypatch.setattr(
-        orchestrator,
-        "_resolve_instructions",
-        lambda *_args, **_kwargs: "resolved",
-    )
+    inner = MagicMock()
+    inner.tools = []
+    ext = MagicMock(spec=AgentProvider)
+    ext.agent = inner
+    loader = MagicMock()
+    loader.get_extensions.return_value = {"orchestrator_agent": ext}
+    loader.get_all_tools.return_value = ["ext-tool"]
+    loader.resolve_tools = MagicMock(return_value=[])
+    loader.get_available_tool_ids = MagicMock(return_value=["id1"])
+    loader.get_tool_catalog = MagicMock()
+    router = MagicMock()
+    event_bus = MagicMock()
     model_router = MagicMock()
-    model_router.get_model.return_value = "model-x"
+    registry = MagicMock()
+    agent_factory_cls = MagicMock(return_value="factory")
+    delegation_tools = ["delegate-tool"]
 
-    result = orchestrator.create_orchestrator_agent(
-        model_router=model_router,
-        settings=AppSettings(),
-        extension_tools=["ext1"],
-        delegation_tools=["del1"],
-        channel_tools=["chan1"],
-        capabilities_summary="caps",
+    monkeypatch.setattr("core.runner.AgentFactory", agent_factory_cls)
+    monkeypatch.setattr(
+        "core.runner.make_channel_tools",
+        lambda _router: ["channel-tool"],
+    )
+    monkeypatch.setattr(
+        "core.runner.make_secure_input_tool",
+        lambda _eb: "secure-tool",
+    )
+    monkeypatch.setattr(
+        "core.runner.make_configure_extension_tool",
+        lambda _ext, **_kw: "configure-extension-tool",
+    )
+    monkeypatch.setattr(
+        "core.runner.make_delegation_tools",
+        lambda *_a, **_k: delegation_tools,
+    )
+    from agents import ModelSettings
+
+    result = _resolve_default_agent(
+        loader,
+        router,
+        event_bus,
+        AppSettings(default_agent="orchestrator_agent", models={}),
+        model_router,
+        registry,
     )
 
-    assert result == {"ok": True}
-    model_router.get_model.assert_called_once_with("orchestrator")
-    call_kwargs = fake_agent_ctor.call_args.kwargs
-    assert call_kwargs["instructions"] == "resolved"
-    assert call_kwargs["model"] == "model-x"
-    assert call_kwargs["tools"] == ["ext1", "del1", "chan1"]
-    assert call_kwargs["name"] == "Orchestrator"
+    assert result is inner
+    assert inner.tools == [
+        "ext-tool",
+        "delegate-tool",
+        "channel-tool",
+        "secure-tool",
+        "configure-extension-tool",
+    ]
+    assert isinstance(inner.model_settings, ModelSettings)
+    agent_factory_cls.assert_called_once()
+
+
+def test_resolve_default_agent_requires_configuration() -> None:
+    loader = MagicMock()
+    loader.get_extensions.return_value = {}
+    with pytest.raises(RuntimeError, match="default_agent not configured"):
+        _resolve_default_agent(
+            loader,
+            MagicMock(),
+            MagicMock(),
+            AppSettings(default_agent=""),
+            MagicMock(),
+            MagicMock(),
+        )
+
+
+def test_resolve_default_agent_missing_extension() -> None:
+    loader = MagicMock()
+    loader.get_extensions.return_value = {}
+    with pytest.raises(RuntimeError, match="not found in loaded extensions"):
+        _resolve_default_agent(
+            loader,
+            MagicMock(),
+            MagicMock(),
+            AppSettings(default_agent="orchestrator_agent", models={}),
+            MagicMock(),
+            MagicMock(),
+        )
 
 
 def test_setup_logging_file_handler_only(
@@ -690,65 +719,6 @@ async def test_wire_extensions_calls_loader_pipeline() -> None:
     loader.wire_event_subscriptions.assert_called_once_with(event_bus)
 
 
-def test_create_agent_builds_orchestrator_with_combined_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    loader = MagicMock()
-    loader.resolve_tools = MagicMock(return_value=["resolved"])
-    loader.get_all_tools.return_value = ["ext-tool"]
-    loader.get_available_tool_ids = MagicMock(return_value=["id1"])
-    loader.get_capabilities_summary.return_value = "caps"
-    router = MagicMock()
-    event_bus = MagicMock()
-    model_router = MagicMock()
-    registry = MagicMock()
-    agent_factory_cls = MagicMock(return_value="factory")
-    delegation_tools = ["delegate-tool"]
-    orchestrator_agent = MagicMock()
-
-    monkeypatch.setattr("core.agents.factory.AgentFactory", agent_factory_cls)
-    monkeypatch.setattr(
-        "core.runner.make_channel_tools",
-        lambda _router: ["channel-tool"],
-    )
-    monkeypatch.setattr(
-        "core.runner.make_secure_input_tool",
-        lambda _eb: "secure-tool",
-    )
-    monkeypatch.setattr(
-        "core.runner.make_configure_extension_tool",
-        lambda _ext, **_kw: "configure-extension-tool",
-    )
-    monkeypatch.setattr(
-        "core.runner.make_delegation_tools",
-        lambda *_a, **_k: delegation_tools,
-    )
-    monkeypatch.setattr(
-        "core.runner.create_orchestrator_agent",
-        lambda **kwargs: kwargs,
-    )
-
-    result = _create_agent(
-        loader,
-        router,
-        event_bus,
-        AppSettings(models={}),
-        model_router,
-        registry,
-    )
-
-    assert result["extension_tools"] == ["ext-tool"]
-    assert result["delegation_tools"] == delegation_tools
-    assert result["channel_tools"] == [
-        "channel-tool",
-        "secure-tool",
-        "configure-extension-tool",
-    ]
-    assert result["capabilities_summary"] == "caps"
-    agent_factory_cls.assert_called_once()
-    assert orchestrator_agent is not None
-
-
 @pytest.mark.asyncio
 async def test_main_async_runs_bootstrap_and_shutdown(
     monkeypatch: pytest.MonkeyPatch,
@@ -789,7 +759,7 @@ async def test_main_async_runs_bootstrap_and_shutdown(
     monkeypatch.setattr("core.runner._build_event_bus", lambda _s: event_bus)
     monkeypatch.setattr("core.runner._configure_thread", lambda *_a, **_k: None)
     monkeypatch.setattr("core.runner._wire_extensions", AsyncMock())
-    monkeypatch.setattr("core.runner._create_agent", lambda *_a, **_k: agent)
+    monkeypatch.setattr("core.runner._resolve_default_agent", lambda *_a, **_k: agent)
     monkeypatch.setattr(
         "core.runner._configure_agent_mcp_and_context",
         lambda *_a, **_k: None,
@@ -804,7 +774,7 @@ async def test_main_async_runs_bootstrap_and_shutdown(
     loader.set_model_router.assert_called_once_with(model_router)
     loader.set_agent_registry.assert_called_once_with(registry)
     loader.set_event_bus.assert_called_once_with(event_bus)
-    router.set_agent.assert_called_once_with(agent)
+    router.set_agent.assert_called_once_with(agent, agent_id=settings.default_agent)
     event_bus.recover.assert_awaited_once()
     event_bus.start.assert_awaited_once()
     loader.start_all.assert_awaited_once()

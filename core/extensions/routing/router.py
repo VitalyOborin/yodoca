@@ -72,6 +72,11 @@ class MessageRouter:
     def set_agent(self, agent: Any, agent_id: str = "orchestrator") -> None:
         self._invoker.set_agent(agent, agent_id=agent_id)
 
+    @property
+    def agent_id(self) -> str:
+        """Current primary agent id (set via set_agent)."""
+        return self._invoker.agent_id
+
     def register_channel(self, ext_id: str, channel: ChannelProvider) -> None:
         self._channels[ext_id] = channel
 

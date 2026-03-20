@@ -89,6 +89,7 @@ class ExtensionContextBuilder:
             event_bus=self._event_bus,
             agent_registry=self._agent_registry,
             restart_file_path=self._restart_file_path,
+            default_agent_id=self._settings.default_agent,
         )
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:

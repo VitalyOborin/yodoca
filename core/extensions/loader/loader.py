@@ -236,7 +236,7 @@ class Loader:
             return
         default_provider = self._model_router.get_default_provider()
         for manifest in self._manifests:
-            if manifest.agent and default_provider:
+            if manifest.agent and default_provider and manifest.agent.model:
                 agent_id = manifest.agent_id or manifest.id
                 if manifest.agent_config and agent_id in manifest.agent_config:
                     continue
@@ -419,7 +419,8 @@ class Loader:
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
             if isinstance(ext, AgentProvider) and manifest:
-                self._register_static_agent(ext_id, ext, manifest)
+                if ext_id != self._settings.default_agent:
+                    self._register_static_agent(ext_id, ext, manifest)
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider) and manifest:
@@ -569,6 +570,8 @@ class Loader:
             if ext_id not in self._extensions:
                 continue
             if not manifest.description:
+                continue
+            if ext_id == self._settings.default_agent:
                 continue
             is_agent = (
                 self._agent_registry is not None

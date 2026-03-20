@@ -1,0 +1,12 @@
+id: orchestrator_agent
+name: Orchestrator
+version: "1.0.0"
+description: |
+  Main AI assistant that handles user queries, delegates tasks, and orchestrates multi-step workflows.
+agent:
+  integration_mode: tool
+  uses_tools: []
+  limits:
+    max_turns: 10
+depends_on: []
+enabled: true

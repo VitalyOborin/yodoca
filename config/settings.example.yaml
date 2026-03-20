@@ -1,12 +1,9 @@
+default_agent: orchestrator_agent
 agents:
   default:
     instructions: sandbox/prompts/default.jinja2
     model: gpt-5-mini
     provider: openai
-  orchestrator:
-    instructions: sandbox/prompts/orchestrator.jinja2
-    model: qwen/qwen3.5-9b
-    provider: lm_studio
 event_bus:
   batch_size: 3
   db_path: sandbox/data/event_journal.db

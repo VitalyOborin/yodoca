@@ -224,7 +224,10 @@ class TaskEngineExtension:
                 task_id="", status="error", message="Extension not initialized"
             )
 
-        if agent_id != "orchestrator":
+        router_id = self._ctx.default_agent_id
+        if agent_id == "orchestrator":
+            agent_id = router_id
+        if agent_id != router_id:
             pair = self._registry.get(agent_id) if self._registry else None
             if not pair:
                 available = (
@@ -232,7 +235,7 @@ class TaskEngineExtension:
                     if self._registry
                     else []
                 )
-                avail_str = ", ".join(["orchestrator"] + available)
+                avail_str = ", ".join([router_id, "orchestrator"] + available)
                 return SubmitTaskResult(
                     task_id="",
                     status="error",
@@ -385,12 +388,14 @@ class TaskEngineExtension:
         max_steps = int(self._ctx.get_config("default_max_steps", 20))
         default_max = max_steps
 
+        router_id = self._ctx.default_agent_id
         for step in steps:
-            if step.agent_id != "orchestrator" and self._registry:
-                pair = self._registry.get(step.agent_id)
+            eff_agent = router_id if step.agent_id == "orchestrator" else step.agent_id
+            if eff_agent != router_id and self._registry:
+                pair = self._registry.get(eff_agent)
                 if not pair:
                     available = [r.id for r in self._registry.list_agents()]
-                    avail_str = ", ".join(["orchestrator"] + available)
+                    avail_str = ", ".join([router_id, "orchestrator"] + available)
                     return SubmitChainResult(
                         chain_id="",
                         tasks=[],
@@ -407,6 +412,9 @@ class TaskEngineExtension:
             task_id = str(uuid.uuid4())
             run_id = str(uuid.uuid4())
             status = "pending" if prev_task_id is None else "blocked"
+            step_agent_id = (
+                router_id if step.agent_id == "orchestrator" else step.agent_id
+            )
             payload = {
                 "goal": step.goal,
                 "max_steps": default_max,
@@ -424,7 +432,7 @@ class TaskEngineExtension:
                 (
                     task_id,
                     run_id,
-                    step.agent_id,
+                    step_agent_id,
                     status,
                     priority,
                     json_dumps_unicode(payload),
@@ -439,7 +447,7 @@ class TaskEngineExtension:
                 ChainTaskInfo(
                     task_id=task_id,
                     goal=step.goal,
-                    agent_id=step.agent_id,
+                    agent_id=step_agent_id,
                     chain_order=i,
                     status=status,
                 )
@@ -448,7 +456,7 @@ class TaskEngineExtension:
                 "task.submitted",
                 {
                     "task_id": task_id,
-                    "agent_id": step.agent_id,
+                    "agent_id": step_agent_id,
                     "goal": step.goal,
                     "priority": priority,
                 },
@@ -519,6 +527,7 @@ class TaskEngineExtension:
                         self._db,
                         self._ctx,
                         task,
+                        self._ctx.default_agent_id,
                         self._get_agent_provider,
                         self._worker_id,
                         self._lease_ttl,

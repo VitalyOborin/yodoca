@@ -45,6 +45,7 @@ class ExtensionContext:
         event_bus: "EventBus | None" = None,
         agent_registry: "AgentRegistry | None" = None,
         restart_file_path: Path | None = None,
+        default_agent_id: str = "orchestrator_agent",
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -63,6 +64,7 @@ class ExtensionContext:
         self._event_bus = event_bus
         self._agent_registry = agent_registry
         self._restart_file_path = restart_file_path
+        self.default_agent_id: str = default_agent_id
         self.on_user_message = self._router.handle_user_message
 
     @property

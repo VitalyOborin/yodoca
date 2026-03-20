@@ -59,7 +59,7 @@ class AgentManifestConfig(BaseModel):
     """Agent section in manifest.yaml."""
 
     integration_mode: Literal["tool", "handoff"] = "tool"
-    model: str
+    model: str = ""
     instructions: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     uses_tools: list[str] = Field(default_factory=list)

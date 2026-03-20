@@ -41,12 +41,12 @@ def write_config(
         base["agents"]["default"].setdefault(
             "instructions", "sandbox/prompts/default.jinja2"
         )
+    base.setdefault("default_agent", "orchestrator_agent")
     default_cfg = base["agents"].get("default")
     if isinstance(default_cfg, dict):
-        base["agents"]["orchestrator"] = {
+        base["agents"]["orchestrator_agent"] = {
             k: v
             for k, v in {
-                "instructions": "sandbox/prompts/orchestrator.jinja2",
                 "model": default_cfg.get("model"),
                 "provider": default_cfg.get("provider"),
             }.items()
