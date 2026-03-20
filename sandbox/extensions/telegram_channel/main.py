@@ -1,22 +1,21 @@
 """Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider."""
 
 import asyncio
-import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import Message
 from aiogram.utils.token import TokenValidationError, validate_token
-from formatting import escape_html, md_to_tg_html, split_for_telegram
+
+from sandbox.extensions.telegram_channel.formatting import (
+    escape_html,
+    md_to_tg_html,
+    split_for_telegram,
+)
 
 if TYPE_CHECKING:
     from core.extensions.context import ExtensionContext

@@ -4,7 +4,8 @@ import asyncio
 import logging
 
 from ddgs import DDGS
-from interfaces import SearchResult, domain_matches
+
+from sandbox.extensions.web_search.interfaces import SearchResult, domain_matches
 
 logger = logging.getLogger(__name__)
 

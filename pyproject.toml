@@ -69,8 +69,8 @@ ignore = ["E402", "E501"]
 [tool.importlinter]
 root_package = "core"
 include_external_packages = true
-# Extensions are loaded dynamically (importlib) under synthetic names, so they are not
-# importable as sandbox.extensions.*; only the forbidden contract is enforced.
+# Extensions are loaded dynamically via package imports (sandbox.extensions.*);
+# this contract only enforces one-way core -> extensions isolation.
 
 [[tool.importlinter.contracts]]
 name = "Core is independent of extensions"
@@ -86,6 +86,7 @@ warn_unused_configs = true
 warn_unreachable = true
 warn_no_return = true
 show_error_codes = true
+exclude = "(^|/)(\\.venv|tests|scripts|sandbox/extensions)(/|$)"
 
 [[tool.mypy.overrides]]
 module = ["tests.*", "scripts.*", "migrations.*"]

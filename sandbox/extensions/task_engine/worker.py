@@ -11,10 +11,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from models import StepRecord, TaskRecord
-from state import TaskState, json_dumps_unicode
-
 from core.extensions.contract import AgentInvocationContext, AgentProvider
+from sandbox.extensions.task_engine.models import StepRecord, TaskRecord
+from sandbox.extensions.task_engine.state import TaskState, json_dumps_unicode
 
 logger = logging.getLogger(__name__)
 

@@ -9,9 +9,9 @@ from typing import Any
 
 from agents import function_tool
 from pydantic import BaseModel, Field
-from retrieval import _resolve_entity, parse_time_expression
 
 from core.utils.formatting import format_event_time as _format_event_time
+from sandbox.extensions.memory.retrieval import _resolve_entity, parse_time_expression
 
 logger = logging.getLogger(__name__)
 

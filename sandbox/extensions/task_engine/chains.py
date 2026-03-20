@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from state import json_dumps_unicode
+from sandbox.extensions.task_engine.state import json_dumps_unicode
 
 logger = logging.getLogger(__name__)
 

@@ -424,7 +424,9 @@ class TestDelegationToolsCreateAgent:
         assert factory.specs == []
 
     @pytest.mark.asyncio
-    async def test_create_agent_explicit_empty_tools_creates_no_tool_agent(self) -> None:
+    async def test_create_agent_explicit_empty_tools_creates_no_tool_agent(
+        self,
+    ) -> None:
         import json
 
         from agents.tool_context import ToolContext

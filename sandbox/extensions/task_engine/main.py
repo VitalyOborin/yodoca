@@ -2,21 +2,19 @@
 
 import asyncio
 import logging
-import sys
 import time
 import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
-
-from chains import get_chain_tasks, unblock_successors
-from cleanup import cleanup_old_tasks
-from hitl import request_human_review as hitl_request_human_review
-from hitl import respond_to_review as hitl_respond_to_review
-from models import (
+from sandbox.extensions.task_engine.chains import get_chain_tasks, unblock_successors
+from sandbox.extensions.task_engine.cleanup import cleanup_old_tasks
+from sandbox.extensions.task_engine.hitl import (
+    request_human_review as hitl_request_human_review,
+)
+from sandbox.extensions.task_engine.hitl import (
+    respond_to_review as hitl_respond_to_review,
+)
+from sandbox.extensions.task_engine.models import (
     ActiveTasksResult,
     CancelTaskResult,
     ChainStatusResult,
@@ -26,20 +24,26 @@ from models import (
     SubmitTaskResult,
     TaskStatusResult,
 )
-from schema import TaskEngineDb
-from state import json_dumps_unicode
-from subtasks import (
+from sandbox.extensions.task_engine.schema import TaskEngineDb
+from sandbox.extensions.task_engine.state import json_dumps_unicode
+from sandbox.extensions.task_engine.subtasks import (
     MAX_SUBTASK_DEPTH,
     get_subtask_depth,
     try_resume_parent,
     update_parent_checkpoint,
 )
-from task_engine_tools import build_tools
-from task_queries import cancel_task as query_cancel_task
-from task_queries import get_task_status as query_get_task_status
-from task_queries import list_active_tasks as query_list_active_tasks
-from task_queries import list_tasks as query_list_tasks
-from worker import (
+from sandbox.extensions.task_engine.task_engine_tools import build_tools
+from sandbox.extensions.task_engine.task_queries import (
+    cancel_task as query_cancel_task,
+)
+from sandbox.extensions.task_engine.task_queries import (
+    get_task_status as query_get_task_status,
+)
+from sandbox.extensions.task_engine.task_queries import (
+    list_active_tasks as query_list_active_tasks,
+)
+from sandbox.extensions.task_engine.task_queries import list_tasks as query_list_tasks
+from sandbox.extensions.task_engine.worker import (
     claim_next_task,
     execute_task,
     recover_stale_tasks,

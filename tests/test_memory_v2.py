@@ -1,32 +1,16 @@
 """Tests for Memory v2 extension."""
 
 import asyncio
-import importlib.util
-import sys
 import time
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Add memory extension to path
-_memory_ext = (
-    Path(__file__).resolve().parent.parent / "sandbox" / "extensions" / "memory"
-)
-sys.path.insert(0, str(_memory_ext))
-
-# Load MemoryExtension from memory's main.py explicitly (avoid sys.modules["main"] from other extensions)
-_memory_main_spec = importlib.util.spec_from_file_location(
-    "memory_main", _memory_ext / "main.py"
-)
-assert _memory_main_spec and _memory_main_spec.loader
-_memory_main = importlib.util.module_from_spec(_memory_main_spec)
-_memory_main_spec.loader.exec_module(_memory_main)
-MemoryExtension = _memory_main.MemoryExtension
-
-from agent_tools import build_write_path_tools
-from decay import DecayService
-from retrieval import (
+from core.utils.formatting import format_event_time as _format_event_time
+from sandbox.extensions.memory.agent_tools import build_write_path_tools
+from sandbox.extensions.memory.decay import DecayService
+from sandbox.extensions.memory.main import MemoryExtension
+from sandbox.extensions.memory.retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
     MemoryRetrieval,
@@ -34,10 +18,8 @@ from retrieval import (
     get_adaptive_params,
     parse_time_expression,
 )
-from storage import MemoryStorage
-from tools import build_tools
-
-from core.utils.formatting import format_event_time as _format_event_time
+from sandbox.extensions.memory.storage import MemoryStorage
+from sandbox.extensions.memory.tools import build_tools
 
 
 @pytest.fixture

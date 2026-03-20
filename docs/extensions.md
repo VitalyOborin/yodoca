@@ -506,9 +506,18 @@ Has `entrypoint` and custom Python class implementing `AgentProvider` for full c
 
 ```
 sandbox/extensions/my_extension/
+├── __init__.py      # required (regular package)
 ├── manifest.yaml
-└── main.py          # if entrypoint is main:MyExtension
+├── main.py          # required if entrypoint is main:MyExtension
+├── tools.py         # optional
+├── prompt.jinja2    # optional
+└── README.md        # optional
 ```
+
+Import rules:
+
+- Use package imports (for example `from sandbox.extensions.my_extension.tools import ...`).
+- Do not mutate `sys.path` in extension runtime code.
 
 ### 2. Minimal manifest.yaml
 

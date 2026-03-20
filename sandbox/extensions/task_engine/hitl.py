@@ -5,8 +5,8 @@ import logging
 import time
 from typing import Any
 
-from models import SubmitTaskResult
-from state import TaskState
+from sandbox.extensions.task_engine.models import SubmitTaskResult
+from sandbox.extensions.task_engine.state import TaskState
 
 logger = logging.getLogger(__name__)
 

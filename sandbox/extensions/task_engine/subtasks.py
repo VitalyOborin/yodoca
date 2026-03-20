@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from state import TaskState
+from sandbox.extensions.task_engine.state import TaskState
 
 logger = logging.getLogger(__name__)
 

@@ -1,23 +1,17 @@
 """Inbox extension: unified storage for incoming data from external systems."""
 
-import sys
-from pathlib import Path
 from typing import Any
 
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
+from agents import function_tool
 
-from agents import function_tool  # noqa: E402
-
-from sandbox.extensions.inbox.models import (  # noqa: E402
+from sandbox.extensions.inbox.models import (
     InboxItem,
     InboxItemInput,
     InboxListResult,
     InboxReadResult,
     InboxWriteResult,
 )
-from sandbox.extensions.inbox.repository import InboxRepository  # noqa: E402
+from sandbox.extensions.inbox.repository import InboxRepository
 
 
 class InboxExtension:

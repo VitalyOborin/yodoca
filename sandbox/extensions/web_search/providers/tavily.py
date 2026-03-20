@@ -2,8 +2,9 @@
 
 import logging
 
-from interfaces import ReadResult, SearchResult
 from tavily import AsyncTavilyClient
+
+from sandbox.extensions.web_search.interfaces import ReadResult, SearchResult
 
 logger = logging.getLogger(__name__)
 

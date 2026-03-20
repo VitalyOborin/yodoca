@@ -24,26 +24,23 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "openai": [
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.4-nano"
-        "gpt-5.3",
+        "gpt-5.4-nanogpt-5.3",
         "gpt-5.3-codex",
-        "gpt-5.2", 
+        "gpt-5.2",
         "gpt-5.2-pro",
         "gpt-5.2-codex",
-        "gpt-5.1", 
+        "gpt-5.1",
         "gpt-5.1-codex",
         "gpt-5.1-codex-mini",
         "gpt-5.1-codex-max",
-        "gpt-5"
-        "gpt-5-mini", 
+        "gpt-5gpt-5-mini",
         "gpt-5-nano",
         "gpt-5-codex",
         "gpt-5-pro",
         "gpt-4.1",
-        "gpt-4.1-mini"
-        "gpt-4.1-nano",
+        "gpt-4.1-minigpt-4.1-nano",
         "gpt-4o",
-        "gpt-4o-mini"
+        "gpt-4o-mini",
     ],
     "anthropic": [
         "claude-haiku-4-5-20251001",

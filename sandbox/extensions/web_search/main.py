@@ -4,28 +4,22 @@ import asyncio
 import ipaddress
 import logging
 import socket
-import sys
-from pathlib import Path
 from typing import Any
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
-
 from urllib.parse import urlparse
 
 from agents import function_tool
-from interfaces import (
+
+from sandbox.extensions.web_search.interfaces import (
     OpenPageToolResult,
     PageResult,
     SearchResultItem,
     WebSearchToolResult,
 )
-from providers.duckduckgo import DuckDuckGoSearchProvider
-from providers.jina import JinaReadProvider
-from providers.perplexity import PerplexitySearchProvider
-from providers.searxng import SearXngSearchProvider
-from providers.tavily import TavilyProvider
+from sandbox.extensions.web_search.providers.duckduckgo import DuckDuckGoSearchProvider
+from sandbox.extensions.web_search.providers.jina import JinaReadProvider
+from sandbox.extensions.web_search.providers.perplexity import PerplexitySearchProvider
+from sandbox.extensions.web_search.providers.searxng import SearXngSearchProvider
+from sandbox.extensions.web_search.providers.tavily import TavilyProvider
 
 logger = logging.getLogger(__name__)
 

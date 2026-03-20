@@ -1,4 +1,5 @@
 """Delegation tools for Orchestrator: list_agents, delegate_task, create_agent."""
+
 from collections.abc import Callable
 from typing import Any
 

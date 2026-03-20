@@ -2,32 +2,26 @@
 
 import asyncio
 import logging
-import sys
 import time
 import uuid
-from pathlib import Path
+
+from agents import ModelSettings
 
 from core.events.topics import SystemTopics
 from core.extensions.contract import TurnContext
 from core.llm.capabilities import EmbeddingCapability
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
-
-from agent import create_memory_agent
-from agent_tools import build_write_path_tools
-from agents import ModelSettings
-from decay import DecayService
-from retrieval import (
+from sandbox.extensions.memory.agent import create_memory_agent
+from sandbox.extensions.memory.agent_tools import build_write_path_tools
+from sandbox.extensions.memory.decay import DecayService
+from sandbox.extensions.memory.retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
     MemoryRetrieval,
     classify_query_complexity,
     get_adaptive_params,
 )
-from storage import MemoryStorage
-from tools import build_tools
+from sandbox.extensions.memory.storage import MemoryStorage
+from sandbox.extensions.memory.tools import build_tools
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +221,7 @@ class MemoryExtension:
                 self._write_agent = create_memory_agent(
                     model=model,
                     tools=write_tools,
-                    extension_dir=_ext_dir,
+                    extension_dir=context.extension_dir,
                     model_settings=ModelSettings(parallel_tool_calls=True),
                 )
                 logger.info("Write-path agent initialized (model=%s)", model)
