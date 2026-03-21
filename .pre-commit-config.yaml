@@ -2,23 +2,9 @@
 repos:
   - repo: local
     hooks:
-      - id: extension-boundaries
-        name: Extension boundary check
-        entry: uv run python scripts/check_extension_boundaries.py
+      - id: ci-all-checks
+        name: CI all checks (blocking)
+        entry: uv run python scripts/run_ci_checks.py
         language: system
         pass_filenames: false
-        files: ^sandbox/extensions/
-
-      - id: extension-context-boundary
-        name: Extension context boundary check
-        entry: uv run python scripts/check_extension_context_boundary.py
-        language: system
-        pass_filenames: false
-        files: ^sandbox/extensions/
-
-      - id: max-loc
-        name: Max LOC check
-        entry: uv run python scripts/check_max_loc.py --allowlist scripts/max_loc_allowlist.txt
-        language: system
-        pass_filenames: false
-        files: \.py$
+        always_run: true

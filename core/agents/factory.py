@@ -14,6 +14,7 @@ from core.extensions.contract import (
     AgentResponse,
 )
 from core.extensions.manifest import AgentLimits
+from core.llm.protocol import ModelRouterProtocol
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,7 @@ class AgentFactory:
 
     def __init__(
         self,
-        model_router: Any,
+        model_router: ModelRouterProtocol,
         tool_resolver: ToolResolver,
         registry: AgentRegistry,
     ) -> None:
@@ -130,9 +131,7 @@ class AgentFactory:
             instructions=spec.instruction,
             model=model_instance,
             tools=tools,
-            model_settings=ModelSettings(
-                parallel_tool_calls=spec.parallel_tool_calls
-            ),
+            model_settings=ModelSettings(parallel_tool_calls=spec.parallel_tool_calls),
         )
         desc = spec.description or spec.instruction[:200]
         if not spec.description and len(spec.instruction) > 200:

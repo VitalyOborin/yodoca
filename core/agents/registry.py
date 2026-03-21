@@ -60,13 +60,21 @@ class AgentRegistry:
         if self._on_unregister:
             self._on_unregister(agent_id)
 
-    def clear(self) -> None:
-        """Remove all agents from the registry. Used by Loader before repopulating.
+    def clear(self, source: Literal["dynamic"] | None = None) -> None:
+        """Remove agents from the registry.
 
-        Calls on_unregister for dynamic agents so external resources (e.g.
-        ModelRouter configs) are cleaned up. Static agents are cleared without
-        the callback because their configs are managed by the Loader separately.
+        ``source=None`` (default): remove all agents. ``on_unregister`` runs only
+        for dynamic agents (ModelRouter cleanup); static entries are dropped
+        without the callback because the Loader manages their configs.
+
+        ``source="dynamic"``: remove only dynamic agents via ``unregister`` (each
+        receives ``on_unregister``).
         """
+        if source == "dynamic":
+            to_remove = [r.id for r in self._records.values() if r.source == "dynamic"]
+            for agent_id in to_remove:
+                self.unregister(agent_id)
+            return
         if self._on_unregister:
             for record in self._records.values():
                 if record.source == "dynamic":

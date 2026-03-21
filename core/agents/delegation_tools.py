@@ -88,6 +88,45 @@ def _normalize_tool_ids(tool_ids: list[str]) -> list[str]:
     return normalized
 
 
+def _validate_tool_ids(
+    tools: list[str] | None,
+    available_tool_ids: list[str],
+) -> CreateAgentResult | list[str]:
+    """Return normalized tool IDs for create_agent, or an error result."""
+    if tools is None:
+        return CreateAgentResult(
+            success=False,
+            agent_id="",
+            error=(
+                "tools is null. Pass explicit extension IDs in tools, "
+                "or pass tools=[] to create an agent without tools."
+            ),
+            tools_requested=[],
+            tools_assigned=[],
+            warnings=[],
+        )
+    requested_tools = _normalize_tool_ids(tools)
+    available_set = set(available_tool_ids)
+    if requested_tools:
+        invalid = [t for t in requested_tools if t not in available_set]
+        if invalid:
+            available = ", ".join(sorted(available_tool_ids))
+            return CreateAgentResult(
+                success=False,
+                agent_id="",
+                error=(
+                    "Unknown or unavailable tool IDs: "
+                    f"{', '.join(invalid)}. "
+                    f"Available: {available}"
+                ),
+                tools_requested=requested_tools,
+                tools_assigned=[],
+                warnings=[],
+            )
+        return requested_tools
+    return []
+
+
 def _record_to_agent_info(
     record: AgentRecord,
     busy: bool,
@@ -215,42 +254,12 @@ def make_delegation_tools(
             available_tool_ids = (
                 get_available_tool_ids() if get_available_tool_ids is not None else []
             )
-            available_set = set(available_tool_ids)
-            requested_tools = [] if tools is None else _normalize_tool_ids(tools)
-            assigned_tools: list[str] = []
+            validation = _validate_tool_ids(tools, available_tool_ids)
+            if isinstance(validation, CreateAgentResult):
+                return validation
+            assigned_tools = validation
+            requested_tools = assigned_tools
             warnings: list[str] = []
-
-            if tools is None:
-                return CreateAgentResult(
-                    success=False,
-                    agent_id="",
-                    error=(
-                        "tools is null. Pass explicit extension IDs in tools, "
-                        "or pass tools=[] to create an agent without tools."
-                    ),
-                    tools_requested=[],
-                    tools_assigned=[],
-                    warnings=[],
-                )
-            elif requested_tools:
-                invalid = [t for t in requested_tools if t not in available_set]
-                if invalid:
-                    available = ", ".join(sorted(available_tool_ids))
-                    return CreateAgentResult(
-                        success=False,
-                        agent_id="",
-                        error=(
-                            "Unknown or unavailable tool IDs: "
-                            f"{', '.join(invalid)}. "
-                            f"Available: {available}"
-                        ),
-                        tools_requested=requested_tools,
-                        tools_assigned=[],
-                        warnings=[],
-                    )
-                assigned_tools = requested_tools
-            else:
-                assigned_tools = []
 
             try:
                 spec = AgentSpec(
