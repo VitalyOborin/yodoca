@@ -5,6 +5,7 @@ description: |
   Main AI assistant that handles user queries, delegates tasks, and orchestrates multi-step workflows.
 agent:
   integration_mode: tool
+  parallel_tool_calls: true
   uses_tools: []
   limits:
     max_turns: 10

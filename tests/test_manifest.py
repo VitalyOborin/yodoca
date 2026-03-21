@@ -67,6 +67,30 @@ class TestExtensionManifest:
         assert m.events.subscribes[0].topic == "email.received"
         assert m.events.subscribes[0].handler == "invoke_agent"
 
+    def test_agent_parallel_tool_calls_defaults_to_false(self) -> None:
+        data = {
+            "id": "agent_ext",
+            "name": "Agent Ext",
+            "agent": {"integration_mode": "tool", "model": "gpt-4"},
+        }
+        m = ExtensionManifest.model_validate(data)
+        assert m.agent is not None
+        assert m.agent.parallel_tool_calls is False
+
+    def test_agent_parallel_tool_calls_can_be_enabled(self) -> None:
+        data = {
+            "id": "agent_ext",
+            "name": "Agent Ext",
+            "agent": {
+                "integration_mode": "tool",
+                "model": "gpt-4",
+                "parallel_tool_calls": True,
+            },
+        }
+        m = ExtensionManifest.model_validate(data)
+        assert m.agent is not None
+        assert m.agent.parallel_tool_calls is True
+
 
 class TestLoadManifest:
     """load_manifest from filesystem."""

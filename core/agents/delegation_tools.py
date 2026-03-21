@@ -196,6 +196,7 @@ def make_delegation_tools(
             description: str = "",
             tools: list[str] | None = None,
             model: str | None = None,
+            parallel_tool_calls: bool = False,
             max_turns: int = 25,
         ) -> CreateAgentResult:
             """Create a specialized agent on-the-fly for a one-off task.
@@ -208,6 +209,8 @@ def make_delegation_tools(
             - []: explicitly create a no-tools agent
             - [ids...]: explicit extension IDs from list_available_tools (strict)
             model: optional; defaults to default model from settings.
+            parallel_tool_calls: allow the model to execute multiple tool calls
+            concurrently in a single turn. Defaults to false.
             """
             available_tool_ids = (
                 get_available_tool_ids() if get_available_tool_ids is not None else []
@@ -256,6 +259,7 @@ def make_delegation_tools(
                     description=description,
                     tools=assigned_tools,
                     model=model,
+                    parallel_tool_calls=parallel_tool_calls,
                     max_turns=max_turns,
                 )
                 agent_id = factory.create(spec)

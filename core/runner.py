@@ -78,8 +78,6 @@ def _resolve_default_agent(
     registry: AgentRegistry,
 ) -> Any:
     """Load the declarative default-agent extension and attach the full orchestrator tool set."""
-    from agents import ModelSettings
-
     ext_id = (settings.default_agent or "").strip()
     if not ext_id:
         raise RuntimeError("default_agent not configured in settings")
@@ -125,7 +123,6 @@ def _resolve_default_agent(
     tools.extend(channel_tools)
 
     inner.tools = tools
-    inner.model_settings = ModelSettings(parallel_tool_calls=True)
     return inner
 
 

@@ -28,6 +28,7 @@ class TestAgentSpec:
         assert spec.description == ""
         assert spec.tools == []
         assert spec.model is None
+        assert spec.parallel_tool_calls is False
         assert spec.max_turns == 25
         assert spec.ttl_seconds == 1800
 
@@ -143,6 +144,25 @@ class TestDynamicAgentProvider:
 
 
 class TestAgentFactory:
+    def test_create_passes_parallel_tool_calls_to_model_settings(self) -> None:
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+
+        factory = AgentFactory(router, tool_resolver, registry)
+        spec = AgentSpec(
+            name="TestAgent",
+            instruction="Execute task",
+            tools=[],
+            parallel_tool_calls=True,
+        )
+
+        with patch("core.agents.factory.Agent") as agent_cls:
+            factory.create(spec)
+
+        kwargs = agent_cls.call_args.kwargs
+        assert kwargs["model_settings"].parallel_tool_calls is True
+
     def test_create_registers_agent(self) -> None:
         registry = AgentRegistry()
         router = _make_mock_model_router()
@@ -498,6 +518,44 @@ class TestDelegationToolsCreateAgent:
         assert result.success is True
         assert result.tools_assigned == ["web_search"]
         assert factory.specs[0].tools == ["web_search"]
+        assert factory.specs[0].parallel_tool_calls is False
+
+    @pytest.mark.asyncio
+    async def test_create_agent_passes_parallel_tool_calls_to_spec(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Researcher",
+                "instruction": "Find data",
+                "tools": ["web_search"],
+                "parallel_tool_calls": True,
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-4b",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is True
+        assert factory.specs[0].parallel_tool_calls is True
 
     @pytest.mark.asyncio
     async def test_create_agent_fails_for_partially_invalid_tools(self) -> None:

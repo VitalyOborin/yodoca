@@ -55,8 +55,10 @@ def _restore_root_logger() -> None:
 def test_resolve_default_agent_merges_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    sentinel_model_settings = object()
     inner = MagicMock()
     inner.tools = []
+    inner.model_settings = sentinel_model_settings
     ext = MagicMock(spec=AgentProvider)
     ext.agent = inner
     loader = MagicMock()
@@ -89,8 +91,6 @@ def test_resolve_default_agent_merges_tools(
         "core.runner.make_delegation_tools",
         lambda *_a, **_k: delegation_tools,
     )
-    from agents import ModelSettings
-
     result = _resolve_default_agent(
         loader,
         router,
@@ -108,8 +108,8 @@ def test_resolve_default_agent_merges_tools(
         "secure-tool",
         "configure-extension-tool",
     ]
-    assert isinstance(inner.model_settings, ModelSettings)
     agent_factory_cls.assert_called_once()
+    assert inner.model_settings is sentinel_model_settings
 
 
 def test_resolve_default_agent_requires_configuration() -> None:

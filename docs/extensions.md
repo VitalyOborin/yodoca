@@ -335,6 +335,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 | `integration_mode` | `"tool"` \| `"handoff"` | `"tool"` | How Orchestrator uses the agent |
 | `model` | str | — | LLM model identifier |
 | `instructions` | str | `""` | Inline system prompt (optional). Merged with `prompt.jinja2` if both exist. |
+| `parallel_tool_calls` | bool | `false` | Allow concurrent tool calls within one model turn |
 | `parameters` | dict | `{}` | Extra agent params |
 | `uses_tools` | list[str] | `[]` | Extension IDs or `core_tools` for tools |
 | `limits` | object | defaults below | `max_turns`, `max_tokens_per_invocation`, `time_budget_ms` |
@@ -462,6 +463,7 @@ The **Orchestrator** is the main agent that coordinates user requests.
   - `tools=null` → invalid (must pass explicit IDs or `[]`)
   - `tools=[]` → explicitly create an agent without tools
   - `tools=[...]` → strict validation; unknown IDs fail the call
+  - `parallel_tool_calls` defaults to `false`; set `true` to allow concurrent tool calls for that created agent
 - **Tool discovery:** `list_available_tools` returns IDs plus descriptions to help the Orchestrator choose tools before `create_agent`.
 
 Agent extensions are registered in `AgentRegistry` at startup. The Orchestrator discovers them via `list_agents` and invokes them via `delegate_task` — agent descriptions are not in the system prompt, loaded on-demand. See [ADR 017](adr/017-agents-registry.md) and [ADR 019](adr/019-cost-capability-routing.md).
@@ -482,6 +484,7 @@ description: A simple agent for testing
 agent:
   integration_mode: tool
   model: gpt-5-mini
+  parallel_tool_calls: false
   instructions: |
     Always reply in the format of a haiku
   uses_tools:

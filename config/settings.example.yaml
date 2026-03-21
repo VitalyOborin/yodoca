@@ -51,6 +51,11 @@ models:
     capability_tier: standard
     strengths: [speed, general, cost-effective]
     context_window: 400000
+  gpt-5.4-mini:
+    cost_tier: low
+    capability_tier: standard
+    strengths: [speed, general, cost-effective]
+    context_window: 400000
   gpt-5.4:
     cost_tier: high
     capability_tier: frontier

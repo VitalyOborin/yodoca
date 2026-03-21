@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 
 from core.agents.registry import AgentRecord, AgentRegistry
 from core.extensions.contract import (
@@ -29,6 +29,7 @@ class AgentSpec:
     description: str = ""
     tools: list[str] = field(default_factory=list)
     model: str | None = None
+    parallel_tool_calls: bool = False
     max_turns: int = 25
     ttl_seconds: int = 1800
 
@@ -129,6 +130,9 @@ class AgentFactory:
             instructions=spec.instruction,
             model=model_instance,
             tools=tools,
+            model_settings=ModelSettings(
+                parallel_tool_calls=spec.parallel_tool_calls
+            ),
         )
         desc = spec.description or spec.instruction[:200]
         if not spec.description and len(spec.instruction) > 200:

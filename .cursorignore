@@ -1,5 +1,5 @@
 .idea
-!.env
+.env
 !.env.example
 .pytest_cache
 .vscode
@@ -9,3 +9,11 @@ __pycache__
 .venv
 LICENSE
 NOTICE
+.mypy_cache
+.ruff_cache
+.import_linter_cache
+sandbox/data
+sandbox/logs
+web/dist
+web/node_modules
+web/.vscode
