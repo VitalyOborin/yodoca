@@ -60,6 +60,7 @@ def make_secure_input_tool(event_bus: "EventBus") -> Any:
 
         secret_id is auto-sanitized: dots, dashes, @ etc. are replaced with underscores.
         channel_id: where the user is chatting (e.g. 'cli_channel'). Default: 'cli_channel'.
+        **IMPORTANT**: Must be called sequentially; parallel calls alongside other functions are prohibited!
         """
         secret_id = _sanitize_secret_id(secret_id)
         err = _validate_secret_id(secret_id)
