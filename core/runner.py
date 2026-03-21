@@ -39,6 +39,7 @@ def _build_event_bus(settings: AppSettings) -> EventBus:
         max_retries=eb.max_retries,
         busy_timeout=eb.busy_timeout,
         stale_timeout=eb.stale_timeout,
+        handler_timeout=eb.handler_timeout,
     )
 
 

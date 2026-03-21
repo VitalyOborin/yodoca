@@ -80,8 +80,8 @@ class TestEventBusClaimPending:
 
         events = await journal.claim_pending(limit=5)
         assert len(events) == 1
-        assert events[0][1] == "a"
-        assert events[0][2] == "b"
+        assert events[0].topic == "a"
+        assert events[0].source == "b"
 
         cursor = await conn.execute(
             "SELECT status, processing_since FROM event_journal"
@@ -226,6 +226,39 @@ class TestEventBusRetryAndDeadLetter:
         status, retry_count = rows[0]
         assert status == "dead_letter"
         assert retry_count >= 2
+
+
+class TestEventBusHandlerTimeout:
+    """Per-handler asyncio.wait_for limit."""
+
+    @pytest.mark.asyncio
+    async def test_handler_timeout_dead_letters(self, db_path: Path) -> None:
+        bus = EventBus(
+            db_path=db_path,
+            poll_interval=0.05,
+            batch_size=5,
+            max_retries=0,
+            handler_timeout=0.15,
+        )
+        await bus.recover()
+
+        async def slow_handler(event: Event) -> None:
+            await asyncio.sleep(999)
+
+        bus.subscribe("slow.topic", slow_handler, "slow_sub")
+        await bus.start()
+        await bus.publish("slow.topic", "src", {})
+        await asyncio.sleep(0.5)
+
+        conn = await bus._journal._ensure_conn()
+        cursor = await conn.execute("SELECT status, error FROM event_journal")
+        rows = await cursor.fetchall()
+        await bus.stop()
+        assert len(rows) == 1
+        status, err = rows[0]
+        assert status == "dead_letter"
+        assert err is not None
+        assert "timed out" in (err or "").lower() or "slow_sub" in (err or "")
 
 
 class TestUserMessageDedupJournal:

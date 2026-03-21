@@ -36,6 +36,7 @@ class EventBusSettings(BaseModel):
     max_retries: int = 3
     busy_timeout: int = 5000
     stale_timeout: int = 300
+    handler_timeout: float = 300.0
 
 
 class LoggingSettings(BaseModel):

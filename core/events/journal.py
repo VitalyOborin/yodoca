@@ -6,20 +6,38 @@ import logging
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-_EventRow = tuple[int, str, str, dict[str, Any], float, str | None, int]
+
+class EventRow(NamedTuple):
+    """Row returned from claim_pending (journal → bus)."""
+
+    id: int
+    topic: str
+    source: str
+    payload: dict[str, Any]
+    created_at: float
+    correlation_id: str | None
+    retry_count: int
 
 
-def _row_to_event_tuple(row: Sequence[Any]) -> _EventRow:
-    """Convert journal row to (id, topic, source, payload, created_at, correlation_id, retry_count)."""
+def _row_to_event_row(row: Sequence[Any]) -> EventRow:
+    """Convert journal row to EventRow."""
     payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
     retry_count = row[6] if len(row) > 6 else 0
-    return (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
+    return EventRow(
+        id=row[0],
+        topic=row[1],
+        source=row[2],
+        payload=payload,
+        created_at=row[4],
+        correlation_id=row[5],
+        retry_count=retry_count,
+    )
 
 
 _SCHEMA = """
@@ -146,9 +164,8 @@ class EventJournal:
         await conn.commit()
         return cursor.lastrowid or 0
 
-    async def claim_pending(self, limit: int = 3) -> list[_EventRow]:
-        """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction.
-        Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count)."""
+    async def claim_pending(self, limit: int = 3) -> list[EventRow]:
+        """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction."""
         conn = await self._ensure_conn()
         now = time.time()
         await conn.execute("BEGIN IMMEDIATE")
@@ -173,7 +190,7 @@ class EventJournal:
                     [now, *ids],
                 )
             await conn.commit()
-            return [_row_to_event_tuple(tuple(row)) for row in rows]
+            return [_row_to_event_row(tuple(row)) for row in rows]
         except Exception:
             await conn.rollback()
             raise
