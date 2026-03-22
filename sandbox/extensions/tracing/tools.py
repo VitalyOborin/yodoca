@@ -116,6 +116,14 @@ def _tool_usage_dicts_to_entries(rows: list[dict]) -> list[ToolUsageEntry]:
     ]
 
 
+async def _resolve_session_id(storage: TracingStorage, session_id: str) -> str | None:
+    """Use explicit session_id or fallback to the latest non-empty session."""
+    sid = session_id.strip()
+    if sid:
+        return sid
+    return await storage.get_latest_session_id()
+
+
 def build_tools(storage: TracingStorage) -> list[Any]:
     """Build tracing tools with access to storage."""
 
@@ -133,13 +141,24 @@ def build_tools(storage: TracingStorage) -> list[Any]:
             return TraceTreeResult(success=False, session_id=session_id, error=str(e))
 
     @function_tool(name_override="tracing_get_session_stats", strict_mode=False)
-    async def tracing_get_session_stats(session_id: str) -> SessionStatsResult:
+    async def tracing_get_session_stats(session_id: str = "") -> SessionStatsResult:
         try:
-            stats = await storage.get_session_stats(session_id)
+            resolved_session_id = await _resolve_session_id(storage, session_id)
+            if not resolved_session_id:
+                return SessionStatsResult(
+                    success=True,
+                    session_id="",
+                    turns=0,
+                    tokens_in=0,
+                    tokens_out=0,
+                    cost_usd=0.0,
+                    top_tools=[],
+                )
+            stats = await storage.get_session_stats(resolved_session_id)
             top = _tool_usage_dicts_to_entries(list(stats.get("top_tools", [])))
             return SessionStatsResult(
                 success=True,
-                session_id=session_id,
+                session_id=resolved_session_id,
                 turns=int(stats.get("turns", 0)),
                 tokens_in=int(stats.get("tokens_in", 0)),
                 tokens_out=int(stats.get("tokens_out", 0)),
@@ -148,13 +167,14 @@ def build_tools(storage: TracingStorage) -> list[Any]:
             )
         except Exception as e:
             return SessionStatsResult(
-                success=False, session_id=session_id, error=str(e)
+                success=False, session_id=session_id.strip(), error=str(e)
             )
 
     @function_tool(name_override="tracing_get_tool_usage", strict_mode=False)
     async def tracing_get_tool_usage(session_id: str = "") -> ToolUsageResult:
         try:
-            usage = await storage.get_tool_usage(session_id=session_id or None)
+            resolved_session_id = await _resolve_session_id(storage, session_id)
+            usage = await storage.get_tool_usage(session_id=resolved_session_id)
             return ToolUsageResult(
                 success=True, usage=_tool_usage_dicts_to_entries(usage)
             )
@@ -164,7 +184,8 @@ def build_tools(storage: TracingStorage) -> list[Any]:
     @function_tool(name_override="tracing_get_cost_report", strict_mode=False)
     async def tracing_get_cost_report(session_id: str = "") -> CostReportResult:
         try:
-            report = await storage.get_cost_report(session_id=session_id or None)
+            resolved_session_id = await _resolve_session_id(storage, session_id)
+            report = await storage.get_cost_report(session_id=resolved_session_id)
             by_session = [
                 SessionCostEntry(
                     session_id=str(r["session_id"]),

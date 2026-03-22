@@ -225,12 +225,29 @@ class TracingStorage:
         rows = await cursor.fetchall()
         return [self._row_to_span(r) for r in rows]
 
-    async def get_session_stats(self, session_id: str) -> dict:
+    async def get_latest_session_id(self) -> str | None:
+        """Return the most recent non-empty session_id, if any."""
+        conn = self._ensure_conn()
+        cursor = await conn.execute(
+            """
+            SELECT session_id
+            FROM execution_traces
+            WHERE session_id != ''
+            ORDER BY started_at DESC
+            LIMIT 1
+            """
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return str(row["session_id"])
+
+    async def get_session_stats(self, session_id: str | None) -> dict:
         """Session-level aggregated stats for tracing_get_session_stats."""
         stats = await self.get_trace_stats(session_id=session_id)
         tool_usage = await self.get_tool_usage(session_id=session_id)
         return {
-            "session_id": session_id,
+            "session_id": session_id or "",
             "turns": stats.get("total_spans", 0),
             "tokens_in": stats.get("total_token_input", 0),
             "tokens_out": stats.get("total_token_output", 0),

@@ -466,6 +466,36 @@ async def test_budget_warning_and_exceeded_events(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tools_use_latest_session_when_session_id_empty(tmp_path: Path) -> None:
+    """Empty session_id falls back to the latest non-empty session."""
+    storage = TracingStorage(tmp_path / "traces.db")
+    await storage.initialize()
+    try:
+        t = time.time()
+        await storage.save_span(
+            Span(
+                id="latest-root",
+                session_id="sess-latest",
+                span_type=SpanType.AGENT_INVOKE,
+                name="orchestrator",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                token_input=10,
+                token_output=20,
+            )
+        )
+        tools = build_tools(storage)
+        by_name = {tool.name: tool for tool in tools}
+        stats_tool = by_name["tracing_get_session_stats"]
+        result = await stats_tool.on_invoke_tool({}, '{"session_id": ""}')
+        assert result.session_id == "sess-latest"
+        assert result.tokens_in == 10
+        assert result.tokens_out == 20
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
 async def test_budget_rehydrates_session_totals_from_db(tmp_path: Path) -> None:
     """After restart, session token totals are loaded from SQLite."""
     ctx = _make_mock_context(tmp_path)
