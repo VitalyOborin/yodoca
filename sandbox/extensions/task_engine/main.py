@@ -46,6 +46,7 @@ from sandbox.extensions.task_engine.task_queries import (
 )
 from sandbox.extensions.task_engine.task_queries import list_tasks as query_list_tasks
 from sandbox.extensions.task_engine.worker import (
+    RESTART_INTERRUPTED_ERROR,
     claim_next_task,
     execute_task,
     recover_stale_tasks,
@@ -516,9 +517,21 @@ class TaskEngineExtension:
         """ServiceProvider: worker loop. Claim tasks, execute, handle errors."""
         if not self._db or not self._ctx:
             return
-        n = await recover_stale_tasks(self._db)
-        if n:
-            logger.info("task_engine: recovered %d stale tasks", n)
+        recovered = await recover_stale_tasks(self._db)
+        if recovered:
+            logger.info(
+                "task_engine: failed %d stale task(s) after restart", len(recovered)
+            )
+            for task_ref in recovered:
+                await self._ctx.emit(
+                    "task.completed",
+                    {
+                        "task_id": task_ref["task_id"],
+                        "parent_id": task_ref["parent_id"],
+                        "status": "failed",
+                        "error": RESTART_INTERRUPTED_ERROR,
+                    },
+                )
         while True:
             try:
                 task = await claim_next_task(self._db, self._worker_id, self._lease_ttl)

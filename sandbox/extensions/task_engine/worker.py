@@ -18,6 +18,9 @@ from sandbox.extensions.task_engine.state import TaskState, json_dumps_unicode
 logger = logging.getLogger(__name__)
 
 FINAL_MARKER = "<<TASK_COMPLETE>>"
+RESTART_INTERRUPTED_ERROR = (
+    "Interrupted by process restart while task was running; re-submit to retry safely."
+)
 
 
 def _is_router_agent_task(agent_id: str, default_router_agent_id: str) -> bool:
@@ -294,19 +297,35 @@ async def save_step(db: Any, step: StepRecord) -> None:
     await conn.commit()
 
 
-async def recover_stale_tasks(db: Any) -> int:
-    """Reset running tasks with expired leases to pending. Returns count reset."""
+async def recover_stale_tasks(db: Any) -> list[dict[str, str | None]]:
+    """Fail stale running tasks after restart and return affected task references."""
     conn = await db.ensure_conn()
     now = time.time()
+    conn.row_factory = None
     cursor = await conn.execute(
         """
-        UPDATE agent_task SET status = 'pending', leased_by = NULL, lease_exp = NULL
+        SELECT task_id, parent_id
+        FROM agent_task
         WHERE status = 'running' AND (lease_exp IS NULL OR lease_exp < ?)
         """,
         (now,),
     )
+    stale_rows = await cursor.fetchall()
+    if not stale_rows:
+        return []
+
+    cursor = await conn.execute(
+        """
+        UPDATE agent_task
+        SET status = 'failed', leased_by = NULL, lease_exp = NULL, error = ?, updated_at = ?
+        WHERE status = 'running' AND (lease_exp IS NULL OR lease_exp < ?)
+        """,
+        (RESTART_INTERRUPTED_ERROR, int(now), now),
+    )
     await conn.commit()
-    return cursor.rowcount or 0
+    if (cursor.rowcount or 0) == 0:
+        return []
+    return [{"task_id": row[0], "parent_id": row[1]} for row in stale_rows]
 
 
 async def _run_step(

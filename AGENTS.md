@@ -151,8 +151,6 @@ Yodoca is a single-process Python application (no Docker, no external databases)
 
 - **No headless keyring:** On a cloud VM, the OS keyring (SecretService/D-Bus) is typically unavailable. Secrets fall back to `.env` file. Do not rely on `keyring` working in cloud environments.
 - **Supervisor shutdown in piped mode:** When stdin is a pipe, the supervisor receives SIGPIPE/EOF and the signal handler may print a `RuntimeError: reentrant call` traceback. This is cosmetic and does not indicate a real failure.
-- **Test failures:** 4 tests in `test_memory_v2.py` and `test_router.py` have pre-existing failures unrelated to environment setup. These are known.
-- **Ruff check/format:** The codebase has pre-existing lint and formatting issues flagged by `ruff check .` and `ruff format --check .`. The `lint-imports` check passes cleanly.
 
 ### Quick reference (commands from §2–3 of AGENTS.md)
 

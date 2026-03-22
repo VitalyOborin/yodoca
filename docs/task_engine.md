@@ -60,6 +60,7 @@ In `manifest.yaml` (and overrides in `settings.yaml` under `extensions.task_engi
 
 - Worker runs a ReAct loop: each step builds a prompt from `TaskState` (goal, step N of M, predecessor result, subtask results/failures, review response, partial result) and invokes the agent (or Orchestrator). If task payload includes `output_channel`, the step prompt also includes an explicit delivery requirement for that channel.
 - Step is timed; lease is renewed in the background during the call (`_lease_keepalive`). After the call: step is recorded in `task_step`, state is updated and checkpointed, then completion is checked.
+- On worker startup, stale tasks left in `running` with expired/missing lease are marked `failed` (not re-queued). This fail-fast recovery prevents duplicate side effects after process restart; interrupted tasks must be re-submitted explicitly.
 - **Completion**: the agent must include the marker `<<TASK_COMPLETE>>` at the start of a line, followed by the final result. The loop treats that as done and returns `{"content": result}`. Without the marker, the loop continues until `max_steps` and then returns with a warning.
 - Errors: `RetryableError` → retry with backoff (up to `max_retries`); `NonRetryableError` / `MaxStepsExceeded` / `LeaseRevoked` / `TaskCancelled` → fail or cancel immediately.
 
