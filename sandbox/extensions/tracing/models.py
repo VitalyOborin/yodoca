@@ -4,6 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 class SpanType(StrEnum):
@@ -34,8 +35,34 @@ class Span:
     error_message: str | None = None
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
-    duration_ms: float | None = None
+    duration_ms: int | None = None
     token_input: int | None = None
     token_output: int | None = None
     cost_usd: float | None = None
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SpanUpdatePayload:
+    """Structured payload for tracing.span.update (and legacy trace.span.* topics)."""
+
+    phase: str
+    span_id: str
+    session_id: str
+    span_type: str
+    name: str
+    status: str
+    parent_span_id: str | None
+    duration_ms: int | None
+    token_input: int | None
+    token_output: int | None
+    cost_usd: float | None
+
+
+@dataclass
+class BudgetEventPayload:
+    """Structured payload for tracing.budget.warning / tracing.budget.exceeded."""
+
+    session_id: str
+    session_tokens_total: int
+    threshold: int

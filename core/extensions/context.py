@@ -117,6 +117,12 @@ class ExtensionContext:
         """Apply full ContextProvider chain (memory, etc.) without running the agent."""
         return await self._router.enrich_prompt(prompt, turn_context)
 
+    def register_trace_hook(self, hook: Any) -> None:
+        """Register an execution trace hook on the agent invoker (e.g. tracing extension)."""
+        invoker = self._router._invoker
+        if hasattr(invoker, "register_trace_hook"):
+            invoker.register_trace_hook(hook)
+
     def subscribe(self, event: str, handler: Callable[..., Any]) -> None:
         """Subscribe to an internal event (e.g. user_message, agent_response)."""
         self._router.subscribe(event, handler)

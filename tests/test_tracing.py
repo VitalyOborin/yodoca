@@ -1,5 +1,6 @@
 """Tests for Execution Tracing extension: storage CRUD, extension lifecycle, hooks."""
 
+import json
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ import pytest
 from sandbox.extensions.tracing.main import TracingExtension
 from sandbox.extensions.tracing.models import Span, SpanStatus, SpanType
 from sandbox.extensions.tracing.storage import TracingStorage
+from sandbox.extensions.tracing.tools import build_tools
 
 # ---------------------------------------------------------------------------
 # Storage CRUD tests
@@ -60,13 +62,13 @@ async def test_storage_update_span(tmp_path: Path) -> None:
         span.status = SpanStatus.COMPLETED
         span.output_summary = "done"
         span.completed_at = time.time()
-        span.duration_ms = 42.5
+        span.duration_ms = 42
         await storage.update_span(span)
         loaded = await storage.get_span("span-2")
         assert loaded is not None
         assert loaded.status == SpanStatus.COMPLETED
         assert loaded.output_summary == "done"
-        assert loaded.duration_ms == 42.5
+        assert loaded.duration_ms == 42
     finally:
         await storage.close()
 
@@ -155,6 +157,50 @@ async def test_storage_trace_stats(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_storage_get_session_token_totals(tmp_path: Path) -> None:
+    """get_session_token_totals aggregates token_input + token_output per session."""
+    storage = TracingStorage(tmp_path / "traces.db")
+    await storage.initialize()
+    try:
+        t = time.time()
+        await storage.save_span(
+            Span(
+                id="a",
+                session_id="s1",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                token_input=10,
+                token_output=20,
+            )
+        )
+        await storage.save_span(
+            Span(
+                id="b",
+                session_id="s1",
+                status=SpanStatus.COMPLETED,
+                started_at=t + 1,
+                token_input=5,
+                token_output=5,
+            )
+        )
+        await storage.save_span(
+            Span(
+                id="c",
+                session_id="s2",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                token_input=100,
+                token_output=0,
+            )
+        )
+        totals = await storage.get_session_token_totals()
+        assert totals["s1"] == 40
+        assert totals["s2"] == 100
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
 async def test_storage_cleanup_old_traces(tmp_path: Path) -> None:
     """cleanup_old_traces deletes spans older than retention_days."""
     storage = TracingStorage(tmp_path / "traces.db")
@@ -190,12 +236,7 @@ def _make_mock_context(tmp_path: Path) -> MagicMock:
         }.get(key, default)
     )
     ctx.emit = AsyncMock()
-    # Mock router/invoker path
-    invoker = MagicMock()
-    invoker.register_trace_hook = MagicMock()
-    router = MagicMock()
-    router._invoker = invoker
-    ctx._router = router
+    ctx.register_trace_hook = MagicMock()
     return ctx
 
 
@@ -206,7 +247,7 @@ async def test_extension_initialize_and_health(tmp_path: Path) -> None:
     ext = TracingExtension()
     await ext.initialize(ctx)
     assert ext.health_check() is True
-    ctx._router._invoker.register_trace_hook.assert_called_once_with(ext)
+    ctx.register_trace_hook.assert_called_once_with(ext)
     await ext.destroy()
     assert ext.health_check() is False
 
@@ -422,3 +463,145 @@ async def test_budget_warning_and_exceeded_events(tmp_path: Path) -> None:
     assert "tracing.budget.warning" in topics
     assert "tracing.budget.exceeded" in topics
     await ext.destroy()
+
+
+@pytest.mark.asyncio
+async def test_budget_rehydrates_session_totals_from_db(tmp_path: Path) -> None:
+    """After restart, session token totals are loaded from SQLite."""
+    ctx = _make_mock_context(tmp_path)
+    ext1 = TracingExtension()
+    await ext1.initialize(ctx)
+    await ext1._storage.save_span(
+        Span(
+            id="pre",
+            session_id="sess-rehyd",
+            span_type=SpanType.AGENT_INVOKE,
+            name="agent",
+            status=SpanStatus.COMPLETED,
+            started_at=time.time(),
+            token_input=30,
+            token_output=70,
+        )
+    )
+    await ext1.destroy()
+
+    ext2 = TracingExtension()
+    await ext2.initialize(ctx)
+    assert ext2._session_tokens_total.get("sess-rehyd") == 100
+    await ext2.destroy()
+
+
+@pytest.mark.asyncio
+async def test_extension_execute_task_unknown_returns_none(tmp_path: Path) -> None:
+    """execute_task with an unknown name returns None."""
+    ctx = _make_mock_context(tmp_path)
+    ext = TracingExtension()
+    await ext.initialize(ctx)
+    assert await ext.execute_task("nonexistent_task") is None
+    await ext.destroy()
+
+
+@pytest.mark.asyncio
+async def test_tracing_get_tool_usage_tool(tmp_path: Path) -> None:
+    """tracing_get_tool_usage returns structured ToolUsageEntry list."""
+    storage = TracingStorage(tmp_path / "traces.db")
+    await storage.initialize()
+    try:
+        t = time.time()
+        await storage.save_span(
+            Span(
+                id="tc1",
+                session_id="sess-tools",
+                span_type=SpanType.TOOL_CALL,
+                name="my_tool",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                duration_ms=10.0,
+                token_input=1,
+                token_output=2,
+            )
+        )
+        tools = build_tools(storage)
+        tc = next(x for x in tools if x.name == "tracing_get_tool_usage")
+        tool_ctx = MagicMock()
+        r = await tc.on_invoke_tool(tool_ctx, json.dumps({"session_id": "sess-tools"}))
+        assert r.success is True
+        assert len(r.usage) == 1
+        assert r.usage[0].tool_name == "my_tool"
+        assert r.usage[0].count == 1
+        assert r.usage[0].avg_duration_ms == 10.0
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_tracing_get_cost_report_tool(tmp_path: Path) -> None:
+    """tracing_get_cost_report returns SessionCostEntry and ModelCostEntry."""
+    storage = TracingStorage(tmp_path / "traces.db")
+    await storage.initialize()
+    try:
+        t = time.time()
+        await storage.save_span(
+            Span(
+                id="c1",
+                session_id="sess-cost",
+                span_type=SpanType.AGENT_INVOKE,
+                name="agent",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                cost_usd=0.01,
+                metadata={"model": "gpt-4o"},
+            )
+        )
+        tools = build_tools(storage)
+        tc = next(x for x in tools if x.name == "tracing_get_cost_report")
+        tool_ctx = MagicMock()
+        r = await tc.on_invoke_tool(tool_ctx, json.dumps({"session_id": "sess-cost"}))
+        assert r.success is True
+        assert r.total_cost_usd >= 0.01
+        assert len(r.by_session) >= 1
+        assert r.by_session[0].session_id == "sess-cost"
+        assert len(r.by_model) >= 1
+    finally:
+        await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_tracing_explain_last_turn_tool(tmp_path: Path) -> None:
+    """tracing_explain_last_turn produces a human-readable summary."""
+    storage = TracingStorage(tmp_path / "traces.db")
+    await storage.initialize()
+    try:
+        t = time.time()
+        root = Span(
+            id="root",
+            session_id="sess-exp",
+            span_type=SpanType.AGENT_INVOKE,
+            name="orchestrator",
+            status=SpanStatus.RUNNING,
+            started_at=t,
+        )
+        await storage.save_span(root)
+        await storage.save_span(
+            Span(
+                id="tool1",
+                session_id="sess-exp",
+                parent_span_id="root",
+                span_type=SpanType.TOOL_CALL,
+                name="lookup",
+                status=SpanStatus.COMPLETED,
+                started_at=t + 0.1,
+                token_input=2,
+                token_output=3,
+                cost_usd=0.0,
+            )
+        )
+        tools = build_tools(storage)
+        tc = next(x for x in tools if x.name == "tracing_explain_last_turn")
+        tool_ctx = MagicMock()
+        r = await tc.on_invoke_tool(tool_ctx, json.dumps({"session_id": "sess-exp"}))
+        assert r.success is True
+        assert "lookup" in r.explanation
+        assert "tool calls" in r.explanation.lower()
+    finally:
+        await storage.close()

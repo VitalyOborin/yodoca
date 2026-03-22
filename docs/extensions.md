@@ -400,6 +400,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 
 | Method | Description |
 |--------|-------------|
+| `register_trace_hook(hook)` | Register an execution trace hook on the agent invoker (e.g. `tracing` extension). Prefer this over accessing router/invoker internals. See [ADR 037](adr/037-trace-hook-context-api.md). |
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
 | `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents. For invoke_agent, context is injected into system role instead. |

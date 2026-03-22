@@ -2,9 +2,17 @@
 
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import asdict
 from typing import Any
 
-from .models import Span, SpanStatus, SpanType
+from .models import (
+    BudgetEventPayload,
+    Span,
+    SpanStatus,
+    SpanType,
+    SpanUpdatePayload,
+)
 from .storage import TracingStorage
 from .token_counter import TokenCounter
 from .tools import build_tools
@@ -47,16 +55,21 @@ class TracingExtension:
         self._storage = TracingStorage(db_path)
         await self._storage.initialize()
 
-        # Register as a TraceHook on the AgentInvoker.
+        totals = await self._storage.get_session_token_totals()
+        self._session_tokens_total = totals
+
         try:
-            invoker = context._router._invoker
-            if hasattr(invoker, "register_trace_hook"):
+            if hasattr(context, "register_trace_hook"):
+                context.register_trace_hook(self)
+                logger.info("Tracing hook registered via ExtensionContext")
+                return
+            router = context.__dict__.get("_router")
+            invoker = getattr(router, "_invoker", None) if router is not None else None
+            if invoker is not None and hasattr(invoker, "register_trace_hook"):
                 invoker.register_trace_hook(self)
                 logger.info("Tracing hook registered on AgentInvoker")
         except Exception:
-            logger.warning(
-                "Could not register trace hook on AgentInvoker", exc_info=True
-            )
+            logger.warning("Could not register trace hook", exc_info=True)
 
     async def start(self) -> None:
         pass
@@ -102,26 +115,27 @@ class TracingExtension:
     async def _emit_span_update(self, phase: str, span: Span) -> None:
         if not self._context:
             return
-        payload = {
-            "phase": phase,
-            "span_id": span.id,
-            "session_id": span.session_id,
-            "span_type": span.span_type.value,
-            "name": span.name,
-            "status": span.status.value,
-            "parent_span_id": span.parent_span_id,
-            "duration_ms": span.duration_ms,
-            "token_input": span.token_input,
-            "token_output": span.token_output,
-            "cost_usd": span.cost_usd,
-        }
+        payload = SpanUpdatePayload(
+            phase=phase,
+            span_id=span.id,
+            session_id=span.session_id,
+            span_type=span.span_type.value,
+            name=span.name,
+            status=span.status.value,
+            parent_span_id=span.parent_span_id,
+            duration_ms=span.duration_ms,
+            token_input=span.token_input,
+            token_output=span.token_output,
+            cost_usd=span.cost_usd,
+        )
         try:
-            await self._context.emit("tracing.span.update", payload)
-            # Backward compatibility for existing integrations in this branch.
+            d = asdict(payload)
+            await self._context.emit("tracing.span.update", d)
+            # DEPRECATED: remove in v2.0 — backward compatibility for legacy topic names.
             topic = (
                 "trace.span.started" if phase == "started" else "trace.span.completed"
             )
-            await self._context.emit(topic, payload)
+            await self._context.emit(topic, d)
         except Exception:
             logger.debug("Failed to emit tracing span update", exc_info=True)
 
@@ -135,14 +149,12 @@ class TracingExtension:
         if not self._context:
             return
         try:
-            await self._context.emit(
-                topic,
-                {
-                    "session_id": session_id,
-                    "session_tokens_total": total_tokens,
-                    "threshold": threshold,
-                },
+            payload = BudgetEventPayload(
+                session_id=session_id,
+                session_tokens_total=total_tokens,
+                threshold=threshold,
             )
+            await self._context.emit(topic, asdict(payload))
         except Exception:
             logger.debug("Failed to emit budget event %s", topic, exc_info=True)
 
@@ -172,6 +184,45 @@ class TracingExtension:
                 self._stop_at_session_tokens,
             )
 
+    async def _complete_span(
+        self,
+        span_id: str,
+        output: str,
+        error: str | None,
+        *,
+        count_output_tokens: Callable[[str], int],
+        track_session_tokens: bool,
+    ) -> None:
+        if not self._storage:
+            return
+        span = await self._storage.get_span(span_id)
+        if not span:
+            return
+        now = time.time()
+        span.completed_at = now
+        span.duration_ms = max(0, int((now - span.started_at) * 1000))
+        span.output_summary = output[: self._max_output_len]
+        span.token_output = count_output_tokens(output)
+        if track_session_tokens:
+            model = str(span.metadata.get("model", "")) if span.metadata else ""
+            span.cost_usd = self._token_counter.calculate_cost(
+                span.token_input or 0,
+                span.token_output or 0,
+                model=model or None,
+            )
+        if error:
+            span.status = SpanStatus.ERROR
+            span.error_message = error
+        else:
+            span.status = SpanStatus.COMPLETED
+        await self._storage.update_span(span)
+        if track_session_tokens:
+            session_total = self._session_tokens_total.get(span.session_id, 0)
+            session_total += (span.token_input or 0) + (span.token_output or 0)
+            self._session_tokens_total[span.session_id] = session_total
+            await self._check_budget(span.session_id, session_total)
+        await self._emit_span_update("completed", span)
+
     # -- TraceHook protocol methods --
 
     async def on_invoke_start(self, prompt: str, session_id: str, agent_id: str) -> str:
@@ -192,34 +243,13 @@ class TracingExtension:
     async def on_invoke_end(
         self, span_id: str, output: str, error: str | None = None
     ) -> None:
-        if not self._storage:
-            return
-        span = await self._storage.get_span(span_id)
-        if not span:
-            return
-        now = time.time()
-        span.completed_at = now
-        span.duration_ms = round((now - span.started_at) * 1000, 2)
-        span.output_summary = output[: self._max_output_len]
-        span.token_output = self._token_counter.count_tokens(output)
-        model = str(span.metadata.get("model", "")) if span.metadata else ""
-        span.cost_usd = self._token_counter.calculate_cost(
-            span.token_input or 0,
-            span.token_output or 0,
-            model=model or None,
+        await self._complete_span(
+            span_id,
+            output,
+            error,
+            count_output_tokens=self._token_counter.count_tokens,
+            track_session_tokens=True,
         )
-        if error:
-            span.status = SpanStatus.ERROR
-            span.error_message = error
-        else:
-            span.status = SpanStatus.COMPLETED
-        await self._storage.update_span(span)
-
-        session_total = self._session_tokens_total.get(span.session_id, 0)
-        session_total += (span.token_input or 0) + (span.token_output or 0)
-        self._session_tokens_total[span.session_id] = session_total
-        await self._check_budget(span.session_id, session_total)
-        await self._emit_span_update("completed", span)
 
     async def on_tool_call(
         self, parent_span_id: str, tool_name: str, arguments: str
@@ -245,20 +275,10 @@ class TracingExtension:
     async def on_tool_result(
         self, span_id: str, result: str, error: str | None = None
     ) -> None:
-        if not self._storage:
-            return
-        span = await self._storage.get_span(span_id)
-        if not span:
-            return
-        now = time.time()
-        span.completed_at = now
-        span.duration_ms = round((now - span.started_at) * 1000, 2)
-        span.output_summary = result[: self._max_output_len]
-        span.token_output = self._token_counter.approximate_tokens(result)
-        if error:
-            span.status = SpanStatus.ERROR
-            span.error_message = error
-        else:
-            span.status = SpanStatus.COMPLETED
-        await self._storage.update_span(span)
-        await self._emit_span_update("completed", span)
+        await self._complete_span(
+            span_id,
+            result,
+            error,
+            count_output_tokens=self._token_counter.approximate_tokens,
+            track_session_tokens=False,
+        )

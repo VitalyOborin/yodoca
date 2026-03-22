@@ -20,6 +20,8 @@ class TokenCounter:
 
     def __init__(self, pricing: dict[str, dict[str, float]] | None = None) -> None:
         self._pricing: dict[str, Pricing] = {}
+        self._fallback_enc = tiktoken.get_encoding("cl100k_base")
+        self._model_enc_cache: dict[str, tiktoken.Encoding] = {}
         self.update_pricing(pricing or {})
 
     def update_pricing(self, pricing: dict[str, dict[str, float]]) -> None:
@@ -35,14 +37,17 @@ class TokenCounter:
         """Count tokens using tiktoken encoder for model or cl100k_base fallback."""
         if not text:
             return 0
-        try:
-            if model:
-                encoding = tiktoken.encoding_for_model(model)
-            else:
-                encoding = tiktoken.get_encoding("cl100k_base")
-        except Exception:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+        if model:
+            enc = self._model_enc_cache.get(model)
+            if enc is None:
+                try:
+                    enc = tiktoken.encoding_for_model(model)
+                except Exception:
+                    enc = self._fallback_enc
+                self._model_enc_cache[model] = enc
+        else:
+            enc = self._fallback_enc
+        return len(enc.encode(text))
 
     def approximate_tokens(self, text: str) -> int:
         """Fast approximation when exact tokenizer is unavailable or unnecessary."""

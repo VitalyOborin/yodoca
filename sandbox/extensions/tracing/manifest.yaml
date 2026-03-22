@@ -28,9 +28,7 @@ config:
     claude-3-5-sonnet:
       input: 3.0
       output: 15.0
-  trace_context_enrichment: true
   trace_tool_calls: true
-  trace_llm_calls: true
 
 schedules:
   - name: trace_cleanup

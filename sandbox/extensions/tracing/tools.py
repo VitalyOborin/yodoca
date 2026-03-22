@@ -23,7 +23,7 @@ class TraceSpanResult(BaseModel):
     error_message: str | None = None
     started_at: float = 0.0
     completed_at: float | None = None
-    duration_ms: float | None = None
+    duration_ms: int | None = None
     token_input: int | None = None
     token_output: int | None = None
     cost_usd: float | None = None
@@ -37,6 +37,22 @@ class TraceTreeResult(BaseModel):
     error: str | None = None
 
 
+class ToolUsageEntry(BaseModel):
+    tool_name: str
+    count: int
+    avg_duration_ms: float
+
+
+class SessionCostEntry(BaseModel):
+    session_id: str
+    cost_usd: float
+
+
+class ModelCostEntry(BaseModel):
+    model: str
+    cost_usd: float
+
+
 class SessionStatsResult(BaseModel):
     success: bool = True
     session_id: str = ""
@@ -44,21 +60,21 @@ class SessionStatsResult(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
-    top_tools: list[dict[str, Any]] = Field(default_factory=list)
+    top_tools: list[ToolUsageEntry] = Field(default_factory=list)
     error: str | None = None
 
 
 class ToolUsageResult(BaseModel):
     success: bool = True
-    usage: list[dict[str, Any]] = Field(default_factory=list)
+    usage: list[ToolUsageEntry] = Field(default_factory=list)
     error: str | None = None
 
 
 class CostReportResult(BaseModel):
     success: bool = True
     total_cost_usd: float = 0.0
-    by_session: list[dict[str, Any]] = Field(default_factory=list)
-    by_model: list[dict[str, Any]] = Field(default_factory=list)
+    by_session: list[SessionCostEntry] = Field(default_factory=list)
+    by_model: list[ModelCostEntry] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -89,6 +105,17 @@ def _span_to_result(span: Any) -> TraceSpanResult:
     )
 
 
+def _tool_usage_dicts_to_entries(rows: list[dict]) -> list[ToolUsageEntry]:
+    return [
+        ToolUsageEntry(
+            tool_name=str(r["tool_name"]),
+            count=int(r["count"]),
+            avg_duration_ms=float(r["avg_duration_ms"]),
+        )
+        for r in rows
+    ]
+
+
 def build_tools(storage: TracingStorage) -> list[Any]:
     """Build tracing tools with access to storage."""
 
@@ -109,6 +136,7 @@ def build_tools(storage: TracingStorage) -> list[Any]:
     async def tracing_get_session_stats(session_id: str) -> SessionStatsResult:
         try:
             stats = await storage.get_session_stats(session_id)
+            top = _tool_usage_dicts_to_entries(list(stats.get("top_tools", [])))
             return SessionStatsResult(
                 success=True,
                 session_id=session_id,
@@ -116,7 +144,7 @@ def build_tools(storage: TracingStorage) -> list[Any]:
                 tokens_in=int(stats.get("tokens_in", 0)),
                 tokens_out=int(stats.get("tokens_out", 0)),
                 cost_usd=float(stats.get("cost_usd", 0.0)),
-                top_tools=list(stats.get("top_tools", [])),
+                top_tools=top,
             )
         except Exception as e:
             return SessionStatsResult(
@@ -127,7 +155,9 @@ def build_tools(storage: TracingStorage) -> list[Any]:
     async def tracing_get_tool_usage(session_id: str = "") -> ToolUsageResult:
         try:
             usage = await storage.get_tool_usage(session_id=session_id or None)
-            return ToolUsageResult(success=True, usage=usage)
+            return ToolUsageResult(
+                success=True, usage=_tool_usage_dicts_to_entries(usage)
+            )
         except Exception as e:
             return ToolUsageResult(success=False, error=str(e))
 
@@ -135,11 +165,22 @@ def build_tools(storage: TracingStorage) -> list[Any]:
     async def tracing_get_cost_report(session_id: str = "") -> CostReportResult:
         try:
             report = await storage.get_cost_report(session_id=session_id or None)
+            by_session = [
+                SessionCostEntry(
+                    session_id=str(r["session_id"]),
+                    cost_usd=float(r["cost_usd"]),
+                )
+                for r in report.get("by_session", [])
+            ]
+            by_model = [
+                ModelCostEntry(model=str(r["model"]), cost_usd=float(r["cost_usd"]))
+                for r in report.get("by_model", [])
+            ]
             return CostReportResult(
                 success=True,
                 total_cost_usd=float(report.get("total_cost_usd", 0.0)),
-                by_session=list(report.get("by_session", [])),
-                by_model=list(report.get("by_model", [])),
+                by_session=by_session,
+                by_model=by_model,
             )
         except Exception as e:
             return CostReportResult(success=False, error=str(e))
