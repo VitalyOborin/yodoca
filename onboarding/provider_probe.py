@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -97,5 +97,5 @@ async def probe_all(
         if isinstance(res, Exception):
             out[pid] = (False, str(res))
         else:
-            out[pid] = res
+            out[pid] = cast(tuple[bool, str], res)
     return out

@@ -20,7 +20,7 @@ class ExtensionState(Enum):
 class Extension(Protocol):
     """Base contract: lifecycle. Identity (id, name, version) comes from manifest."""
 
-    async def initialize(self, context: "ExtensionContext") -> None:
+    async def initialize(self, context: Any) -> None:
         """Called once on load. Subscriptions, dependency init."""
 
     async def start(self) -> None:
@@ -92,7 +92,7 @@ class TurnContext:
     agent_id: str | None = None
     channel_id: str | None = None
     user_id: str | None = None
-    session_id: str | None = None
+    thread_id: str | None = None
 
 
 @runtime_checkable
@@ -121,7 +121,7 @@ class ContextProvider(Protocol):
 class SetupProvider(Protocol):
     """Extension that needs configuration (secrets, settings)."""
 
-    def get_setup_schema(self) -> list[dict]:
+    def get_setup_schema(self) -> list[dict[str, Any]]:
         """[{name, description, secret, required}] — list of setup parameters."""
 
     async def apply_config(self, name: str, value: str) -> None:

@@ -1,0 +1,10 @@
+# Install: uv sync --extra dev && uv run pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: ci-all-checks
+        name: CI all checks (blocking)
+        entry: uv run python scripts/run_ci_checks.py
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -72,7 +72,7 @@ System topics (always have kernel handlers):
 - system.agent.task — invoke Orchestrator, response goes to user (payload: prompt, channel_id, correlation_id).
 - system.agent.background — invoke Orchestrator silently (payload: prompt, correlation_id).
 
-Custom topics (used by extensions): user.message, reminder.due, memory.session_completed, etc.
+Custom topics (used by extensions): user.message, reminder.due, thread.completed, etc.
 
 For reminder/timer extensions: use the Scheduler extension's schedule_once tool (topic, payload_json, delay_seconds or at_iso) to schedule a one-shot event; create an agent with events.subscribes: [{topic: reminder.due, handler: invoke_agent}] to handle due reminders.
 
@@ -85,6 +85,7 @@ Base: id, name, version, entrypoint (module:ClassName; omit for declarative agen
 agent:
   integration_mode: tool
   model: gpt-5.2-codex
+  parallel_tool_calls: false
   instructions: "inline text"   # optional; prompt.jinja2 in extension dir is auto-loaded and merged
   uses_tools:
     - core_tools    # built-in: file, apply_patch, request_restart (always); shell, web_search (if provider supports hosted tools)
@@ -135,7 +136,7 @@ The kernel invokes the agent and calls back channel.send_to_user(user_id, respon
 ## Declarative agents
 
 Agent extensions without custom logic need NO main.py. Generate:
-- manifest.yaml with agent block (model, optional instructions, uses_tools, limits)
+- manifest.yaml with agent block (model, optional instructions, optional parallel_tool_calls, uses_tools, limits)
 - prompt.jinja2 in extensions/<id>/ (Loader auto-detects; merged with instructions if both exist)
 
 The Loader creates the agent from manifest. See builder_agent and simple_agent.

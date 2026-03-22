@@ -93,7 +93,7 @@ class ModelCatalog:
             overrides: Optional dict from config (models section). Keys are model IDs.
                 Validates tiers; raises ValueError on unknown values.
         """
-        self._catalog: dict[str, ModelInfo] = _parse_overrides(overrides)
+        self._catalog: dict[str, ModelInfo] = _parse_overrides(overrides or {})
 
     def get_info(self, model_name: str) -> ModelInfo | None:
         """Lookup model metadata by name. Returns default (medium/standard) for unknown models."""

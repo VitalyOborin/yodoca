@@ -4,7 +4,7 @@ from typing import Any
 
 from agents import function_tool
 
-from models import (
+from sandbox.extensions.task_engine.models import (
     ActiveTasksResult,
     CancelTaskResult,
     ChainStatusResult,

@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any
 
-from state import TaskState
+from sandbox.extensions.task_engine.state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ async def update_parent_checkpoint(
         state.pending_subtasks = list(state.pending_subtasks) + [child_task_id]
     await conn.execute(
         "UPDATE agent_task SET checkpoint = ?, updated_at = ? WHERE task_id = ?",
-        (state.to_json(), time.time(), parent_task_id),
+        (state.to_json(), int(time.time()), parent_task_id),
     )
 
 
@@ -76,7 +76,7 @@ async def collect_subtask_results(
     results = []
     failures = []
     for row in rows:
-        d = dict(zip(cols, row))
+        d = dict(zip(cols, row, strict=False))
         task_id = d["task_id"]
         status = d["status"]
         result = None
@@ -142,7 +142,7 @@ async def try_resume_parent(db: Any, parent_id: str) -> None:
     state.context["subtask_failures"] = failures
     await conn.execute(
         "UPDATE agent_task SET status = 'pending', checkpoint = ?, updated_at = ? WHERE task_id = ?",
-        (state.to_json(), time.time(), parent_id),
+        (state.to_json(), int(time.time()), parent_id),
     )
     await conn.commit()
     logger.info(

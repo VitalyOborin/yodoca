@@ -4,8 +4,9 @@ No scheduling, no deferred logic. Use the scheduler extension for time-based eve
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any
 
 from core.events.journal import EventJournal
 from core.events.models import Event
@@ -24,12 +25,14 @@ class EventBus:
         max_retries: int = 3,
         busy_timeout: int = 5000,
         stale_timeout: float = 300.0,
+        handler_timeout: float = 300.0,
     ) -> None:
         self._journal = EventJournal(db_path, busy_timeout=busy_timeout)
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._max_retries = max_retries
         self._stale_timeout = stale_timeout
+        self._handler_timeout = handler_timeout
         self._wake = asyncio.Event()
         self._subscribers: dict[
             str, list[tuple[Callable[[Event], Awaitable[None]], str]]
@@ -39,11 +42,21 @@ class EventBus:
         self._stopped = False
         self._watchdog_interval = 30.0
 
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task[None] | None) -> None:
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def publish(
         self,
         topic: str,
         source: str,
-        payload: dict,
+        payload: dict[str, Any],
         correlation_id: str | None = None,
     ) -> int:
         """Write event to the journal. Returns event id. Fire-and-forget for caller."""
@@ -71,20 +84,10 @@ class EventBus:
         """Graceful shutdown: wait for current handlers to finish."""
         self._stopped = True
         self._wake.set()
-        if self._watchdog_task:
-            self._watchdog_task.cancel()
-            try:
-                await self._watchdog_task
-            except asyncio.CancelledError:
-                pass
-            self._watchdog_task = None
-        if self._dispatch_task:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
-            self._dispatch_task = None
+        await self._cancel_task(self._watchdog_task)
+        self._watchdog_task = None
+        await self._cancel_task(self._dispatch_task)
+        self._dispatch_task = None
         await self._journal.close()
         logger.info("EventBus stopped")
 
@@ -94,8 +97,6 @@ class EventBus:
             try:
                 await asyncio.sleep(self._watchdog_interval)
             except asyncio.CancelledError:
-                break
-            if self._stopped:
                 break
             try:
                 reset_count, dead_count = await self._journal.recover_stale(
@@ -117,30 +118,54 @@ class EventBus:
             logger.info("EventBus: recovered %d events", count)
         return count
 
+    async def get_status_counts(self) -> dict[str, int]:
+        """Return grouped queue counts by status."""
+        return await self._journal.get_status_counts()
+
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+        topics: list[str] | None = None,
+    ) -> int:
+        """Delete pending/processing events bound to schedule metadata."""
+        allowed_topics = topics or [
+            "system.agent.task",
+            "system.agent.background",
+            "system.user.notify",
+        ]
+        deleted = await self._journal.purge_scheduled_events(
+            schedule_id=schedule_id,
+            schedule_type=schedule_type,
+            topics=allowed_topics,
+        )
+        if deleted:
+            logger.info(
+                "EventBus purge: removed %d queued events for %s#%s",
+                deleted,
+                schedule_type,
+                schedule_id,
+            )
+        return deleted
+
     async def _claim_and_deliver_batch(self) -> None:
         """Claim one batch of pending events and deliver each to handlers."""
         events = await self._journal.claim_pending(limit=self._batch_size)
-        for (
-            event_id,
-            topic,
-            source,
-            payload,
-            created_at,
-            correlation_id,
-            retry_count,
-        ) in events:
+        if events:
+            logger.debug("EventBus: claimed %d events", len(events))
+        for row in events:
             if self._stopped:
                 break
             await self._deliver(
                 Event(
-                    id=event_id,
-                    topic=topic,
-                    source=source,
-                    payload=payload,
-                    created_at=created_at,
-                    correlation_id=correlation_id,
+                    id=row.id,
+                    topic=row.topic,
+                    source=row.source,
+                    payload=row.payload,
+                    created_at=row.created_at,
+                    correlation_id=row.correlation_id,
                     status="processing",
-                    retry_count=retry_count,
+                    retry_count=row.retry_count,
                 ),
             )
 
@@ -152,11 +177,9 @@ class EventBus:
                     self._wake.wait(),
                     timeout=self._poll_interval,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             self._wake.clear()
-            if self._stopped:
-                break
             await self._claim_and_deliver_batch()
 
     async def _run_handlers(self, event: Event) -> list[str]:
@@ -165,7 +188,22 @@ class EventBus:
         errors: list[str] = []
         for handler, subscriber_id in handlers:
             try:
-                await handler(event)
+                await asyncio.wait_for(
+                    handler(event),
+                    timeout=self._handler_timeout,
+                )
+            except TimeoutError:
+                msg = (
+                    f"handler {subscriber_id} timed out after {self._handler_timeout}s"
+                )
+                errors.append(msg)
+                logger.error(
+                    "EventBus handler %s timed out for event %s/%s (%.0fs limit)",
+                    subscriber_id,
+                    event.topic,
+                    event.id,
+                    self._handler_timeout,
+                )
             except Exception as e:
                 errors.append(str(e))
                 logger.exception(

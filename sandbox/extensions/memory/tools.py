@@ -9,9 +9,9 @@ from typing import Any
 
 from agents import function_tool
 from pydantic import BaseModel, Field
-from retrieval import _resolve_entity, parse_time_expression
 
 from core.utils.formatting import format_event_time as _format_event_time
+from sandbox.extensions.memory.retrieval import _resolve_entity, parse_time_expression
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class MemoryStatsResult(BaseModel):
     entities: int = 0
     orphan_nodes: int = 0
     avg_edges_per_node: float = 0.0
-    unconsolidated_sessions: int = 0
+    unconsolidated_threads: int = 0
     storage_size_mb: float = 0.0
     last_consolidation: str | None = None
     last_decay_run: str | None = None
@@ -417,7 +417,7 @@ def build_tools(
     async def memory_stats() -> MemoryStatsResult:
         """Graph-level memory metrics: node/edge counts, entities, data quality indicators."""
         stats = await storage.get_graph_stats()
-        unconsolidated = await storage.get_unconsolidated_sessions()
+        unconsolidated = await storage.get_unconsolidated_threads()
         size_mb = storage.get_storage_size_mb()
         last_consolidation = None
         last_decay_run = None
@@ -437,7 +437,7 @@ def build_tools(
             entities=stats["entities"],
             orphan_nodes=stats["orphan_nodes"],
             avg_edges_per_node=stats["avg_edges_per_node"],
-            unconsolidated_sessions=len(unconsolidated),
+            unconsolidated_threads=len(unconsolidated),
             storage_size_mb=size_mb,
             last_consolidation=last_consolidation,
             last_decay_run=last_decay_run,

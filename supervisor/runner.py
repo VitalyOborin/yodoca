@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from core.config_check import is_configured
-from core.settings import get_setting, load_settings, reload_settings
+from core.settings import load_settings, reload_settings
 
 # Project root: parent of supervisor package
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,13 +25,12 @@ _ONBOARDING_RETRY = 2
 
 def _get_restart_file() -> Path:
     settings = load_settings()
-    rel = get_setting(settings, "supervisor.restart_file", "sandbox/.restart_requested")
-    return _PROJECT_ROOT / rel
+    return _PROJECT_ROOT / settings.supervisor.restart_file
 
 
 def _get_poll_interval() -> int:
     settings = load_settings()
-    return get_setting(settings, "supervisor.restart_file_check_interval", 5)
+    return int(settings.supervisor.restart_file_check_interval)
 
 
 _AGENT_CMD = [sys.executable, "-m", "core"]
@@ -88,7 +87,7 @@ def main() -> None:
     restart_requested = False
     shutdown_requested = False
 
-    def on_signal(signum: int, frame: object) -> None:
+    def on_signal(_signum: int, _frame: object) -> None:
         nonlocal shutdown_requested
         _log("Shutdown requested.")
         shutdown_requested = True

@@ -1,5 +1,6 @@
 """Tests for AgentFactory, DynamicAgentProvider, TTL cleanup."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +28,7 @@ class TestAgentSpec:
         assert spec.description == ""
         assert spec.tools == []
         assert spec.model is None
+        assert spec.parallel_tool_calls is False
         assert spec.max_turns == 25
         assert spec.ttl_seconds == 1800
 
@@ -142,6 +144,25 @@ class TestDynamicAgentProvider:
 
 
 class TestAgentFactory:
+    def test_create_passes_parallel_tool_calls_to_model_settings(self) -> None:
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+
+        factory = AgentFactory(router, tool_resolver, registry)
+        spec = AgentSpec(
+            name="TestAgent",
+            instruction="Execute task",
+            tools=[],
+            parallel_tool_calls=True,
+        )
+
+        with patch("core.agents.factory.Agent") as agent_cls:
+            factory.create(spec)
+
+        kwargs = agent_cls.call_args.kwargs
+        assert kwargs["model_settings"].parallel_tool_calls is True
+
     def test_create_registers_agent(self) -> None:
         registry = AgentRegistry()
         router = _make_mock_model_router()
@@ -212,6 +233,22 @@ class TestAgentFactory:
         assert call_args[0] == agent_id
         assert call_args[1]["model"] == "gpt-5.2-codex"
 
+    def test_registry_keeps_same_provider_instance_for_created_agent(self) -> None:
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+        factory = AgentFactory(router, tool_resolver, registry)
+        agent_id = factory.create(AgentSpec(name="Dyn", instruction="Do work"))
+
+        pair = registry.get(agent_id)
+        assert pair is not None
+        _record, provider = pair
+
+        # Task Engine resolves providers via registry.get(agent_id)[1].
+        resolved = registry.get(agent_id)
+        assert resolved is not None
+        assert resolved[1] is provider
+
 
 class TestAgentRegistryCleanup:
     def test_cleanup_expired_removes_dynamic_agents(self) -> None:
@@ -266,6 +303,16 @@ class TestAgentRegistryCleanup:
 
 class TestDelegationToolsCreateAgent:
     """Tests for create_agent and list_available_tools in delegation_tools."""
+
+    class _FakeFactory:
+        def __init__(self) -> None:
+            self.specs: list[AgentSpec] = []
+            self._counter = 0
+
+        def create(self, spec: AgentSpec) -> str:
+            self.specs.append(spec)
+            self._counter += 1
+            return f"dyn_{self._counter:012d}"
 
     def test_make_delegation_tools_with_factory_returns_four_tools(self) -> None:
         from core.agents.delegation_tools import make_delegation_tools
@@ -358,3 +405,302 @@ class TestDelegationToolsCreateAgent:
         assert agent.cost_tier == "medium"
         assert agent.capability_tier == "standard"
         assert agent.strengths == []
+
+    @pytest.mark.asyncio
+    async def test_create_agent_fails_when_tools_is_null(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {"web_search": {"description": "Web search"}},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Weather helper",
+                "instruction": "Узнай погоду завтра в Москве",
+                "description": "Нужен прогноз на завтра",
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-1",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is False
+        assert "tools is null" in (result.error or "")
+        assert factory.specs == []
+
+    @pytest.mark.asyncio
+    async def test_create_agent_explicit_empty_tools_creates_no_tool_agent(
+        self,
+    ) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Reasoner",
+                "instruction": "Реши логическую задачу",
+                "tools": [],
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-3",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is True
+        assert result.tools_assigned == []
+        assert factory.specs[0].tools == []
+
+    @pytest.mark.asyncio
+    async def test_create_agent_explicit_valid_tools_success(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Researcher",
+                "instruction": "Find data",
+                "tools": ["web_search"],
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-4",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is True
+        assert result.tools_assigned == ["web_search"]
+        assert factory.specs[0].tools == ["web_search"]
+        assert factory.specs[0].parallel_tool_calls is False
+
+    @pytest.mark.asyncio
+    async def test_create_agent_passes_parallel_tool_calls_to_spec(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Researcher",
+                "instruction": "Find data",
+                "tools": ["web_search"],
+                "parallel_tool_calls": True,
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-4b",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is True
+        assert factory.specs[0].parallel_tool_calls is True
+
+    @pytest.mark.asyncio
+    async def test_create_agent_fails_for_partially_invalid_tools(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Bad tools",
+                "instruction": "Find data",
+                "tools": ["web_search", "nonexistent"],
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-5",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is False
+        assert "Unknown or unavailable tool IDs" in (result.error or "")
+        assert factory.specs == []
+
+    @pytest.mark.asyncio
+    async def test_create_agent_fails_for_unknown_tools(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        factory = self._FakeFactory()
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+        args = json.dumps(
+            {
+                "name": "Bad tools 2",
+                "instruction": "Find data",
+                "tools": ["nonexistent"],
+            }
+        )
+        ctx = ToolContext(
+            context=object(),
+            tool_name="create_agent",
+            tool_call_id="create-6",
+            tool_arguments=args,
+        )
+
+        result = await create_tool.on_invoke_tool(ctx, args)
+
+        assert result.success is False
+        assert "Unknown or unavailable tool IDs" in (result.error or "")
+        assert factory.specs == []
+
+    @pytest.mark.asyncio
+    async def test_list_available_tools_returns_metadata(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        tools = make_delegation_tools(
+            registry=registry,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {
+                "core_tools": {"description": "Built-in core tools"},
+                "web_search": {"description": "Search and read web pages"},
+            },
+        )
+        list_tools = next(t for t in tools if t.name == "list_available_tools")
+        args = json.dumps({})
+        ctx = ToolContext(
+            context=object(),
+            tool_name="list_available_tools",
+            tool_call_id="list-tools-1",
+            tool_arguments=args,
+        )
+
+        result = await list_tools.on_invoke_tool(ctx, args)
+
+        assert result.tool_ids == ["core_tools", "web_search"]
+        assert result.tool_descriptions["web_search"] == "Search and read web pages"
+
+    @pytest.mark.asyncio
+    async def test_create_agent_parallel_calls_register_unique_ids(self) -> None:
+        import json
+
+        from agents.tool_context import ToolContext
+
+        from core.agents.delegation_tools import make_delegation_tools
+
+        registry = AgentRegistry()
+        router = _make_mock_model_router()
+        tool_resolver = MagicMock(return_value=[])
+        factory = AgentFactory(router, tool_resolver, registry)
+        tools = make_delegation_tools(
+            registry=registry,
+            factory=factory,
+            get_available_tool_ids=lambda: ["core_tools", "web_search"],
+            get_tool_catalog=lambda: {"web_search": {"description": "Web search"}},
+        )
+        create_tool = next(t for t in tools if t.name == "create_agent")
+
+        async def _invoke(i: int):
+            args = json.dumps(
+                {
+                    "name": f"Parallel {i}",
+                    "instruction": "weather update",
+                    "tools": ["web_search"],
+                }
+            )
+            ctx = ToolContext(
+                context=object(),
+                tool_name="create_agent",
+                tool_call_id=f"parallel-{i}",
+                tool_arguments=args,
+            )
+            return await create_tool.on_invoke_tool(ctx, args)
+
+        results = await asyncio.gather(*[_invoke(i) for i in range(10)])
+
+        ids = [r.agent_id for r in results]
+        assert all(r.success for r in results)
+        assert len(set(ids)) == len(ids)
+        assert all(registry.get(agent_id) is not None for agent_id in ids)

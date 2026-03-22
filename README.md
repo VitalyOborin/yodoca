@@ -31,7 +31,7 @@
 | 🔌 **Extensions-only kernel** | Every feature — channels, memory, agents, schedulers — is an extension. Core has zero user-facing code. |
 | 📦 **Declarative agents** | Define a sub-agent in one `manifest.yaml`. No Python required. |
 | 🔄 **Multi-provider LLM** | OpenAI, Anthropic, LM Studio, OpenRouter — per-agent model routing from config. |
-| 💾 **Zero external deps** | SQLite for events, memory, sessions. No Redis, no Postgres, no cloud. |
+| 💾 **Zero external deps** | SQLite for events, memory, threads. No Redis, no Postgres, no cloud. |
 | 🛡 **Supervisor** | Auto-restart on crash, restart-by-file, backoff. Run `python -m supervisor` and forget. |
 | 🔐 **Secrets** | API keys in OS keyring (Windows Credential Manager, Keychain) or `.env` fallback. |
 | 🧭 **Onboarding** | Guided setup wizard when config is missing. Supervisor launches it automatically. |
@@ -79,7 +79,7 @@ All functionality lives in extensions under `sandbox/extensions/<extension_id>/`
 
 Extensions are "typed" by the protocols they implement (capabilities are detected at runtime):
 
-- `ChannelProvider` — receive user messages and send responses (reactive + proactive); CLI, Telegram
+- `ChannelProvider` — receive user messages and send responses (reactive + proactive); CLI, Telegram, Web
 - `StreamingChannelProvider` — incremental response delivery (token-by-token streaming)
 - `ToolProvider` — expose tools/functions to the orchestrator
 - `AgentProvider` — specialized agents invoked as tools (Builder, declarative agents)
@@ -136,7 +136,7 @@ Long-term memory is a graph-based extension (`memory` + `embedding`):
 - **Onboarding wizard** — guided setup when config is missing; Supervisor launches it automatically
 - **Secrets** — API keys in OS keyring (Windows Credential Manager, macOS Keychain) or `.env` fallback
 - Extension system with a minimal, generation-friendly contract (`manifest.yaml` + `main.py`)
-- Channels: CLI + (optional) Telegram; agent can choose channel via `list_channels` / `send_to_channel` tools
+- Channels: CLI, Telegram, **Web** (Vue 3 SPA + HTTP/SSE backend); agent can choose channel via `list_channels` / `send_to_channel` tools
 - Durable event bus (SQLite WAL) for asynchronous flows + observability
 - Scheduler extensions for cron-like automation (one-shot and recurring)
 - **Memory v2** — graph-based cognitive memory (nodes, edges, entities), hybrid FTS5 + vector search, Ebbinghaus decay, nightly consolidation
@@ -172,6 +172,18 @@ uv run python -m supervisor
 ```
 
 On first run, if `config/settings.yaml` is absent or incomplete, the Supervisor launches the **onboarding wizard** interactively. You can also run it manually: `uv run python -m onboarding`.
+
+### Web Interface (optional)
+
+The project includes a Vue 3 web frontend in `web/`. To run it alongside the backend:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in the browser. The Vite dev server proxies API calls to the backend (`http://127.0.0.1:8080`). See [docs/web.md](docs/web.md) for details.
 
 ---
 
@@ -247,6 +259,7 @@ sandbox/
   extensions/            # all extensions live here
     cli_channel/         # stdin/stdout REPL
     telegram_channel/    # Telegram Bot API (aiogram)
+    web_channel/         # HTTP + SSE API (FastAPI/uvicorn) for web frontends
     memory/              # graph-based long-term memory (FTS5 + vector + entities)
     embedding/           # embedding generation for memory search
     scheduler/           # one-shot and recurring events
@@ -259,6 +272,10 @@ sandbox/
     simple_agent/        # declarative sub-agent (manifest-only)
     ...
   data/                  # per-extension private data (SQLite, caches, etc.)
+
+web/                     # Vue 3 SPA frontend (standalone Node.js app)
+  src/                   # application source (pages, stores, components)
+  package.json           # npm dependencies and scripts
 
 scripts/                 # utilities
   reset.py               # wipe config, memory, secrets (fresh start)
@@ -285,13 +302,13 @@ name: Telegram Channel
 version: "0.2.0"
 description: |
   Telegram Bot API channel via aiogram long-polling.
-  Setup: save secret 'telegram_channel_token' (Bot API token from @BotFather),
+  Setup: save secret 'telegram_bot_token' (Bot API token from @BotFather),
   then call request_restart().
 entrypoint: main:TelegramChannelExtension
 depends_on:
   - kv
 config:
-  token_secret: telegram_channel_token
+  token_secret: telegram_bot_token
   polling_timeout: 10
   streaming_enabled: true
 enabled: true
@@ -342,7 +359,6 @@ This is a **single-user local** system.
 
 - Better extension packaging/versioning + compatibility checks
 - Optional WASM sandboxing for untrusted extensions
-- Web UI channel
 - Event retries / dead-letter support
 - MCP extension: bridge to Model Context Protocol servers (web search, filesystem, etc.) — [ADR 006](docs/adr/006-mcp-extension.md)
 
@@ -354,7 +370,8 @@ Detailed docs live in [`docs/`](docs/):
 
 - [Architecture](docs/architecture.md) — bootstrap flow, components, protocols
 - [Extensions](docs/extensions.md) — manifest, protocols, creating extensions
-- [Channels](docs/channels.md) — CLI, Telegram, agent channel tools
+- [Channels](docs/channels.md) — CLI, Telegram, Web channel
+- [Web Interface](docs/web.md) — frontend application, backend API, getting started
 - [Memory](docs/memory.md), [Scheduler](docs/scheduler.md), [Task Engine](docs/task_engine.md)
 - [Secrets](docs/secrets.md) — keyring vs `.env`, onboarding flow
 - [Configuration](docs/configuration.md), [Config (structure)](docs/config.md) — settings and extension config priority

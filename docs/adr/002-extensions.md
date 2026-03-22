@@ -148,7 +148,7 @@ Everything an extension can do — only through this object. No direct imports f
 class ExtensionContext:
     extension_id: str          # "telegram_channel" — for logs, data_dir
     config: dict               # values from manifest.yaml → config:
-    logger: Logger             # logging.getLogger(f"ext.{extension_id}")
+    logger: SubsystemLogger    # create_subsystem_logger(f"ext.{extension_id}") — ADR 036
 
     # ── User interaction ─────────────────────────────────────────────────
     on_user_message: Callable  # channel calls this when a message arrives

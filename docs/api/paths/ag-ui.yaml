@@ -1,0 +1,36 @@
+# AG-UI protocol path: /agent
+
+/agent:
+  post:
+    tags: [ag-ui]
+    summary: Run agent (AG-UI protocol)
+    description: >
+      AG-UI (Agent-User Interaction) protocol endpoint. Accepts RunAgentInput
+      and streams AG-UI events over Server-Sent Events. See
+      https://docs.ag-ui.com/introduction for protocol details.
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/XThreadId"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AgUIRunRequest"
+    responses:
+      "200":
+        description: AG-UI event stream (SSE)
+        content:
+          text/event-stream:
+            schema:
+              type: string
+              description: Server-Sent Events with AG-UI event types
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "422":
+        $ref: "#/components/responses/ValidationError"
+      "503":
+        $ref: "#/components/responses/BusyError"
+      "504":
+        $ref: "#/components/responses/TimeoutError"

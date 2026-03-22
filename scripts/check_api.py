@@ -2,7 +2,7 @@
 """Smoke test script for Yodoca Web Channel API endpoints.
 
 Runs against a live server and validates all endpoints from
-docs/api/web-channel-openapi.yaml.
+docs/api/openapi.yaml.
 
 Usage: uv run python scripts/check_api.py [--base-url URL] [--api-key KEY]
 """
@@ -50,10 +50,10 @@ def _validate_health(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _validate_session(data: dict[str, Any]) -> str | None:
+def _validate_thread(data: dict[str, Any]) -> str | None:
     for key in ("id", "channel_id", "created_at", "last_active_at", "is_archived"):
         if key not in data:
-            return f"missing {key} in session"
+            return f"missing {key} in thread"
     return None
 
 
@@ -106,7 +106,7 @@ def run_checks(
         timeout=timeout,
     )
 
-    session_id: str | None = None
+    thread_id: str | None = None
     project_id: str | None = None
 
     try:
@@ -127,46 +127,46 @@ def run_checks(
         else:
             failed_count += 1
 
-        # --- Sessions CRUD ---
-        resp = client.post("/api/sessions", json={"title": "Smoke test session"})
+        # --- Threads CRUD ---
+        resp = client.post("/api/threads", json={"title": "Smoke test thread"})
         if resp.status_code == 200:
             data = resp.json()
-            session = data.get("session")
-            err = _validate_session(session) if session else "missing session"
+            thread = data.get("thread")
+            err = _validate_thread(thread) if thread else "missing thread"
             if err is None:
-                session_id = session["id"]
+                thread_id = thread["id"]
         else:
             err = resp.text
         ok = resp.status_code == 200 and err is None
-        if _check("POST /api/sessions", ok, err or str(resp.status_code)):
+        if _check("POST /api/threads", ok, err or str(resp.status_code)):
             passed_count += 1
         else:
             failed_count += 1
 
-        resp = client.get("/api/sessions")
+        resp = client.get("/api/threads")
         if resp.status_code == 200:
             data = resp.json()
-            sessions = data.get("sessions", [])
+            threads = data.get("threads", [])
             err = None
-            if session_id and not any(s.get("id") == session_id for s in sessions):
-                err = f"created session {session_id} not in list"
-            elif not isinstance(sessions, list):
-                err = "sessions must be array"
+            if thread_id and not any(t.get("id") == thread_id for t in threads):
+                err = f"created thread {thread_id} not in list"
+            elif not isinstance(threads, list):
+                err = "threads must be array"
         else:
             err = resp.text
         ok = resp.status_code == 200 and err is None
-        if _check("GET /api/sessions", ok, err or str(resp.status_code)):
+        if _check("GET /api/threads", ok, err or str(resp.status_code)):
             passed_count += 1
         else:
             failed_count += 1
 
-        if session_id:
-            resp = client.get(f"/api/sessions/{session_id}")
+        if thread_id:
+            resp = client.get(f"/api/threads/{thread_id}")
             if resp.status_code == 200:
                 data = resp.json()
-                sess = data.get("session")
+                thr = data.get("thread")
                 hist = data.get("history")
-                err = _validate_session(sess) if sess else "missing session"
+                err = _validate_thread(thr) if thr else "missing thread"
                 if err is None and hist is None:
                     err = "missing history"
                 elif err is None and not isinstance(hist, list):
@@ -175,31 +175,31 @@ def run_checks(
                 err = resp.text
             ok = resp.status_code == 200 and err is None
             detail = err or str(resp.status_code)
-            if _check(f"GET /api/sessions/{session_id}", ok, detail):
+            if _check(f"GET /api/threads/{thread_id}", ok, detail):
                 passed_count += 1
             else:
                 failed_count += 1
 
             resp = client.patch(
-                f"/api/sessions/{session_id}",
-                json={"title": "Renamed smoke session"},
+                f"/api/threads/{thread_id}",
+                json={"title": "Renamed smoke thread"},
             )
             if resp.status_code == 200:
                 data = resp.json()
-                sess = data.get("session")
-                err = _validate_session(sess) if sess else "missing session"
-                if err is None and sess.get("title") != "Renamed smoke session":
+                thr = data.get("thread")
+                err = _validate_thread(thr) if thr else "missing thread"
+                if err is None and thr.get("title") != "Renamed smoke thread":
                     err = "title not updated"
             else:
                 err = resp.text
             ok = resp.status_code == 200 and err is None
             detail = err or str(resp.status_code)
-            if _check(f"PATCH /api/sessions/{session_id}", ok, detail):
+            if _check(f"PATCH /api/threads/{thread_id}", ok, detail):
                 passed_count += 1
             else:
                 failed_count += 1
 
-            resp = client.delete(f"/api/sessions/{session_id}")
+            resp = client.delete(f"/api/threads/{thread_id}")
             if resp.status_code == 200:
                 data = resp.json()
                 err = None if data.get("success") is True else "expected success=true"
@@ -207,7 +207,7 @@ def run_checks(
                 err = resp.text
             ok = resp.status_code == 200 and err is None
             detail = err or str(resp.status_code)
-            if _check(f"DELETE /api/sessions/{session_id}", ok, detail):
+            if _check(f"DELETE /api/threads/{thread_id}", ok, detail):
                 passed_count += 1
             else:
                 failed_count += 1
@@ -378,11 +378,11 @@ def run_checks(
             failed_count += 1
 
         # --- Error cases ---
-        resp = client.get("/api/sessions/nonexistent")
+        resp = client.get("/api/threads/nonexistent")
         err = _validate_error(resp.json()) if resp.status_code == 404 else resp.text
         ok = resp.status_code == 404 and err is None
         detail = err or str(resp.status_code)
-        if _check("GET /api/sessions/nonexistent -> 404", ok, detail):
+        if _check("GET /api/threads/nonexistent -> 404", ok, detail):
             passed_count += 1
         else:
             failed_count += 1

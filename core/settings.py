@@ -1,47 +1,15 @@
 """Load application settings from config/settings.yaml."""
 
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+from pydantic import ValidationError
 
-_DEFAULTS: dict[str, Any] = {
-    "supervisor": {
-        "restart_file": "sandbox/.restart_requested",
-        "restart_file_check_interval": 5,
-    },
-    "agents": {
-        "default": {
-            "provider": "openai",
-            "model": "gpt-5",
-        },
-        # Orchestrator has no entry here: when absent from settings.yaml it uses agents.default
-        # (ModelRouter.get_model("orchestrator") falls back to default). Optional overrides go in
-        # settings.yaml as agents.orchestrator (instructions, model, etc.).
-    },
-    "providers": {},
-    "event_bus": {
-        "db_path": "sandbox/data/event_journal.db",
-        "poll_interval": 5.0,
-        "batch_size": 3,
-        "max_retries": 3,
-        "busy_timeout": 5000,
-        "stale_timeout": 300,
-    },
-    "logging": {
-        "file": "sandbox/logs/app.log",
-        "level": "INFO",
-        "log_to_console": False,
-        "max_bytes": 10485760,  # 10 MB
-        "backup_count": 3,
-    },
-    "session": {
-        "timeout_sec": 1800,
-    },
-    "extensions": {},
-}
+from core.settings_models import AppSettings
 
-_cached: dict[str, Any] | None = None
+_cached: AppSettings | None = None
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -56,14 +24,62 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return base
 
 
+def format_validation_errors(exc: ValidationError, prefix: str = "") -> str:
+    """Format Pydantic errors as path -> message lines."""
+    lines: list[str] = []
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        path_parts = [str(p) for p in loc]
+        path = " -> ".join(path_parts)
+        if prefix:
+            path = f"{prefix}{path}" if path else prefix.rstrip(".")
+        msg = err.get("msg", "validation error")
+        lines.append(f"  {path}: {msg}")
+    return "\n".join(lines)
+
+
+def merge_settings_dict(config_dir: Path | None = None) -> dict[str, Any]:
+    """Deep-merge AppSettings defaults with config/settings.yaml. No validation.
+
+    Raises:
+        ValueError: If YAML is missing, invalid, or not a mapping at top level.
+        OSError: If the file cannot be read.
+    """
+    if config_dir is None:
+        config_dir = Path(__file__).resolve().parent.parent / "config"
+    path = config_dir / "settings.yaml"
+
+    merged = AppSettings().model_dump(mode="python")
+
+    if path.exists():
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if raw is None:
+            raw = {}
+        if not isinstance(raw, dict):
+            raise ValueError("settings.yaml must be a mapping at the top level")
+        _deep_merge(merged, cast(dict[str, Any], raw))
+
+    return merged
+
+
+def validate_app_settings(merged: dict[str, Any]) -> AppSettings:
+    """Validate merged settings dict. Raises ValidationError on failure."""
+    return AppSettings.model_validate(merged)
+
+
 def get_default_settings() -> dict[str, Any]:
-    """Return a deep copy of default settings. Used by onboarding config writer."""
-    return _deep_copy_nested(_DEFAULTS)
+    """Return default settings as dict. Used by onboarding config writer."""
+    return AppSettings().model_dump(mode="python")
 
 
-def get_setting(settings: dict[str, Any], path: str, default: Any = None) -> Any:
+def get_setting(
+    settings: AppSettings | dict[str, Any], path: str, default: Any = None
+) -> Any:
     """Get a nested value by dot path (e.g. 'supervisor.restart_file')."""
-    current: Any = settings
+    if isinstance(settings, AppSettings):
+        current: Any = settings.model_dump(mode="python")
+    else:
+        current = settings
     for part in path.split("."):
         if not isinstance(current, dict) or part not in current:
             return default
@@ -77,36 +93,26 @@ def reload_settings() -> None:
     _cached = None
 
 
-def load_settings(config_dir: Path | None = None) -> dict[str, Any]:
+def load_settings(config_dir: Path | None = None) -> AppSettings:
     """Load settings from config/settings.yaml. Returns merged defaults + file values."""
     global _cached
     if _cached is not None:
         return _cached
 
-    if config_dir is None:
-        config_dir = Path(__file__).resolve().parent.parent / "config"
-    path = config_dir / "settings.yaml"
+    try:
+        merged = merge_settings_dict(config_dir)
+    except yaml.YAMLError as e:
+        print(f"Configuration error: settings.yaml parse error:\n{e}", file=sys.stderr)
+        sys.exit(1)
+    except (ValueError, OSError) as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    result: dict[str, Any] = {}
-    for k, v in _DEFAULTS.items():
-        result[k] = _deep_copy_nested(v)
+    try:
+        _cached = validate_app_settings(merged)
+    except ValidationError as e:
+        print("Configuration error: invalid settings.yaml", file=sys.stderr)
+        print(format_validation_errors(e, prefix=""), file=sys.stderr)
+        sys.exit(1)
 
-    if path.exists():
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                _deep_merge(result, data)
-        except (yaml.YAMLError, OSError):
-            pass
-
-    _cached = result
-    return result
-
-
-def _deep_copy_nested(obj: Any) -> Any:
-    """Return a deep copy of nested dicts/lists for defaults."""
-    if isinstance(obj, dict):
-        return {k: _deep_copy_nested(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_deep_copy_nested(x) for x in obj]
-    return obj
+    return _cached

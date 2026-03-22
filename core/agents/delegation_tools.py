@@ -48,12 +48,16 @@ class CreateAgentResult(BaseModel):
     success: bool
     agent_id: str
     error: str | None = None
+    tools_requested: list[str] = Field(default_factory=list)
+    tools_assigned: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ListAvailableToolsResult(BaseModel):
     """Result of list_available_tools tool."""
 
     tool_ids: list[str] = Field(default_factory=list)
+    tool_descriptions: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelInfoResult(BaseModel):
@@ -70,6 +74,57 @@ class ListModelsResult(BaseModel):
     """Result of list_models tool."""
 
     models: list[ModelInfoResult] = Field(default_factory=list)
+
+
+def _normalize_tool_ids(tool_ids: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tool_id in tool_ids:
+        key = (tool_id or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
+
+
+def _validate_tool_ids(
+    tools: list[str] | None,
+    available_tool_ids: list[str],
+) -> CreateAgentResult | list[str]:
+    """Return normalized tool IDs for create_agent, or an error result."""
+    if tools is None:
+        return CreateAgentResult(
+            success=False,
+            agent_id="",
+            error=(
+                "tools is null. Pass explicit extension IDs in tools, "
+                "or pass tools=[] to create an agent without tools."
+            ),
+            tools_requested=[],
+            tools_assigned=[],
+            warnings=[],
+        )
+    requested_tools = _normalize_tool_ids(tools)
+    available_set = set(available_tool_ids)
+    if requested_tools:
+        invalid = [t for t in requested_tools if t not in available_set]
+        if invalid:
+            available = ", ".join(sorted(available_tool_ids))
+            return CreateAgentResult(
+                success=False,
+                agent_id="",
+                error=(
+                    "Unknown or unavailable tool IDs: "
+                    f"{', '.join(invalid)}. "
+                    f"Available: {available}"
+                ),
+                tools_requested=requested_tools,
+                tools_assigned=[],
+                warnings=[],
+            )
+        return requested_tools
+    return []
 
 
 def _record_to_agent_info(
@@ -96,6 +151,7 @@ def make_delegation_tools(
     factory: AgentFactory | None = None,
     get_available_tool_ids: Callable[[], list[str]] | None = None,
     catalog: ModelCatalog | None = None,
+    get_tool_catalog: Callable[[], dict[str, dict[str, Any]]] | None = None,
 ) -> list[Any]:
     """Create list_agents, delegate_task, optionally create_agent and list_models."""
 
@@ -106,8 +162,7 @@ def make_delegation_tools(
         available_only: if True, only returns agents that are not currently busy."""
         records = registry.list_agents(available_only=available_only)
         infos = [
-            _record_to_agent_info(r, registry.is_busy(r.id), catalog)
-            for r in records
+            _record_to_agent_info(r, registry.is_busy(r.id), catalog) for r in records
         ]
         return ListAgentsResult(agents=infos)
 
@@ -180,6 +235,7 @@ def make_delegation_tools(
             description: str = "",
             tools: list[str] | None = None,
             model: str | None = None,
+            parallel_tool_calls: bool = False,
             max_turns: int = 25,
         ) -> CreateAgentResult:
             """Create a specialized agent on-the-fly for a one-off task.
@@ -187,24 +243,51 @@ def make_delegation_tools(
             Use when no existing agent fits. After creation, use delegate_task
             with the returned agent_id. The agent expires after 30 min.
             description: short human-readable purpose shown in list_agents.
-            tools: extension IDs from list_available_tools.
+            tools semantics:
+            - null: invalid (pass explicit IDs or [])
+            - []: explicitly create a no-tools agent
+            - [ids...]: explicit extension IDs from list_available_tools (strict)
             model: optional; defaults to default model from settings.
+            parallel_tool_calls: allow the model to execute multiple tool calls
+            concurrently in a single turn. Defaults to false.
             """
-            tool_list = tools or []
+            available_tool_ids = (
+                get_available_tool_ids() if get_available_tool_ids is not None else []
+            )
+            validation = _validate_tool_ids(tools, available_tool_ids)
+            if isinstance(validation, CreateAgentResult):
+                return validation
+            assigned_tools = validation
+            requested_tools = assigned_tools
+            warnings: list[str] = []
+
             try:
                 spec = AgentSpec(
                     name=name,
                     instruction=instruction,
                     description=description,
-                    tools=tool_list,
+                    tools=assigned_tools,
                     model=model,
+                    parallel_tool_calls=parallel_tool_calls,
                     max_turns=max_turns,
                 )
                 agent_id = factory.create(spec)
-                return CreateAgentResult(success=True, agent_id=agent_id, error=None)
+                return CreateAgentResult(
+                    success=True,
+                    agent_id=agent_id,
+                    error=None,
+                    tools_requested=requested_tools,
+                    tools_assigned=assigned_tools,
+                    warnings=warnings,
+                )
             except Exception as e:
                 return CreateAgentResult(
-                    success=False, agent_id="", error=str(e)
+                    success=False,
+                    agent_id="",
+                    error=str(e),
+                    tools_requested=requested_tools,
+                    tools_assigned=assigned_tools,
+                    warnings=warnings,
                 )
 
         tools_list.append(create_agent)
@@ -215,10 +298,20 @@ def make_delegation_tools(
         async def list_available_tools() -> ListAvailableToolsResult:
             """List tool IDs usable when creating a dynamic agent.
 
-            Use with create_agent: pass these IDs in the tools parameter.
+            Use with create_agent:
+            - pass tool_ids as create_agent.tools values
+            - use descriptions for tool selection
             """
+            tool_ids = get_available_tool_ids()
+            descriptions: dict[str, str] = {}
+            if get_tool_catalog is not None:
+                catalog_data = get_tool_catalog()
+                for tool_id in tool_ids:
+                    meta = catalog_data.get(tool_id, {})
+                    descriptions[tool_id] = str(meta.get("description", "") or "")
             return ListAvailableToolsResult(
-                tool_ids=get_available_tool_ids()
+                tool_ids=tool_ids,
+                tool_descriptions=descriptions,
             )
 
         tools_list.append(list_available_tools)

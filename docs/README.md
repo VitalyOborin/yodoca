@@ -21,12 +21,14 @@ Documentation for the Yodoca AI agent platform (assistant4).
 |----------|-------------|
 | [memory.md](memory.md) | Memory system: layers, extensions, database, search, tools |
 | [channels.md](channels.md) | Channel providers: CLI, Telegram, Web |
-| [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml) | OpenAPI spec for Web Channel (ADR 026) |
+| [web.md](web.md) | Web interface: frontend app, backend API, architecture, getting started |
+| [api/openapi.yaml](api/openapi.yaml) | OpenAPI spec for Web Channel (ADR 026); see [api/README.md](api/README.md) for split structure |
 | [scheduler.md](scheduler.md) | Scheduler extension: one-shot and recurring events |
 | [task_engine.md](task_engine.md) | Task Engine: durable background tasks, checkpointing, HITL |
 | [llm.md](llm.md) | Model routing, providers, configuration |
 | [configuration.md](configuration.md) | Settings reference (config/settings.yaml) |
 | [config.md](config.md) | Application config: file location, structure, extension config priority |
+| [boundary-checks.md](boundary-checks.md) | Architecture boundary enforcement scripts (CI + pre-commit) |
 
 ---
 
@@ -58,9 +60,13 @@ Documentation for the Yodoca AI agent platform (assistant4).
 | [024](adr/024-unified-inbox.md) | Unified Inbox Extension |
 | [025](adr/025-mail-extension.md) | Mail Extension (Source Extension for Email Ingestion) |
 | [026](adr/026-web-channel.md) | Web Channel: HTTP API Extension for Frontend Applications |
-| [027](adr/027-session-project-domain-model.md) | Session and Project Domain Model in `session.db` |
-| [028](adr/028-unified-sessions-table.md) | Unified Sessions Table |
+| [027](adr/027-session-project-domain-model.md) | Thread and Project Domain Model in `session.db` |
+| [028](adr/028-unified-threads-table.md) | Unified Threads Table |
 | [029](adr/029-refactor-core-extensions-boundaries.md) | Refactor `core.extensions` Boundaries |
+| [030](adr/030-agui-endpoint.md) | AG-UI Endpoint for Web Channel |
+| [031](adr/031-remove-matryoshka-embeddings.md) | Remove Matryoshka Embedding Support |
+| [032](adr/032-setup-instructions-flow.md) | Wire setup_instructions for Extension Setup Flow |
+| [033](adr/033-dynamic-agent-tool-assignment-v1.md) | Dynamic Agent Tool Assignment v1 (Strict IDs) |
 
 ---
 
@@ -70,3 +76,10 @@ Documentation for the Yodoca AI agent platform (assistant4).
 - **Extensions:** `sandbox/extensions/<id>/`
 - **Config:** `config/settings.yaml`
 - **Core:** `core/` (`runner`, `events`, `llm`, `agents`, `extensions/{loader,routing,persistence}`)
+
+## Upgrade Note (Thread Rename)
+
+- The domain identifier was renamed from `session_id` to `thread_id`.
+- This release expects a clean data directory (no in-place migration).
+- Before first run, remove runtime SQLite data under `sandbox/data/` (hard reset).
+

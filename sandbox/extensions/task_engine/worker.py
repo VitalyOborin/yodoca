@@ -6,18 +6,23 @@ import logging
 import random
 import re
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from core.extensions.contract import AgentInvocationContext, AgentProvider
-
-from models import StepRecord, TaskRecord
-from state import TaskState, json_dumps_unicode
+from sandbox.extensions.task_engine.models import StepRecord, TaskRecord
+from sandbox.extensions.task_engine.state import TaskState, json_dumps_unicode
 
 logger = logging.getLogger(__name__)
 
 FINAL_MARKER = "<<TASK_COMPLETE>>"
+
+
+def _is_router_agent_task(agent_id: str, default_router_agent_id: str) -> bool:
+    """True if the task targets the primary MessageRouter agent (legacy or configured id)."""
+    return agent_id == default_router_agent_id or agent_id == "orchestrator"
 
 
 @dataclass
@@ -84,7 +89,11 @@ def _build_step_prompt(
         f"Step {state.step + 1} of {max_steps}.",
     ]
     if predecessor_result:
-        content = predecessor_result[:500] if len(predecessor_result) > 500 else predecessor_result
+        content = (
+            predecessor_result[:500]
+            if len(predecessor_result) > 500
+            else predecessor_result
+        )
         parts.append(f"Previous step result (from predecessor task):\n{content}")
     if state.context.get("subtask_results"):
         parts.append("Subtask results:")
@@ -142,7 +151,7 @@ async def renew_lease(db: Any, task_id: str, worker_id: str, lease_ttl: float) -
         UPDATE agent_task SET lease_exp = ?, updated_at = ?
         WHERE task_id = ? AND leased_by = ?
         """,
-        (time.time() + lease_ttl, time.time(), task_id, worker_id),
+        (time.time() + lease_ttl, int(time.time()), task_id, worker_id),
     )
     await conn.commit()
     return cursor.rowcount > 0
@@ -201,7 +210,7 @@ async def claim_next_task(
         SET status = 'running', leased_by = ?, lease_exp = ?, updated_at = ?
         WHERE task_id = ? AND status IN ('pending', 'retry_scheduled')
         """,
-        (worker_id, now + lease_ttl, now, task_id),
+        (worker_id, now + lease_ttl, int(now), task_id),
     )
     await conn.commit()
     if cursor.rowcount == 0:
@@ -220,7 +229,7 @@ async def _load_task(db: Any, task_id: str) -> TaskRecord | None:
     if not row:
         return None
     columns = [d[0] for d in cursor.description]
-    d = dict(zip(columns, row))
+    d = dict(zip(columns, row, strict=False))
     payload = (
         json.loads(d["payload"]) if isinstance(d["payload"], str) else d["payload"]
     )
@@ -244,8 +253,8 @@ async def _load_task(db: Any, task_id: str) -> TaskRecord | None:
         schedule_at=d["schedule_at"],
         leased_by=d["leased_by"],
         lease_exp=d["lease_exp"],
-        created_at=d["created_at"] or 0,
-        updated_at=d["updated_at"] or 0,
+        created_at=int(d["created_at"] or 0),
+        updated_at=int(d["updated_at"] or 0),
         after_task_id=d.get("after_task_id"),
         chain_id=d.get("chain_id"),
         chain_order=d.get("chain_order"),
@@ -257,7 +266,7 @@ async def save_checkpoint(db: Any, task_id: str, state: TaskState) -> None:
     conn = await db.ensure_conn()
     await conn.execute(
         "UPDATE agent_task SET checkpoint = ?, updated_at = ? WHERE task_id = ?",
-        (state.to_json(), time.time(), task_id),
+        (state.to_json(), int(time.time()), task_id),
     )
     await conn.commit()
 
@@ -384,6 +393,7 @@ async def execute_task(
     db: Any,
     ctx: Any,
     task: TaskRecord,
+    default_router_agent_id: str,
     get_agent: Callable[[str], AgentProvider | None],
     worker_id: str,
     lease_ttl: float,
@@ -400,7 +410,7 @@ async def execute_task(
             )
 
     try:
-        if task.agent_id == "orchestrator":
+        if _is_router_agent_task(task.agent_id, default_router_agent_id):
             result = await run_orchestrator_loop(
                 state, task, db, ctx, worker_id, lease_ttl
             )
@@ -420,14 +430,14 @@ async def execute_task(
         if row and row[0] in ("waiting_subtasks", "human_review"):
             await conn.execute(
                 "UPDATE agent_task SET leased_by = NULL, lease_exp = NULL, updated_at = ? WHERE task_id = ?",
-                (time.time(), task.task_id),
+                (int(time.time()), task.task_id),
             )
             await conn.commit()
             return
 
         await conn.execute(
             "UPDATE agent_task SET status = 'done', result = ?, error = NULL, updated_at = ? WHERE task_id = ?",
-            (json_dumps_unicode(result), time.time(), task.task_id),
+            (json_dumps_unicode(result), int(time.time()), task.task_id),
         )
         await conn.commit()
         await ctx.emit(
@@ -459,7 +469,7 @@ async def execute_task(
                 task.attempt_no + 1,
                 schedule_at,
                 str(e),
-                time.time(),
+                int(time.time()),
                 task.task_id,
             ),
         )
@@ -498,7 +508,7 @@ async def execute_task(
         conn = await db.ensure_conn()
         await conn.execute(
             "UPDATE agent_task SET status = 'failed', error = ?, updated_at = ? WHERE task_id = ?",
-            (str(e), time.time(), task.task_id),
+            (str(e), int(time.time()), task.task_id),
         )
         await conn.commit()
         await ctx.emit(
@@ -516,7 +526,7 @@ async def execute_task(
         conn = await db.ensure_conn()
         await conn.execute(
             "UPDATE agent_task SET status = 'failed', error = ?, updated_at = ? WHERE task_id = ?",
-            (str(e), time.time(), task.task_id),
+            (str(e), int(time.time()), task.task_id),
         )
         await conn.commit()
         await ctx.emit(
@@ -551,9 +561,7 @@ async def run_agent_loop(
 
     async def invoke_fn() -> StepOutcome:
         response = await agent.invoke(
-            _build_step_prompt(
-                state, max_steps, output_channel, predecessor_result
-            ),
+            _build_step_prompt(state, max_steps, output_channel, predecessor_result),
             step_context,
         )
         return StepOutcome(
@@ -591,9 +599,7 @@ async def run_orchestrator_loop(
 
     async def invoke_fn() -> StepOutcome:
         content = await ctx.invoke_agent_background(
-            _build_step_prompt(
-                state, max_steps, output_channel, predecessor_result
-            )
+            _build_step_prompt(state, max_steps, output_channel, predecessor_result)
         )
         return StepOutcome(content=content, status="success")
 

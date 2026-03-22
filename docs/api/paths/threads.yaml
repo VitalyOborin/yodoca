@@ -1,0 +1,134 @@
+# Thread domain paths: /api/threads, /api/threads/{thread_id}
+
+/api/threads:
+  get:
+    tags: [threads]
+    summary: List threads
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: Thread list
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                threads:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Thread"
+              required: [threads]
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+  post:
+    tags: [threads]
+    summary: Create thread
+    security:
+      - bearerAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateThreadRequest"
+    responses:
+      "200":
+        description: Created thread
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                thread:
+                  $ref: "#/components/schemas/Thread"
+              required: [thread]
+      "400":
+        $ref: "#/components/responses/ValidationError"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+/api/threads/{thread_id}:
+  get:
+    tags: [threads]
+    summary: Get thread metadata and history
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Thread metadata and history
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ThreadDetailResponse"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+  patch:
+    tags: [threads]
+    summary: Update thread metadata
+    description: >
+      `is_archived=true` hides the thread from default listings without
+      deleting `agent_messages`. Restore with `is_archived=false`.
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UpdateThreadRequest"
+    responses:
+      "200":
+        description: Updated thread
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                thread:
+                  $ref: "#/components/schemas/Thread"
+              required: [thread]
+      "400":
+        $ref: "#/components/responses/ValidationError"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+  delete:
+    tags: [threads]
+    summary: Archive thread
+    description: >
+      Soft-archives the thread. History is preserved and can be restored with
+      `PATCH /api/threads/{thread_id}` and `is_archived=false`.
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Archive result
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperationResult"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"

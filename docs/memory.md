@@ -1,6 +1,6 @@
 # Memory System
 
-Long-term graph-based cognitive memory for the assistant. Persists knowledge across sessions as a typed graph of nodes, edges, and entities. Surfaces relevant context before each agent response via intent-aware hybrid retrieval. Self-organises through nightly consolidation, decay, and enrichment.
+Long-term graph-based cognitive memory for the assistant. Persists knowledge across threads as a typed graph of nodes, edges, and entities. Surfaces relevant context before each agent response via intent-aware hybrid retrieval. Self-organises through nightly consolidation, decay, and enrichment.
 
 > **Relation to ADR 008.** The system was designed in [ADR 008](adr/008-memory-v2.md), replacing the flat-table memory from [ADR 005](adr/005-memory.md). Key changes: graph schema (nodes + edges + entities), LLM-powered write-path agent (replaces `memory_maintenance`, `memory_reflection`, and `ner` satellite extensions), intent-aware retrieval with graph traversal, and Ebbinghaus decay with access reinforcement.
 
@@ -10,10 +10,10 @@ Long-term graph-based cognitive memory for the assistant. Persists knowledge acr
 
 | Layer | Responsibility | Implementation |
 |---|---|---|
-| **Session memory** | Conversation context within a single discussion | OpenAI Agents SDK `SQLiteSession` — passed to `Runner.run` |
+| **Thread memory** | Conversation context within a single discussion | OpenAI Agents SDK `SQLiteThread` — passed to `Runner.run` |
 | **Long-term memory** | Cross-session facts, episodes, procedures, opinions | `memory` extension — SQLite graph database |
 
-Session memory is out of scope for this document. The two layers complement each other: session memory provides working context for the current conversation; long-term memory provides durable knowledge that survives restarts.
+Thread memory is out of scope for this document. The two layers complement each other: session memory provides working context for the current conversation; long-term memory provides durable knowledge that survives restarts.
 
 ---
 
@@ -51,7 +51,7 @@ A single extension that owns the graph database, all read/write operations, cont
 6. Creates the write-path `MemoryAgent` if `ModelRouter` is available.
 7. Creates `DecayService` with configured threshold.
 8. Subscribes to `user_message` and `agent_response` on the MessageRouter.
-9. Subscribes to `session.completed` on the EventBus.
+9. Subscribes to `thread.completed` on the EventBus.
 
 **Context injection (`ContextProvider`):**
 
@@ -63,13 +63,13 @@ Before every agent invocation the kernel calls `get_context(prompt)`. The extens
 4. Assembles context with budget shares: facts 40%, entity profiles 25%, temporal context 25%, evidence 10%.
 5. Returns a markdown block prepended to the system prompt, or `None` if no matches.
 
-**Session change detection:**
+**Thread change detection:**
 
-When a `user_message` arrives with a new `session_id`, the extension registers the session and triggers consolidation of the old session. This ensures completed sessions are processed promptly — without waiting for the nightly schedule.
+When a `user_message` arrives with a new `thread_id`, the extension registers the thread and triggers consolidation of the old thread. This ensures completed threads are processed promptly — without waiting for the nightly schedule.
 
 **Nightly maintenance (`SchedulerProvider`, daily 03:00):**
 
-1. **Consolidate** pending sessions via the write-path agent.
+1. **Consolidate** pending threads via the write-path agent.
 2. **Decay** — apply Ebbinghaus decay to non-episodic nodes; prune below threshold.
 3. **Enrich** — generate LLM summaries for entities with sparse profiles.
 4. **Causal inference** — analyze consecutive episode pairs for cause-effect relationships.
@@ -105,7 +105,7 @@ CREATE TABLE nodes (
 
     source_type      TEXT,     -- conversation | tool_result | extraction | consolidation
     source_role      TEXT,     -- user | orchestrator | memory_agent
-    session_id       TEXT,     -- links episodic nodes to their conversation session
+    thread_id       TEXT,     -- links episodic nodes to their conversation thread
     attributes       TEXT DEFAULT '{}'
 );
 ```
@@ -156,7 +156,7 @@ CREATE TABLE edges (
 
 | Type | Created by | Purpose |
 |---|---|---|
-| `temporal` | Hot path (automatic) | Links consecutive episodes within a session. Enables timeline traversal. |
+| `temporal` | Hot path (automatic) | Links consecutive episodes within a thread. Enables timeline traversal. |
 | `causal` | Nightly maintenance (LLM inference) | Cause-effect relationships between episodes. Default `confidence = 0.7`. |
 | `entity` | Write-path agent | Links nodes sharing the same entity mention. |
 | `derived_from` | Write-path agent | Links extracted facts to their source episodes (provenance). |
@@ -202,13 +202,13 @@ CREATE TABLE node_entities (
 
 ---
 
-### `sessions_consolidations`
+### `thread_consolidations`
 
-Tracks session lifecycle for consolidation. Registered when a `user_message` with a new `session_id` is first seen.
+Tracks thread lifecycle for consolidation. Registered when a `user_message` with a new `thread_id` is first seen.
 
 ```sql
-CREATE TABLE sessions_consolidations (
-    session_id       TEXT PRIMARY KEY,
+CREATE TABLE thread_consolidations (
+    thread_id       TEXT PRIMARY KEY,
     first_seen_at    INTEGER NOT NULL,
     consolidated_at  INTEGER           -- NULL = pending; non-NULL = done
 );
@@ -221,7 +221,7 @@ CREATE TABLE sessions_consolidations (
 | Table | Purpose |
 |---|---|
 | `nodes_fts` | FTS5 full-text search on `nodes.content`. Kept in sync by INSERT/UPDATE/DELETE triggers. |
-| `vec_nodes` | sqlite-vec KNN search. 256-dimensional float32 embeddings keyed by `node_id`. |
+| `vec_nodes` | sqlite-vec KNN search. Float32 embeddings keyed by `node_id`, using the embedding model's native dimension. |
 | `vec_entities` | sqlite-vec KNN search for entity embeddings. |
 
 ---
@@ -280,13 +280,13 @@ The `memory` extension implements four search strategies, combined via Reciproca
 
 | Tool | Description |
 |---|---|
-| `is_session_consolidated` | Idempotency check before processing. |
-| `get_session_episodes` | Fetch session episodes paginated. |
+| `is_thread_consolidated` | Idempotency check before processing. |
+| `get_thread_episodes` | Fetch thread episodes paginated. |
 | `save_nodes_batch` | Save extracted facts/procedures/opinions with `derived_from` edges and batch embeddings. |
 | `extract_and_link_entities` | LLM-powered entity extraction and resolution for a batch of nodes. |
 | `detect_conflicts` | Hybrid search for potentially contradicting facts. |
 | `resolve_conflict` | Soft-delete old fact, create `supersedes` edge. |
-| `mark_session_consolidated` | Record consolidation completion. |
+| `mark_thread_consolidated` | Record consolidation completion. |
 | `save_causal_edges` | Create `causal` edges between episode pairs (confidence 0.7). |
 | `update_entity_summary` | Update entity summary and re-embed. |
 
@@ -298,10 +298,10 @@ The `memory` extension implements four search strategies, combined via Reciproca
 
 ```
 user_message / agent_response event
-  → generate episodic node (type='episodic', content, session_id, source_role)
+  → generate episodic node (type='episodic', content, thread_id, source_role)
   → submit to write queue (fire-and-forget)
   → FTS5 trigger fires automatically on INSERT
-  → query last episode in session → create temporal edge (fire-and-forget)
+  → query last episode in thread → create temporal edge (fire-and-forget)
   → if embedding available: asyncio.create_task(slow_path)
 ```
 
@@ -328,29 +328,29 @@ ContextProvider.get_context(prompt)
   → return formatted markdown or None
 ```
 
-### Session consolidation (triggered on session switch + nightly at 03:00)
+### Thread consolidation (triggered on thread switch + nightly at 03:00)
 
 ```
-new session_id detected in user_message
-  → ensure_session(session_id)
-  → asyncio.create_task(_consolidate_session(old_session_id))
+new thread_id detected in user_message
+  → ensure_thread(thread_id)
+  → asyncio.create_task(_consolidate_thread(old_thread_id))
 
-_consolidate_session(session_id)
-  → write_agent.consolidate_session(session_id):
-      is_session_consolidated?  → skip if true
-      get_session_episodes (paginated)
+_consolidate_thread(thread_id)
+  → write_agent.consolidate_thread(thread_id):
+      is_thread_consolidated?  → skip if true
+      get_thread_episodes (paginated)
       [LLM] extract semantic facts, procedural patterns, opinions
       save_nodes_batch → INSERT nodes + derived_from edges + batch embed
       extract_and_link_entities → resolve or create entity anchors
       detect_conflicts → resolve_conflict if needed
-      mark_session_consolidated
+      mark_thread_consolidated
 ```
 
 ### Nightly maintenance (daily at 03:00)
 
 ```
 execute_task("run_nightly_maintenance")
-  1. Consolidate pending sessions (for each unconsolidated session)
+  1. Consolidate pending threads (for each unconsolidated thread)
   2. Apply Ebbinghaus decay + prune below threshold
   3. Entity enrichment (LLM summaries for entities with ≥3 mentions and no summary)
   4. Causal inference (analyze consecutive episode pairs for cause-effect)
@@ -376,7 +376,6 @@ All configuration is in `sandbox/extensions/memory/manifest.yaml`:
 
 | Key | Default | Description |
 |---|---|---|
-| `embedding_dimensions` | 256 | Vector embedding dimensions |
 | `decay_threshold` | 0.05 | Prune nodes below this confidence |
 | `decay_rate_default` | 0.1 | Default λ in decay formula |
 | `entity_enrichment_min_mentions` | 3 | Min mentions before entity enrichment |
@@ -392,7 +391,9 @@ All configuration is in `sandbox/extensions/memory/manifest.yaml`:
 
 ## Embedding integration
 
-The `embedding` extension provides vector embeddings used by memory for semantic search. Uses `text-embedding-3-large` with 256-dimensional Matryoshka reduction.
+The `embedding` extension provides vector embeddings used by memory for semantic search. Memory stores embeddings at the model's native dimension and does not apply Matryoshka reduction or request reduced dimensions from providers.
+
+At startup, memory probes the configured embedding model once to detect the native vector size. The active dimension is persisted in `maintenance_metadata` and used to create sqlite-vec tables only when the dimension changes.
 
 The memory extension calls embedding at several points:
 
@@ -403,3 +404,4 @@ The memory extension calls embedding at several points:
 - **Entity enrichment** — re-embed entity summaries.
 
 If the `embedding` extension is unavailable, memory falls back to FTS5-only search with `KeywordIntentClassifier`.
+

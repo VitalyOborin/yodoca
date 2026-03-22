@@ -1,6 +1,5 @@
 """ExtensionContextBuilder: construct ExtensionContext for one extension."""
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -9,13 +8,23 @@ from core.extensions.context import ExtensionContext
 from core.extensions.instructions import resolve_instructions
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.persistence.project_service import ProjectService
-from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.llm import ModelRouterProtocol
+from core.logging_config import create_subsystem_logger
+from core.settings_models import AppSettings
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
     from core.events.bus import EventBus
+
+
+def merge_extension_config(
+    settings: AppSettings, ext_id: str, manifest: ExtensionManifest
+) -> dict[str, Any]:
+    """Merge manifest config with settings.extensions.<ext_id> overrides (overrides win)."""
+    overrides = settings.extensions.get(ext_id, {}) or {}
+    return {**manifest.config, **overrides}
 
 
 class ExtensionContextBuilder:
@@ -25,7 +34,7 @@ class ExtensionContextBuilder:
         self,
         extensions_dir: Path,
         data_dir: Path,
-        settings: dict[str, Any],
+        settings: AppSettings,
         model_router: ModelRouterProtocol | None,
         shutdown_event: Any,
         event_bus: "EventBus | None",
@@ -50,13 +59,12 @@ class ExtensionContextBuilder:
         ext_id: str,
         manifest: ExtensionManifest,
         router: MessageRouter,
-        session_manager: SessionManager,
+        thread_manager: ThreadManager,
         project_service: ProjectService | None,
     ) -> ExtensionContext:
         """Create ExtensionContext for ext_id and manifest."""
         data_dir_path = self._data_dir / ext_id
-        overrides = self._settings.get("extensions", {}).get(ext_id, {}) or {}
-        config = {**manifest.config, **overrides}
+        config = merge_extension_config(self._settings, ext_id, manifest)
         resolved_tools = self._resolve_agent_tools(manifest)
         resolved_instructions = self._resolve_agent_instructions(manifest, ext_id)
         agent_model = manifest.agent.model if manifest.agent else ""
@@ -66,9 +74,9 @@ class ExtensionContextBuilder:
         return ExtensionContext(
             extension_id=ext_id,
             config=config,
-            logger=logging.getLogger(f"ext.{ext_id}"),
+            logger=create_subsystem_logger(f"ext.{ext_id}"),
             router=router,
-            session_manager=session_manager,
+            thread_manager=thread_manager,
             project_service=project_service,
             get_extension=self._get_extension_for(ext_id),
             data_dir_path=data_dir_path,
@@ -81,6 +89,7 @@ class ExtensionContextBuilder:
             event_bus=self._event_bus,
             agent_registry=self._agent_registry,
             restart_file_path=self._restart_file_path,
+            default_agent_id=self._settings.default_agent,
         )
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:

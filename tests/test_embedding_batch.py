@@ -28,7 +28,6 @@ def ext_with_embedder(mock_embedder):
     ext = EmbeddingExtension()
     ext._embedder = mock_embedder
     ext._default_model = "text-embedding-3-large"
-    ext._default_dimensions = 256
     return ext
 
 
@@ -46,6 +45,7 @@ class TestEmbedBatch:
         mock_embedder.embed_batch.assert_called_once()
         call_args = mock_embedder.embed_batch.call_args
         assert call_args.args[0] == ["hello", "world"]
+        assert call_args.kwargs == {"model": "text-embedding-3-large"}
 
     @pytest.mark.asyncio
     async def test_embed_batch_handles_empty_strings(

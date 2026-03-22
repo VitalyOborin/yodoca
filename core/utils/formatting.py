@@ -4,12 +4,11 @@ Thin facade over the `humanize` library, providing a stable internal API
 that all extensions can import without coupling to third-party signatures.
 """
 
-import time as _time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import humanize
 
-_LOCAL_TZ = datetime.now(timezone.utc).astimezone().tzinfo
+_LOCAL_TZ = datetime.now(UTC).astimezone().tzinfo
 
 
 def relative_time(epoch: int | None) -> str:
@@ -19,7 +18,7 @@ def relative_time(epoch: int | None) -> str:
     """
     if not epoch or epoch <= 0:
         return ""
-    dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+    dt = datetime.fromtimestamp(epoch, tz=UTC)
     return humanize.naturaltime(dt)
 
 
@@ -42,7 +41,7 @@ def format_event_time(ts: int | None) -> dict[str, str]:
     }
     if not ts or ts <= 0:
         return empty
-    utc_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    utc_dt = datetime.fromtimestamp(ts, tz=UTC)
     local_dt = utc_dt.astimezone(_LOCAL_TZ)
     tz_name = local_dt.strftime("%Z")
     return {

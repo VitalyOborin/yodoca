@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-
 # --- Tool result models (returned by Orchestrator tools) ---
 
 
@@ -28,8 +27,10 @@ class TaskStatusResult(BaseModel):
     attempt_no: int
     partial_result: str | None = None
     error: str | None = None
-    created_at: float = 0.0
-    updated_at: float = 0.0
+    created_at: int = 0
+    updated_at: int = 0
+    chain_id: str | None = None
+    chain_order: int | None = None
 
 
 class ActiveTasksResult(BaseModel):
@@ -104,8 +105,8 @@ class TaskRecord:
     schedule_at: float | None
     leased_by: str | None
     lease_exp: float | None
-    created_at: float
-    updated_at: float
+    created_at: int
+    updated_at: int
     after_task_id: str | None = None
     chain_id: str | None = None
     chain_order: int | None = None
@@ -126,4 +127,4 @@ class StepRecord:
     tokens_used: int | None = None
     duration_ms: int | None = None
     error_code: str | None = None
-    created_at: float = 0.0
+    created_at: int = 0

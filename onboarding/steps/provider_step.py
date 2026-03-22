@@ -1,9 +1,11 @@
 """Provider selection and credential collection step.
 
-Sequential add-one-at-a-time flow: select provider -> credentials -> model -> add another?
+Sequential add-one-at-a-time flow:
+select provider -> credentials -> model -> add another?
 """
 
 from collections.abc import Callable
+from typing import cast
 
 import questionary
 from questionary import Choice
@@ -19,7 +21,28 @@ _ALL_PROVIDERS = [
 ]
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
-    "openai": ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-4o", "gpt-4o-mini"],
+    "openai": [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.3",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+        "gpt-5.2-pro",
+        "gpt-5.2-codex",
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex-max",
+        "gpt-5gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5-codex",
+        "gpt-5-pro",
+        "gpt-4.1",
+        "gpt-4.1-minigpt-4.1-nano",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ],
     "anthropic": [
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-6",
@@ -41,18 +64,15 @@ def run_provider_step(state: WizardState) -> bool:
     print("\nWelcome to Yodoca setup!\n")
 
     while True:
-        remaining = [
-            Choice(label, pid)
-            for label, pid in _ALL_PROVIDERS
-            if pid not in state.providers
-        ]
-        if not remaining:
-            break
+        all_choices = [Choice(label, pid) for label, pid in _ALL_PROVIDERS]
 
         prompt = (
             "Select a provider:" if not state.providers else "Select another provider:"
         )
-        choice = questionary.select(prompt, choices=remaining, style=STYLE).ask()
+        choice = cast(
+            str | None,
+            questionary.select(prompt, choices=all_choices, style=STYLE).ask(),
+        )
         if choice is None:
             return False
 
@@ -84,9 +104,9 @@ def add_provider_credentials_only(state: WizardState, provider_id: str) -> bool:
     return collector(state)
 
 
-def get_provider_choices_not_in_state(state: WizardState) -> list[tuple[str, str]]:
-    """Return (label, provider_id) for providers not yet in state. For 'Add new provider' menu."""
-    return [(label, pid) for label, pid in _ALL_PROVIDERS if pid not in state.providers]
+def get_provider_choices() -> list[tuple[str, str]]:
+    """Return all available provider choices."""
+    return list(_ALL_PROVIDERS)
 
 
 def _add_provider(state: WizardState, provider_id: str) -> bool:
@@ -113,11 +133,14 @@ def _select_model(provider_id: str) -> str | None:
     choices: list[Choice] = [Choice(m, m) for m in models]
     choices.append(Choice("Enter model name manually...", _MANUAL_ENTRY))
 
-    selected = questionary.select(
-        "Default model:",
-        choices=choices,
-        style=STYLE,
-    ).ask()
+    selected = cast(
+        str | None,
+        questionary.select(
+            "Default model:",
+            choices=choices,
+            style=STYLE,
+        ).ask(),
+    )
     if selected is None:
         return None
     if selected == _MANUAL_ENTRY:
@@ -129,9 +152,9 @@ def _ask_until_nonempty(prompt: str, is_password: bool = False) -> str | None:
     """Prompt until non-empty input or user cancelled. Returns None on cancel."""
     while True:
         if is_password:
-            val = questionary.password(prompt, style=STYLE).ask()
+            val = cast(str | None, questionary.password(prompt, style=STYLE).ask())
         else:
-            val = questionary.text(prompt, style=STYLE).ask()
+            val = cast(str | None, questionary.text(prompt, style=STYLE).ask())
         if val is None:
             return None
         if val and val.strip():
@@ -184,7 +207,7 @@ def _collect_openrouter(state: WizardState) -> bool:
 
 
 def _collect_lm_studio(state: WizardState) -> bool:
-    """Collect LM Studio base URL. Returns False if user cancelled."""
+    """Collect LM Studio base URL and API key. Returns False if user cancelled."""
     base_url = questionary.text(
         "LM Studio / local API base URL:",
         default="http://127.0.0.1:1234/v1",
@@ -192,19 +215,30 @@ def _collect_lm_studio(state: WizardState) -> bool:
     ).ask()
     if base_url is None:
         return False
+
+    api_key = questionary.password(
+        "Local model API key (hidden; press Enter for dummy):",
+        style=STYLE,
+    ).ask()
+    if api_key is None:
+        return False
+
+    state.env_vars["LM_STUDIO_API_KEY"] = api_key.strip() or "dummy"
     if base_url.strip():
         state.providers["lm_studio"] = {
             "type": "openai_compatible",
             "base_url": base_url.strip().rstrip("/"),
-            "api_key_literal": "lm-studio",
+            "api_key_secret": "LM_STUDIO_API_KEY",
             "supports_hosted_tools": False,
         }
     return True
 
 
-_CREDENTIAL_COLLECTORS.update({
-    "openai": _collect_openai,
-    "anthropic": _collect_anthropic,
-    "openrouter": _collect_openrouter,
-    "lm_studio": _collect_lm_studio,
-})
+_CREDENTIAL_COLLECTORS.update(
+    {
+        "openai": _collect_openai,
+        "anthropic": _collect_anthropic,
+        "openrouter": _collect_openrouter,
+        "lm_studio": _collect_lm_studio,
+    }
+)

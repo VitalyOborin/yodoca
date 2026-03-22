@@ -19,7 +19,7 @@ class CliChannelExtension:
     _RESPONSE_TIMEOUT_SEC = 120
 
     def __init__(self) -> None:
-        self.context: "ExtensionContext | None" = None
+        self.context: ExtensionContext | None = None
         self._input_task: asyncio.Task[Any] | None = None
         self._streaming_enabled = True
         self._stream_buffer = ""
@@ -109,20 +109,6 @@ class CliChannelExtension:
             },
         )
 
-    async def _wait_for_response_then_yield(self) -> None:
-        """Wait for agent response (with timeout), then yield for event delivery."""
-        if self._response_complete.is_set():
-            return
-        try:
-            await asyncio.wait_for(
-                self._response_complete.wait(),
-                timeout=self._RESPONSE_TIMEOUT_SEC,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Timed out waiting for agent response")
-            self._response_complete.set()
-        await asyncio.sleep(0.05)
-
     async def _process_one_intercept(self) -> bool:
         """Process one pending intercept (MCP approval or secure input). Return True if processed."""
         try:
@@ -138,8 +124,10 @@ class CliChannelExtension:
     async def _input_loop(self) -> None:
         assert self.context is not None, "initialize() must be called before start()"
         while True:
-            await self._wait_for_response_then_yield()
             if await self._process_one_intercept():
+                continue
+            if not self._response_complete.is_set():
+                await asyncio.sleep(0.05)
                 continue
             try:
                 line = await asyncio.to_thread(input, "> ")
@@ -181,7 +169,10 @@ class CliChannelExtension:
         print("Approved." if approved else "Rejected.")
 
     async def _read_secret_prompt(self, prompt: str) -> str | None:
-        """Read a secret via getpass. Returns None on cancel/EOF/empty; else the trimmed value."""
+        """Read a secret from the user. Returns None on cancel/EOF/empty.
+
+        Uses getpass on every platform so the value is not echoed in terminal.
+        """
         while True:
             try:
                 value = await asyncio.to_thread(getpass.getpass, prompt)
@@ -195,7 +186,7 @@ class CliChannelExtension:
             return value
 
     async def _handle_secure_input(self, req: dict[str, Any]) -> None:
-        """Collect secret via getpass, store in keyring, emit synthetic confirmation."""
+        """Collect secret via hidden prompt, store in keyring, emit synthetic confirmation."""
         secret_id = req["secret_id"]
         prompt = req["prompt"]
         framed = (

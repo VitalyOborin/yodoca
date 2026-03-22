@@ -1,4 +1,4 @@
-"""Tracing extension tools: get_execution_trace, get_trace_stats."""
+"""Tracing extension tools: history queries and analytics."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class TraceSpanResult(BaseModel):
     duration_ms: float | None = None
     token_input: int | None = None
     token_output: int | None = None
+    cost_usd: float | None = None
 
 
 class TraceTreeResult(BaseModel):
@@ -36,74 +37,145 @@ class TraceTreeResult(BaseModel):
     error: str | None = None
 
 
-class TraceStatsResult(BaseModel):
+class SessionStatsResult(BaseModel):
     success: bool = True
-    total_spans: int = 0
-    completed: int = 0
-    errors: int = 0
-    running: int = 0
-    total_token_input: int = 0
-    total_token_output: int = 0
-    avg_duration_ms: float = 0.0
+    session_id: str = ""
+    turns: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
     top_tools: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+
+
+class ToolUsageResult(BaseModel):
+    success: bool = True
+    usage: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None
+
+
+class CostReportResult(BaseModel):
+    success: bool = True
+    total_cost_usd: float = 0.0
+    by_session: list[dict[str, Any]] = Field(default_factory=list)
+    by_model: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ExplainResult(BaseModel):
+    success: bool = True
+    explanation: str = ""
+    error: str | None = None
+
+
+def _span_to_result(span: Any) -> TraceSpanResult:
+    return TraceSpanResult(
+        id=span.id,
+        session_id=span.session_id,
+        correlation_id=span.correlation_id,
+        parent_span_id=span.parent_span_id,
+        span_type=span.span_type.value,
+        name=span.name,
+        input_summary=span.input_summary,
+        output_summary=span.output_summary,
+        status=span.status.value,
+        error_message=span.error_message,
+        started_at=span.started_at,
+        completed_at=span.completed_at,
+        duration_ms=span.duration_ms,
+        token_input=span.token_input,
+        token_output=span.token_output,
+        cost_usd=span.cost_usd,
+    )
 
 
 def build_tools(storage: TracingStorage) -> list[Any]:
     """Build tracing tools with access to storage."""
 
-    @function_tool(name_override="get_execution_trace", strict_mode=False)
-    async def get_execution_trace(session_id: str) -> TraceTreeResult:
-        """Get the execution trace tree for a session. Returns all spans ordered by time."""
+    @function_tool(name_override="tracing_get_last_trace", strict_mode=False)
+    async def tracing_get_last_trace(session_id: str) -> TraceTreeResult:
         try:
-            spans = await storage.get_trace_tree(session_id)
+            spans = await storage.get_last_trace(session_id)
             return TraceTreeResult(
                 success=True,
                 session_id=session_id,
-                spans=[
-                    TraceSpanResult(
-                        id=s.id,
-                        session_id=s.session_id,
-                        correlation_id=s.correlation_id,
-                        parent_span_id=s.parent_span_id,
-                        span_type=s.span_type.value,
-                        name=s.name,
-                        input_summary=s.input_summary,
-                        output_summary=s.output_summary,
-                        status=s.status.value,
-                        error_message=s.error_message,
-                        started_at=s.started_at,
-                        completed_at=s.completed_at,
-                        duration_ms=s.duration_ms,
-                        token_input=s.token_input,
-                        token_output=s.token_output,
-                    )
-                    for s in spans
-                ],
+                spans=[_span_to_result(s) for s in spans],
                 total=len(spans),
             )
         except Exception as e:
             return TraceTreeResult(success=False, session_id=session_id, error=str(e))
 
-    @function_tool(name_override="get_trace_stats", strict_mode=False)
-    async def get_trace_stats(session_id: str = "") -> TraceStatsResult:
-        """Get aggregated trace statistics. Optionally filter by session_id."""
+    @function_tool(name_override="tracing_get_session_stats", strict_mode=False)
+    async def tracing_get_session_stats(session_id: str) -> SessionStatsResult:
         try:
-            stats = await storage.get_trace_stats(
-                session_id=session_id if session_id else None
-            )
-            return TraceStatsResult(
+            stats = await storage.get_session_stats(session_id)
+            return SessionStatsResult(
                 success=True,
-                total_spans=stats.get("total_spans", 0),
-                completed=stats.get("completed", 0),
-                errors=stats.get("errors", 0),
-                running=stats.get("running", 0),
-                total_token_input=stats.get("total_token_input", 0),
-                total_token_output=stats.get("total_token_output", 0),
-                avg_duration_ms=stats.get("avg_duration_ms", 0.0),
-                top_tools=stats.get("top_tools", []),
+                session_id=session_id,
+                turns=int(stats.get("turns", 0)),
+                tokens_in=int(stats.get("tokens_in", 0)),
+                tokens_out=int(stats.get("tokens_out", 0)),
+                cost_usd=float(stats.get("cost_usd", 0.0)),
+                top_tools=list(stats.get("top_tools", [])),
             )
         except Exception as e:
-            return TraceStatsResult(success=False, error=str(e))
+            return SessionStatsResult(
+                success=False, session_id=session_id, error=str(e)
+            )
 
-    return [get_execution_trace, get_trace_stats]
+    @function_tool(name_override="tracing_get_tool_usage", strict_mode=False)
+    async def tracing_get_tool_usage(session_id: str = "") -> ToolUsageResult:
+        try:
+            usage = await storage.get_tool_usage(session_id=session_id or None)
+            return ToolUsageResult(success=True, usage=usage)
+        except Exception as e:
+            return ToolUsageResult(success=False, error=str(e))
+
+    @function_tool(name_override="tracing_get_cost_report", strict_mode=False)
+    async def tracing_get_cost_report(session_id: str = "") -> CostReportResult:
+        try:
+            report = await storage.get_cost_report(session_id=session_id or None)
+            return CostReportResult(
+                success=True,
+                total_cost_usd=float(report.get("total_cost_usd", 0.0)),
+                by_session=list(report.get("by_session", [])),
+                by_model=list(report.get("by_model", [])),
+            )
+        except Exception as e:
+            return CostReportResult(success=False, error=str(e))
+
+    @function_tool(name_override="tracing_explain_last_turn", strict_mode=False)
+    async def tracing_explain_last_turn(session_id: str) -> ExplainResult:
+        try:
+            spans = await storage.get_last_trace(session_id)
+            if not spans:
+                return ExplainResult(
+                    success=True,
+                    explanation="No trace data found for this session yet.",
+                )
+            tool_spans = [s for s in spans if s.span_type.value == "tool_call"]
+            total_tokens = sum(
+                (s.token_input or 0) + (s.token_output or 0) for s in spans
+            )
+            total_cost = sum(float(s.cost_usd or 0.0) for s in spans)
+            if tool_spans:
+                calls = ", ".join(s.name for s in tool_spans[:5])
+                call_summary = f"called tools: {calls}"
+            else:
+                call_summary = "no tool calls were detected"
+            explanation = (
+                f"The agent processed the last turn and {call_summary}. "
+                f"Total spans: {len(spans)}, tool calls: {len(tool_spans)}, "
+                f"tokens: {total_tokens}, estimated cost: ${total_cost:.6f}."
+            )
+            return ExplainResult(success=True, explanation=explanation)
+        except Exception as e:
+            return ExplainResult(success=False, error=str(e))
+
+    return [
+        tracing_get_last_trace,
+        tracing_get_session_stats,
+        tracing_get_tool_usage,
+        tracing_get_cost_report,
+        tracing_explain_last_turn,
+    ]

@@ -2,60 +2,92 @@
 
 import asyncio
 import logging
-import sys
 import time
 import uuid
-from pathlib import Path
-
-from core.extensions.contract import TurnContext
-from core.events.topics import SystemTopics
-from core.llm.capabilities import EmbeddingCapability
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
 
 from agents import ModelSettings
+from pydantic import BaseModel, ConfigDict
 
-from agent import create_memory_agent
-from agent_tools import build_write_path_tools
-from decay import DecayService
-from retrieval import (
+from core.events.topics import SystemTopics
+from core.extensions.contract import TurnContext
+from core.llm.capabilities import EmbeddingCapability
+from sandbox.extensions.memory.agent import create_memory_agent
+from sandbox.extensions.memory.agent_tools import build_write_path_tools
+from sandbox.extensions.memory.decay import DecayService
+from sandbox.extensions.memory.retrieval import (
     EmbeddingIntentClassifier,
     KeywordIntentClassifier,
     MemoryRetrieval,
     classify_query_complexity,
     get_adaptive_params,
 )
-from storage import MemoryStorage
-from tools import build_tools
+from sandbox.extensions.memory.storage import MemoryStorage
+from sandbox.extensions.memory.tools import build_tools
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.memory overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    embedding_model: str = "text-embedding-3-large"
+    decay_threshold: float = 0.05
+    decay_rate_default: float = 0.1
+    entity_enrichment_min_mentions: int = 3
+    causal_inference_batch_size: int = 50
+    consolidation_episodes_per_chunk: int = 30
+    conflict_min_confidence: float = 0.8
+    context_token_budget: int = 2000
+    rrf_k: int = 60
+    rrf_weight_vector: float = 1.0
+    rrf_weight_fts: float = 1.0
+    rrf_weight_graph: float = 1.0
+    rrf_min_score_ratio: float = 0.4
+    intent_similarity_threshold: float = 0.45
+    remember_fact_dedup_threshold: float = 0.92
 
 
 def _build_embed_fns_from_capability(
     embedder: EmbeddingCapability,
     model: str,
-    dims: int,
 ) -> tuple[object, object]:
     """Build embed_fn and embed_batch_fn from EmbeddingCapability."""
 
     async def embed_fn(text: str) -> list[float] | None:
-        results = await embedder.embed_batch(
-            [text], model=model, dimensions=dims
-        )
+        results = await embedder.embed_batch([text], model=model)
         return results[0] if results else None
 
     async def embed_batch_fn(texts: list[str]) -> list[list[float] | None]:
-        return await embedder.embed_batch(
-            texts, model=model, dimensions=dims
-        )
+        return await embedder.embed_batch(texts, model=model)
 
     return embed_fn, embed_batch_fn
 
 
+async def _probe_embedding_dimension(
+    embedder: EmbeddingCapability | None,
+    model: str,
+) -> int | None:
+    """Probe the model once to determine its native embedding dimension."""
+    if embedder is None:
+        return None
+    try:
+        results = await embedder.embed_batch(["dimension probe"], model=model)
+    except Exception as e:
+        logger.warning("Embedding dimension probe failed for model %s: %s", model, e)
+        return None
+
+    if not results or not results[0]:
+        logger.warning("Embedding dimension probe returned no data for model %s", model)
+        return None
+    return len(results[0])
+
+
 class MemoryExtension:
     """Graph-based cognitive memory. Phase 1: episodes, FTS5, temporal edges."""
+
+    ConfigModel = MemoryExtensionConfig
 
     def __init__(self) -> None:
         self._storage: MemoryStorage | None = None
@@ -64,7 +96,7 @@ class MemoryExtension:
         self._write_agent: object | None = None
         self._decay_service: DecayService | None = None
         self._ctx: object | None = None
-        self._current_session_id: str | None = None
+        self._current_thread_id: str | None = None
         self._token_budget: int = 2000
         self._dedup_threshold: float = 0.92
         self._last_consolidation_at: str | None = None
@@ -143,8 +175,7 @@ class MemoryExtension:
             "remember_fact_dedup_threshold", 0.92
         )
         db_path = context.data_dir / "memory.db"
-        embedding_dims = context.get_config("embedding_dimensions", 256)
-        self._storage = MemoryStorage(db_path, embedding_dimensions=embedding_dims)
+        self._storage = MemoryStorage(db_path)
         await self._storage.initialize()
 
         embedding_model = context.get_config(
@@ -157,17 +188,36 @@ class MemoryExtension:
         )
         self._embed_fn = None
         embed_batch_fn = None
+        active_embedding_dim = await self._storage.ensure_vec_tables(
+            await _probe_embedding_dimension(embedder, embedding_model)
+        )
+        if active_embedding_dim is not None:
+            logger.info(
+                "Memory embedding dimension active: %d (model=%s)",
+                active_embedding_dim,
+                embedding_model,
+            )
+        else:
+            logger.info(
+                "Memory vector search disabled: no active embedding dimension "
+                "(model=%s)",
+                embedding_model,
+            )
         if embedder:
             self._embed_fn, embed_batch_fn = _build_embed_fns_from_capability(
-                embedder, embedding_model, embedding_dims
+                embedder, embedding_model
             )
+        if active_embedding_dim is None:
+            self._embed_fn = None
+            embed_batch_fn = None
 
-        if self._embed_fn:
+        if self._embed_fn and active_embedding_dim is not None:
             classifier = EmbeddingIntentClassifier(
                 embed_fn=self._embed_fn,
                 threshold=context.get_config("intent_similarity_threshold", 0.45),
                 embed_batch_fn=embed_batch_fn,
                 cache_dir=context.data_dir,
+                model_name=embedding_model,
             )
             await classifier.initialize()
         else:
@@ -196,7 +246,7 @@ class MemoryExtension:
                 self._write_agent = create_memory_agent(
                     model=model,
                     tools=write_tools,
-                    extension_dir=_ext_dir,
+                    extension_dir=context.extension_dir,
                     model_settings=ModelSettings(parallel_tool_calls=True),
                 )
                 logger.info("Write-path agent initialized (model=%s)", model)
@@ -206,16 +256,16 @@ class MemoryExtension:
             decay_threshold=context.get_config("decay_threshold", 0.05),
         )
 
-        prev_session = await self._storage.get_latest_session_id()
-        if prev_session:
-            self._current_session_id = prev_session
-            logger.info("Resumed previous session: %s", prev_session)
+        prev_thread_id = await self._storage.get_latest_thread_id()
+        if prev_thread_id:
+            self._current_thread_id = prev_thread_id
+            logger.info("Resumed previous thread: %s", prev_thread_id)
 
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
-            SystemTopics.SESSION_COMPLETED,
-            self._on_session_completed,
+            SystemTopics.THREAD_COMPLETED,
+            self._on_thread_completed,
         )
 
     async def start(self) -> None:
@@ -241,9 +291,9 @@ class MemoryExtension:
             if not self._storage:
                 return None
             logger.info("Nightly maintenance started")
-            unconsolidated = await self._storage.get_unconsolidated_sessions()
-            for sid in unconsolidated:
-                await self._consolidate_session(sid)
+            unconsolidated = await self._storage.get_unconsolidated_threads()
+            for thread_id in unconsolidated:
+                await self._consolidate_thread(thread_id)
             n_consolidated = len(unconsolidated)
 
             decay_stats = {"decayed": 0, "pruned": 0}
@@ -311,28 +361,31 @@ class MemoryExtension:
         if not self._storage:
             return
         text = (data.get("text") or "").strip()
-        session_id = data.get("session_id")
+        thread_id = data.get("thread_id")
 
-        if session_id and session_id != self._current_session_id:
-            if self._current_session_id:
-                prev_sid = self._current_session_id
-                if prev_sid not in self._consolidation_pending:
-                    self._consolidation_pending.add(prev_sid)
+        if thread_id and thread_id != self._current_thread_id:
+            if self._current_thread_id:
+                prev_thread_id = self._current_thread_id
+                if prev_thread_id not in self._consolidation_pending:
+                    self._consolidation_pending.add(prev_thread_id)
                     logger.info(
-                        "Session switch: scheduling consolidation for %s", prev_sid
+                        "Thread switch: scheduling consolidation for %s",
+                        prev_thread_id,
                     )
-                    task = asyncio.create_task(self._consolidate_session(prev_sid))
+                    task = asyncio.create_task(self._consolidate_thread(prev_thread_id))
                     task.add_done_callback(
-                        lambda _: self._consolidation_pending.discard(prev_sid)
+                        lambda _, tid=prev_thread_id: (
+                            self._consolidation_pending.discard(tid)
+                        )
                     )
-            self._current_session_id = session_id
-            self._storage.ensure_session(session_id)
-            logger.debug("Active session: %s", session_id)
+            self._current_thread_id = thread_id
+            self._storage.ensure_thread(thread_id)
+            logger.debug("Active thread: %s", thread_id)
 
         if not text:
             return
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        prev_id = await self._storage.get_last_episode_id(thread_id or "")
         now = int(time.time())
         node_id = str(uuid.uuid4())
         node = {
@@ -344,7 +397,7 @@ class MemoryExtension:
             "valid_from": now,
             "source_type": "conversation",
             "source_role": "user",
-            "session_id": session_id,
+            "thread_id": thread_id,
         }
         self._storage.insert_node(node)
         if prev_id:
@@ -359,9 +412,9 @@ class MemoryExtension:
             )
         self._last_episode_id = node_id
         logger.debug(
-            "Episode saved: node=%s session=%s len=%d",
+            "Episode saved: node=%s thread=%s len=%d",
             node_id[:8],
-            session_id,
+            thread_id,
             len(text),
         )
         if self._embed_fn:
@@ -393,10 +446,10 @@ class MemoryExtension:
         text = (data.get("text") or "").strip()
         if not text:
             return
-        session_id = data.get("session_id") or self._current_session_id
+        thread_id = data.get("thread_id") or self._current_thread_id
         agent_id = data.get("agent_id") or "orchestrator"
 
-        prev_id = await self._storage.get_last_episode_id(session_id or "")
+        prev_id = await self._storage.get_last_episode_id(thread_id or "")
         now = int(time.time())
         node_id = str(uuid.uuid4())
         node = {
@@ -408,7 +461,7 @@ class MemoryExtension:
             "valid_from": now,
             "source_type": "conversation",
             "source_role": agent_id,
-            "session_id": session_id,
+            "thread_id": thread_id,
         }
         self._storage.insert_node(node)
         if prev_id:
@@ -423,48 +476,48 @@ class MemoryExtension:
             )
         self._last_episode_id = node_id
         logger.debug(
-            "Agent episode saved: node=%s agent=%s session=%s len=%d",
+            "Agent episode saved: node=%s agent=%s thread=%s len=%d",
             node_id[:8],
             agent_id,
-            session_id,
+            thread_id,
             len(text),
         )
         if self._embed_fn:
             asyncio.create_task(self._slow_path(node_id, text))
 
-    async def _on_session_completed(self, event: object) -> None:
-        """EventBus: session.completed. Trigger consolidation."""
+    async def _on_thread_completed(self, event: object) -> None:
+        """EventBus: session.completed with thread payload. Trigger consolidation."""
         payload = getattr(event, "payload", {}) or {}
-        session_id = payload.get("session_id")
-        if session_id:
-            if session_id in self._consolidation_pending:
+        thread_id = payload.get("thread_id")
+        if thread_id:
+            if thread_id in self._consolidation_pending:
                 logger.debug(
-                    "session.completed: consolidation already pending for %s",
-                    session_id,
+                    "session.completed(thread): consolidation already pending for %s",
+                    thread_id,
                 )
                 return
-            self._consolidation_pending.add(session_id)
+            self._consolidation_pending.add(thread_id)
             logger.info(
-                "session.completed: scheduling consolidation for %s", session_id
+                "session.completed(thread): scheduling consolidation for %s", thread_id
             )
-            task = asyncio.create_task(self._consolidate_session(session_id))
+            task = asyncio.create_task(self._consolidate_thread(thread_id))
             task.add_done_callback(
-                lambda _: self._consolidation_pending.discard(session_id)
+                lambda _: self._consolidation_pending.discard(thread_id)
             )
 
-    async def _consolidate_session(self, session_id: str) -> None:
-        """Consolidate session via write-path agent."""
+    async def _consolidate_thread(self, thread_id: str) -> None:
+        """Consolidate thread via write-path agent."""
         try:
             if not self._write_agent or not self._storage:
                 logger.info(
-                    "consolidate_session skipped (no write agent): %s", session_id
+                    "consolidate_thread skipped (no write agent): %s", thread_id
                 )
                 return
-            if await self._storage.is_session_consolidated(session_id):
+            if await self._storage.is_thread_consolidated(thread_id):
                 return
-            result = await self._write_agent.consolidate_session(session_id)
-            logger.info("Session %s consolidated: %s", session_id, result)
+            result = await self._write_agent.consolidate_thread(thread_id)
+            logger.info("Thread %s consolidated: %s", thread_id, result)
         except Exception as e:
-            logger.exception("consolidate_session failed for %s: %s", session_id, e)
+            logger.exception("consolidate_thread failed for %s: %s", thread_id, e)
         finally:
-            self._consolidation_pending.discard(session_id)
+            self._consolidation_pending.discard(thread_id)

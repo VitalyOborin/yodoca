@@ -1,0 +1,28 @@
+# Shared schemas: ErrorResponse, OperationResult, HealthResponse.
+# Referenced from the main OpenAPI document.
+
+ErrorResponse:
+  type: object
+  properties:
+    error:
+      type: object
+      properties:
+        message: { type: string }
+        type: { type: string }
+        code: { type: string, nullable: true }
+      required: [message, type]
+  required: [error]
+
+OperationResult:
+  type: object
+  properties:
+    success: { type: boolean }
+    message: { type: string, nullable: true }
+  required: [success]
+
+HealthResponse:
+  type: object
+  properties:
+    status: { type: string, enum: [ok] }
+    uptime_seconds: { type: integer, minimum: 0 }
+  required: [status, uptime_seconds]

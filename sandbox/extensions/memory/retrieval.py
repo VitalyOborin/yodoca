@@ -7,8 +7,9 @@ import math
 import re
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ def cosine_sim(a: list[float], b: list[float]) -> float:
     """Cosine similarity: dot(a,b) / (norm(a) * norm(b))."""
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:
@@ -106,10 +107,12 @@ class EmbeddingIntentClassifier(IntentClassifier):
         *,
         embed_batch_fn: Callable[..., Any] | None = None,
         cache_dir: Path | None = None,
+        model_name: str | None = None,
     ) -> None:
         self._embed_fn = embed_fn
         self._embed_batch_fn = embed_batch_fn
         self._cache_dir = cache_dir
+        self._model_name = model_name or "unknown-model"
         self._threshold = threshold
         self._intent_embeddings: dict[str, list[list[float]]] = {}
 
@@ -118,7 +121,10 @@ class EmbeddingIntentClassifier(IntentClassifier):
         if not self._cache_dir:
             return None
         canonical = json.dumps(
-            {k: sorted(v) for k, v in sorted(self.EXEMPLARS.items())},
+            {
+                "model_name": self._model_name,
+                "exemplars": {k: sorted(v) for k, v in sorted(self.EXEMPLARS.items())},
+            },
             sort_keys=True,
             ensure_ascii=False,
         )
@@ -209,7 +215,7 @@ def classify_query_complexity(query: str) -> str:
 def get_adaptive_params(complexity: str) -> dict[str, Any]:
     """Token budget, retrieval depth, and graph depth by complexity."""
     if complexity == "simple":
-        return {"token_budget": 600, "limit": 3, "graph_depth": 2}
+        return {"token_budget": 600, "limit": 5, "graph_depth": 2}
     return {"token_budget": 3000, "limit": 20, "graph_depth": 4}
 
 
@@ -290,10 +296,7 @@ class MemoryRetrieval:
                 scores[nid] = scores.get(nid, 0) + self._w_graph / (self._k + rank)
                 all_items.setdefault(nid, item)
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
-        return [
-            {**all_items[nid], "_rrf_score": scores[nid]}
-            for nid in ranked
-        ]
+        return [{**all_items[nid], "_rrf_score": scores[nid]} for nid in ranked]
 
     async def search(
         self,

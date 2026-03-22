@@ -1,62 +1,84 @@
 """Task Engine extension: ServiceProvider + ToolProvider for multi-step background agent work."""
 
 import asyncio
-import json
 import logging
-import sys
 import time
 import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
+from pydantic import BaseModel, ConfigDict
 
-from chains import get_chain_tasks, unblock_successors
-from models import (
+from sandbox.extensions.task_engine.chains import get_chain_tasks, unblock_successors
+from sandbox.extensions.task_engine.cleanup import cleanup_old_tasks
+from sandbox.extensions.task_engine.hitl import (
+    request_human_review as hitl_request_human_review,
+)
+from sandbox.extensions.task_engine.hitl import (
+    respond_to_review as hitl_respond_to_review,
+)
+from sandbox.extensions.task_engine.models import (
     ActiveTasksResult,
     CancelTaskResult,
+    ChainStatusResult,
     ChainStep,
     ChainTaskInfo,
-    ChainStatusResult,
     SubmitChainResult,
     SubmitTaskResult,
     TaskStatusResult,
 )
-from schema import TaskEngineDb
-from state import json_dumps_unicode
-from cleanup import cleanup_old_tasks
-from hitl import request_human_review as hitl_request_human_review
-from hitl import respond_to_review as hitl_respond_to_review
-from subtasks import (
+from sandbox.extensions.task_engine.schema import TaskEngineDb
+from sandbox.extensions.task_engine.state import json_dumps_unicode
+from sandbox.extensions.task_engine.subtasks import (
     MAX_SUBTASK_DEPTH,
     get_subtask_depth,
     try_resume_parent,
     update_parent_checkpoint,
 )
-from task_queries import cancel_task as query_cancel_task
-from task_queries import get_task_status as query_get_task_status
-from task_queries import list_active_tasks as query_list_active_tasks
-from task_engine_tools import build_tools
-from worker import (
+from sandbox.extensions.task_engine.task_engine_tools import build_tools
+from sandbox.extensions.task_engine.task_queries import (
+    cancel_task as query_cancel_task,
+)
+from sandbox.extensions.task_engine.task_queries import (
+    get_task_status as query_get_task_status,
+)
+from sandbox.extensions.task_engine.task_queries import (
+    list_active_tasks as query_list_active_tasks,
+)
+from sandbox.extensions.task_engine.task_queries import list_tasks as query_list_tasks
+from sandbox.extensions.task_engine.worker import (
     claim_next_task,
     execute_task,
     recover_stale_tasks,
 )
 
 if TYPE_CHECKING:
-    from core.extensions.contract import AgentProvider
     from core.extensions.context import ExtensionContext
+    from core.extensions.contract import AgentProvider
 
 logger = logging.getLogger(__name__)
+
+
+class TaskEngineExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.task_engine overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tick_sec: float = 1.0
+    max_concurrent_tasks: int = 3
+    lease_ttl_sec: float = 90.0
+    max_retries: int = 5
+    default_max_steps: int = 20
+    step_timeout_sec: int = 120
+    retention_days: int = 30
 
 
 class TaskEngineExtension:
     """ServiceProvider + ToolProvider: task queue, worker loop, tools for Orchestrator."""
 
+    ConfigModel = TaskEngineExtensionConfig
+
     def __init__(self) -> None:
-        self._ctx: "ExtensionContext | None" = None
+        self._ctx: ExtensionContext | None = None
         self._db: TaskEngineDb | None = None
         self._registry: Any = None
         self._tick_sec: float = 1.0
@@ -92,9 +114,7 @@ class TaskEngineExtension:
             await try_resume_parent(self._db, parent_id)
 
         if self._db:
-            await unblock_successors(
-                self._db, task_id, status, payload.get("result")
-            )
+            await unblock_successors(self._db, task_id, status, payload.get("result"))
 
         if not parent_id and status in ("done", "failed"):
             await self._notify_task_completed(task_id, status, payload)
@@ -204,7 +224,10 @@ class TaskEngineExtension:
                 task_id="", status="error", message="Extension not initialized"
             )
 
-        if agent_id != "orchestrator":
+        router_id = self._ctx.default_agent_id
+        if agent_id == "orchestrator":
+            agent_id = router_id
+        if agent_id != router_id:
             pair = self._registry.get(agent_id) if self._registry else None
             if not pair:
                 available = (
@@ -212,7 +235,7 @@ class TaskEngineExtension:
                     if self._registry
                     else []
                 )
-                avail_str = ", ".join(["orchestrator"] + available)
+                avail_str = ", ".join([router_id, "orchestrator"] + available)
                 return SubmitTaskResult(
                     task_id="",
                     status="error",
@@ -248,7 +271,7 @@ class TaskEngineExtension:
         }
         initial_status = "blocked" if after_task_id else "pending"
         conn = await self._db.ensure_conn()
-        now = time.time()
+        now = int(time.time())
         await conn.execute(
             """
             INSERT INTO agent_task (
@@ -315,6 +338,16 @@ class TaskEngineExtension:
             return ActiveTasksResult(tasks=[], total=0)
         return await query_list_active_tasks(self._db)
 
+    async def list_tasks(self, status: str = "active") -> ActiveTasksResult:
+        """Public API for list tasks with optional status filter."""
+        if not self._db:
+            return ActiveTasksResult(tasks=[], total=0)
+        return await query_list_tasks(self._db, status=status)
+
+    async def get_task(self, task_id: str) -> TaskStatusResult:
+        """Public API for get task status/details."""
+        return await self._get_task_status(task_id)
+
     def _get_agent_provider(self, agent_id: str) -> "AgentProvider | None":
         """Resolve agent_id to AgentProvider via registry."""
         pair = self._registry.get(agent_id) if self._registry else None
@@ -327,6 +360,10 @@ class TaskEngineExtension:
                 task_id=task_id, status="error", message="Extension not initialized"
             )
         return await query_cancel_task(self._db, task_id, reason)
+
+    async def cancel_task(self, task_id: str, reason: str = "") -> CancelTaskResult:
+        """Public API for cancel task."""
+        return await self._cancel_task(task_id, reason)
 
     async def submit_chain(
         self,
@@ -351,12 +388,14 @@ class TaskEngineExtension:
         max_steps = int(self._ctx.get_config("default_max_steps", 20))
         default_max = max_steps
 
+        router_id = self._ctx.default_agent_id
         for step in steps:
-            if step.agent_id != "orchestrator" and self._registry:
-                pair = self._registry.get(step.agent_id)
+            eff_agent = router_id if step.agent_id == "orchestrator" else step.agent_id
+            if eff_agent != router_id and self._registry:
+                pair = self._registry.get(eff_agent)
                 if not pair:
                     available = [r.id for r in self._registry.list_agents()]
-                    avail_str = ", ".join(["orchestrator"] + available)
+                    avail_str = ", ".join([router_id, "orchestrator"] + available)
                     return SubmitChainResult(
                         chain_id="",
                         tasks=[],
@@ -365,7 +404,7 @@ class TaskEngineExtension:
 
         chain_id = str(uuid.uuid4())
         conn = await self._db.ensure_conn()
-        now = time.time()
+        now = int(time.time())
         task_infos: list[ChainTaskInfo] = []
         prev_task_id: str | None = None
 
@@ -373,6 +412,9 @@ class TaskEngineExtension:
             task_id = str(uuid.uuid4())
             run_id = str(uuid.uuid4())
             status = "pending" if prev_task_id is None else "blocked"
+            step_agent_id = (
+                router_id if step.agent_id == "orchestrator" else step.agent_id
+            )
             payload = {
                 "goal": step.goal,
                 "max_steps": default_max,
@@ -390,7 +432,7 @@ class TaskEngineExtension:
                 (
                     task_id,
                     run_id,
-                    step.agent_id,
+                    step_agent_id,
                     status,
                     priority,
                     json_dumps_unicode(payload),
@@ -405,7 +447,7 @@ class TaskEngineExtension:
                 ChainTaskInfo(
                     task_id=task_id,
                     goal=step.goal,
-                    agent_id=step.agent_id,
+                    agent_id=step_agent_id,
                     chain_order=i,
                     status=status,
                 )
@@ -414,7 +456,7 @@ class TaskEngineExtension:
                 "task.submitted",
                 {
                     "task_id": task_id,
-                    "agent_id": step.agent_id,
+                    "agent_id": step_agent_id,
                     "goal": step.goal,
                     "priority": priority,
                 },
@@ -485,6 +527,7 @@ class TaskEngineExtension:
                         self._db,
                         self._ctx,
                         task,
+                        self._ctx.default_agent_id,
                         self._get_agent_provider,
                         self._worker_id,
                         self._lease_ttl,

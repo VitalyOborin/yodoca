@@ -14,14 +14,12 @@ class EmbeddingExtension:
     def __init__(self) -> None:
         self._embedder: EmbeddingCapability | None = None
         self._default_model: str = "text-embedding-3-large"
-        self._default_dimensions: int = 256
 
     async def embed(
         self,
         text: str,
         *,
         model: str | None = None,
-        dimensions: int | None = None,
     ) -> list[float] | None:
         """Generate embedding. Returns None on error (graceful degradation)."""
         if not self._embedder or not text or not text.strip():
@@ -29,7 +27,6 @@ class EmbeddingExtension:
         results = await self._embedder.embed_batch(
             [text],
             model=model or self._default_model,
-            dimensions=dimensions or self._default_dimensions,
         )
         return results[0] if results else None
 
@@ -38,7 +35,6 @@ class EmbeddingExtension:
         texts: list[str],
         *,
         model: str | None = None,
-        dimensions: int | None = None,
     ) -> list[list[float] | None]:
         """Batch-embed multiple texts in a single API call.
 
@@ -50,7 +46,6 @@ class EmbeddingExtension:
         return await self._embedder.embed_batch(
             texts,
             model=model or self._default_model,
-            dimensions=dimensions or self._default_dimensions,
         )
 
     # --- Lifecycle ---
@@ -59,7 +54,6 @@ class EmbeddingExtension:
         self._default_model = context.get_config(
             "default_model", "text-embedding-3-large"
         )
-        self._default_dimensions = context.get_config("default_dimensions", 256)
         provider_id = context.get_config("provider")
         router = context.model_router
         if router:

@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.extensions.persistence.session_manager import SessionManager
-from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 from core.extensions.contract import TurnContext
+from core.extensions.persistence.thread_manager import ThreadManager
+from core.extensions.routing.approval_coordinator import ApprovalCoordinator
 from core.extensions.routing.response_delivery import ResponseDeliveryService
 
 
@@ -29,38 +29,38 @@ class _PlainChannel:
         self.send_message = AsyncMock()
 
 
-class TestSessionManager:
+class TestThreadManager:
     @pytest.mark.asyncio
     async def test_maybe_rotate_rotates_and_publishes(self, tmp_path) -> None:
-        manager = SessionManager()
+        manager = ThreadManager()
         event_bus = MagicMock()
         event_bus.publish = AsyncMock(return_value=1)
-        manager.configure_session(
-            session_db_path=str(tmp_path / "session.db"),
-            session_timeout=1,
+        manager.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=1,
             event_bus=event_bus,
             now_ts=1000.0,
         )
-        old_id = manager.session_id
+        old_id = manager.thread_id
         manager._last_message_at = 1000.0
 
         await manager.maybe_rotate(now_ts=1002.0)
 
-        assert manager.session_id != old_id
+        assert manager.thread_id != old_id
         event_bus.publish.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_sync_last_active_at_is_integer_and_stable(self, tmp_path) -> None:
-        manager = SessionManager()
-        db_path = tmp_path / "session.db"
-        manager.configure_session(
-            session_db_path=str(db_path),
-            session_timeout=1800,
+        manager = ThreadManager()
+        db_path = tmp_path / "thread.db"
+        manager.configure_thread(
+            thread_db_path=str(db_path),
+            thread_timeout=1800,
             event_bus=None,
             now_ts=1000.0,
         )
-        session = manager.get_or_create_session("sess01", "cli")
-        await session.add_items([{"role": "user", "content": "Hello"}])
+        thread_store = manager.get_or_create_thread("sess01", "cli")
+        await thread_store.add_items([{"role": "user", "content": "Hello"}])
 
         first = await manager.sync_last_active_at("sess01")
         second = await manager.sync_last_active_at("sess01")
@@ -72,16 +72,16 @@ class TestSessionManager:
     async def test_sync_last_active_at_changes_after_new_message(
         self, tmp_path
     ) -> None:
-        manager = SessionManager()
-        db_path = tmp_path / "session.db"
-        manager.configure_session(
-            session_db_path=str(db_path),
-            session_timeout=1800,
+        manager = ThreadManager()
+        db_path = tmp_path / "thread.db"
+        manager.configure_thread(
+            thread_db_path=str(db_path),
+            thread_timeout=1800,
             event_bus=None,
             now_ts=1000.0,
         )
-        session = manager.get_or_create_session("sess01", "cli")
-        await session.add_items([{"role": "user", "content": "Hello"}])
+        thread_store = manager.get_or_create_thread("sess01", "cli")
+        await thread_store.add_items([{"role": "user", "content": "Hello"}])
         before = await manager.sync_last_active_at("sess01")
         assert before is not None
 
@@ -89,14 +89,14 @@ class TestSessionManager:
         assert same == before
 
         await asyncio.sleep(1.1)
-        await session.add_items([{"role": "assistant", "content": "Hi"}])
+        await thread_store.add_items([{"role": "assistant", "content": "Hi"}])
         after = await manager.sync_last_active_at("sess01")
         assert after is not None
         assert after > before
 
         with sqlite3.connect(db_path) as conn:
             row = conn.execute(
-                "SELECT updated_at FROM sessions WHERE session_id = ?",
+                "SELECT updated_at FROM threads WHERE thread_id = ?",
                 ("sess01",),
             ).fetchone()
         assert row is not None

@@ -1,0 +1,62 @@
+# Project domain schemas.
+# Referenced from the main OpenAPI document.
+
+Project:
+  type: object
+  properties:
+    id: { type: string }
+    name: { type: string }
+    description: { type: string, nullable: true }
+    icon: { type: string, nullable: true }
+    instructions: { type: string, nullable: true }
+    agent_config:
+      type: object
+      additionalProperties: true
+    created_at: { type: integer }
+    updated_at: { type: integer }
+    files:
+      type: array
+      items: { type: string }
+    links:
+      type: array
+      items: { type: string }
+  required: [id, name, agent_config, created_at, updated_at, files, links]
+
+CreateProjectRequest:
+  type: object
+  properties:
+    name: { type: string }
+    description: { type: string, nullable: true }
+    icon: { type: string, nullable: true }
+    instructions: { type: string, nullable: true }
+    agent_config:
+      type: object
+      additionalProperties: true
+      nullable: true
+    files:
+      type: array
+      items: { type: string }
+    links:
+      type: array
+      items: { type: string }
+  required: [name]
+
+UpdateProjectRequest:
+  type: object
+  properties:
+    name: { type: string, nullable: true }
+    description: { type: string, nullable: true }
+    icon: { type: string, nullable: true }
+    instructions: { type: string, nullable: true }
+    agent_config:
+      type: object
+      additionalProperties: true
+      nullable: true
+    files:
+      type: array
+      items: { type: string }
+      nullable: true
+    links:
+      type: array
+      items: { type: string }
+      nullable: true

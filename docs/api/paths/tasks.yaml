@@ -1,0 +1,250 @@
+# Task Engine domain paths: /api/tasks, /api/tasks/{task_id}, /api/tasks/{task_id}/cancel, /api/tasks/stream
+
+/api/tasks:
+  get:
+    tags: [tasks]
+    summary: List tasks
+    description: >
+      Returns tasks from the Task Engine. By default only active (non-terminal)
+      tasks are returned — this matches the behaviour of the `list_active_tasks`
+      Orchestrator tool. Use the `status` query parameter to filter by a
+      specific status or request `all` to include terminal tasks.
+
+      Results are ordered by priority (descending) then creation time (ascending).
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: status
+        in: query
+        required: false
+        description: >
+          Filter by task status. Special value `active` (default) returns tasks
+          in non-terminal states: pending, blocked, running, retry_scheduled,
+          waiting_subtasks, human_review. Value `all` returns every task.
+          Any specific status value filters to that exact status only.
+        schema:
+          type: string
+          default: active
+          enum:
+            - active
+            - all
+            - pending
+            - blocked
+            - running
+            - retry_scheduled
+            - waiting_subtasks
+            - human_review
+            - done
+            - failed
+            - cancelled
+    responses:
+      "200":
+        description: Task list
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskListResponse"
+            examples:
+              active_tasks:
+                summary: Two active tasks
+                value:
+                  tasks:
+                    - task_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                      status: running
+                      agent_id: orchestrator
+                      goal: "Research latest AI papers"
+                      step: 3
+                      max_steps: 20
+                      attempt_no: 0
+                      partial_result: "Found 5 relevant papers..."
+                      error: null
+                      created_at: 1710600000.0
+                      updated_at: 1710600120.0
+                    - task_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                      status: pending
+                      agent_id: orchestrator
+                      goal: "Summarize meeting notes"
+                      step: 0
+                      max_steps: 10
+                      attempt_no: 0
+                      partial_result: null
+                      error: null
+                      created_at: 1710600060.0
+                      updated_at: 1710600060.0
+                  total: 2
+              empty:
+                summary: No active tasks
+                value:
+                  tasks: []
+                  total: 0
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+/api/tasks/stream:
+  get:
+    tags: [tasks]
+    summary: Stream task events (SSE)
+    description: >
+      Server-Sent Events stream for real-time task status updates.
+      The server subscribes to three Task Engine event topics and forwards
+      them as SSE frames:
+
+      | SSE `event:` field   | Topic             | Payload schema         |
+      |----------------------|-------------------|------------------------|
+      | `task.submitted`     | task.submitted    | TaskSubmittedEvent     |
+      | `task.completed`     | task.completed    | TaskCompletedEvent     |
+      | `task.progress`      | task.progress     | TaskProgressEvent      |
+
+      Each frame has the format:
+
+      ```
+      event: <topic>
+      data: <JSON payload>
+
+      ```
+
+      The connection stays open until the client disconnects. The server
+      sends periodic `:keepalive` comments (every ~30 s) to prevent
+      proxy/load-balancer timeouts.
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: SSE stream (`text/event-stream`)
+        content:
+          text/event-stream:
+            schema:
+              type: string
+              description: >
+                Newline-delimited SSE frames. Each frame contains an `event:`
+                line with the topic name and a `data:` line with the JSON payload.
+            examples:
+              task_submitted:
+                summary: Task submitted event
+                value: |
+                  event: task.submitted
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","goal":"Research latest AI papers","agent_id":"orchestrator","priority":5}
+
+              task_progress:
+                summary: Task progress event
+                value: |
+                  event: task.progress
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","step":3,"max_steps":20}
+
+              task_completed:
+                summary: Task completed event
+                value: |
+                  event: task.completed
+                  data: {"task_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","parent_id":null,"status":"done","result":{"content":"Final result text"},"error":null}
+
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        description: Task Engine extension is unavailable.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                detail:
+                  type: string
+              required: [detail]
+/api/tasks/{task_id}:
+  get:
+    tags: [tasks]
+    summary: Get task details
+    description: >
+      Returns the current status, progress, and partial result of a single
+      task. Corresponds to the `get_task_status` Orchestrator tool.
+
+      If the task does not exist the response body has `status: "not_found"`
+      with an HTTP 404 status code.
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    responses:
+      "200":
+        description: Task details
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskItem"
+            example:
+              task_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              status: running
+              agent_id: orchestrator
+              goal: "Research latest AI papers"
+              step: 3
+              max_steps: 20
+              attempt_no: 0
+              partial_result: "Found 5 relevant papers..."
+              error: null
+              created_at: 1710600000.0
+              updated_at: 1710600120.0
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "404":
+        $ref: "#/components/responses/NotFoundError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"
+
+/api/tasks/{task_id}/cancel:
+  post:
+    tags: [tasks]
+    summary: Cancel a task
+    description: >
+      Cancels a task that is in a cancellable state: pending, blocked, running,
+      retry_scheduled, waiting_subtasks, or human_review. Corresponds to the
+      `cancel_task` Orchestrator tool.
+
+      Cancellation takes effect **between** agent loop steps — the current step
+      (if any) completes first. If the task belongs to a chain, downstream
+      blocked tasks are also cancelled (cascade).
+
+      Returns `status: "cancelled"` on success or `status: "not_found"` if the
+      task does not exist or is already in a terminal state (done, failed,
+      cancelled).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CancelTaskRequest"
+          examples:
+            with_reason:
+              summary: Cancel with reason
+              value:
+                reason: "No longer needed"
+            no_body:
+              summary: Cancel without body
+              value: {}
+    responses:
+      "200":
+        description: Cancellation result
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelTaskResponse"
+            examples:
+              success:
+                summary: Task cancelled
+                value:
+                  task_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  status: cancelled
+                  message: "Task cancelled"
+              not_found:
+                summary: Task not found or already terminal
+                value:
+                  task_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  status: not_found
+                  message: "Task not found or already completed"
+      "401":
+        $ref: "#/components/responses/UnauthorizedError"
+      "503":
+        $ref: "#/components/responses/ServiceUnavailableError"

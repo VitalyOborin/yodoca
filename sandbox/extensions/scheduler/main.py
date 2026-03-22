@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -11,6 +12,30 @@ import aiosqlite
 from agents import function_tool
 from croniter import croniter
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+TOPIC_FIELD = Field(
+    ...,
+    description=(
+        "Event topic. Use 'system.user.notify' to send a message to the user, "
+        "'system.agent.task' to delegate reasoning to an agent at fire time, "
+        "'system.agent.background' for maintenance tasks without user response."
+    ),
+)
+PAYLOAD_EXTRA_FIELD = Field(
+    default=None,
+    description="Optional extra payload fields for custom (non-system) topics only.",
+)
+
+
+def _to_utc_iso(timestamp: float) -> str:
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
 
 # --- Tool result models (structured output per agent_tools skill) ---
 
@@ -118,9 +143,14 @@ def _compute_next_fire(
 class _SchedulerStore:
     """SQLite-backed store for one-shot and recurring schedules."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        on_cancel: Any | None = None,
+    ) -> None:
         self._db_path = db_path
         self._conn: aiosqlite.Connection | None = None
+        self._on_cancel = on_cancel
 
     async def _ensure_conn(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -309,15 +339,20 @@ class _SchedulerStore:
             (row_id,),
         )
         await conn.commit()
-        return cursor.rowcount > 0
+        cancelled = cursor.rowcount > 0
+        if cancelled and self._on_cancel:
+            await self._on_cancel(row_id, "one_shot")
+        return cancelled
 
     async def cancel_recurring(self, row_id: int) -> None:
         conn = await self._ensure_conn()
-        await conn.execute(
+        cursor = await conn.execute(
             "UPDATE recurring_schedules SET status = 'cancelled' WHERE id = ?",
             (row_id,),
         )
         await conn.commit()
+        if cursor.rowcount > 0 and self._on_cancel:
+            await self._on_cancel(row_id, "recurring")
 
     async def update_recurring(
         self,
@@ -326,6 +361,7 @@ class _SchedulerStore:
         every_sec: float | None = None,
         until_at: float | None = None,
         status: str | None = None,
+        set_until: bool = False,
     ) -> float | None:
         conn = await self._ensure_conn()
         cursor = await conn.execute(
@@ -347,16 +383,14 @@ class _SchedulerStore:
         if every_sec is not None:
             updates.append("every_sec = ?")
             params.append(every_sec)
-        if until_at is not None:
+        if set_until:
             updates.append("until_at = ?")
             params.append(until_at)
         if status is not None:
             updates.append("status = ?")
             params.append(status)
 
-        expr_changed = (
-            cron_expr is not None or every_sec is not None or until_at is not None
-        )
+        expr_changed = cron_expr is not None or every_sec is not None or set_until
         if not expr_changed and not updates:
             cursor = await conn.execute(
                 "SELECT next_fire_at FROM recurring_schedules WHERE id = ?",
@@ -369,7 +403,7 @@ class _SchedulerStore:
         if expr_changed:
             new_cron = cron_expr if cron_expr is not None else old_cron
             new_every = every_sec if every_sec is not None else old_every
-            new_until = until_at if until_at is not None else old_until
+            new_until = until_at if set_until else old_until
             now = time.time()
             next_fire = _compute_next_fire(new_cron, new_every, now)
             if new_until is not None and next_fire > new_until:
@@ -432,6 +466,17 @@ def _parse_payload_json(raw: Any) -> Any:
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
+def _with_schedule_metadata(
+    payload: Any,
+    schedule_id: int,
+    schedule_type: Literal["one_shot", "recurring"],
+) -> dict[str, Any]:
+    """Attach internal schedule marker for queue purge on cancel."""
+    enriched = dict(payload) if isinstance(payload, dict) else {"message": payload}
+    enriched["__schedule"] = {"id": schedule_id, "type": schedule_type}
+    return enriched
+
+
 class SchedulerExtension:
     """Extension + ToolProvider + ServiceProvider: schedule one-shot and recurring EventBus events."""
 
@@ -443,9 +488,36 @@ class SchedulerExtension:
     async def initialize(self, context: Any) -> None:
         self._ctx = context
         db_path = context.data_dir / "scheduler.db"
-        self._store = _SchedulerStore(db_path)
+        self._store = _SchedulerStore(db_path, on_cancel=self._on_store_cancel)
         await self._store._ensure_conn()
         self._tick_interval = float(context.get_config("tick_interval", 30))
+
+    async def _on_store_cancel(
+        self,
+        schedule_id: int,
+        schedule_type: Literal["one_shot", "recurring"],
+    ) -> None:
+        if not self._ctx:
+            return
+        try:
+            purge_fn = getattr(self._ctx, "purge_scheduled_events", None)
+            if not callable(purge_fn):
+                return
+            result = purge_fn(schedule_id, schedule_type)
+            deleted = await result if asyncio.iscoroutine(result) else 0
+            logger.info(
+                "scheduler cancel purge: %s#%s deleted=%s",
+                schedule_type,
+                schedule_id,
+                deleted,
+            )
+        except Exception as e:
+            logger.warning(
+                "scheduler cancel purge failed for %s#%s: %s",
+                schedule_type,
+                schedule_id,
+                e,
+            )
 
     async def start(self) -> None:
         if self._store:
@@ -453,7 +525,12 @@ class SchedulerExtension:
             await self._store.recover_recurring(now)
             due = await self._store.fetch_due_one_shot(now)
             for row in due:
-                await self._ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
+                payload = _with_schedule_metadata(
+                    _parse_payload_json(row["payload"]),
+                    row["id"],
+                    "one_shot",
+                )
+                await self._ctx.emit(row["topic"], payload)
                 await self._store.mark_one_shot_fired(row["id"])
 
     async def stop(self) -> None:
@@ -471,18 +548,10 @@ class SchedulerExtension:
         if not self._store:
             return []
         store = self._store
-        ctx = self._ctx
 
         @function_tool(name_override="schedule_once", strict_mode=False)
         async def schedule_once(
-            topic: str = Field(
-                ...,
-                description=(
-                    "Event topic. Use 'system.user.notify' to send a message to the user, "
-                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
-                    "'system.agent.background' for maintenance tasks without user response."
-                ),
-            ),
+            topic: str = TOPIC_FIELD,
             message: str = Field(
                 ...,
                 description=(
@@ -491,10 +560,7 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra: dict[str, Any] | None = Field(
-                default=None,
-                description="Optional extra payload fields for custom (non-system) topics only.",
-            ),
+            payload_extra: dict[str, Any] | None = PAYLOAD_EXTRA_FIELD,
             delay_seconds: int | None = None,
             at_iso: str | None = None,
         ) -> ScheduleOnceResult:
@@ -553,14 +619,7 @@ class SchedulerExtension:
 
         @function_tool(name_override="schedule_recurring", strict_mode=False)
         async def schedule_recurring(
-            topic: str = Field(
-                ...,
-                description=(
-                    "Event topic. Use 'system.user.notify' to send a message to the user, "
-                    "'system.agent.task' to delegate reasoning to an agent at fire time, "
-                    "'system.agent.background' for maintenance tasks without user response."
-                ),
-            ),
+            topic: str = TOPIC_FIELD,
             message: str = Field(
                 ...,
                 description=(
@@ -569,10 +628,7 @@ class SchedulerExtension:
                 ),
             ),
             channel_id: str | None = None,
-            payload_extra: dict[str, Any] | None = Field(
-                default=None,
-                description="Optional extra payload fields for custom (non-system) topics only.",
-            ),
+            payload_extra: dict[str, Any] | None = PAYLOAD_EXTRA_FIELD,
             cron: str | None = None,
             every_seconds: float | None = None,
             until_iso: str | None = None,
@@ -633,7 +689,7 @@ class SchedulerExtension:
                 until_at,
                 next_fire,
             )
-            iso = datetime.fromtimestamp(next_fire).isoformat()
+            iso = _to_utc_iso(next_fire)
             return ScheduleRecurringResult(
                 success=True,
                 schedule_id=row_id,
@@ -661,9 +717,7 @@ class SchedulerExtension:
                     type=r["type"],
                     topic=r["topic"],
                     payload=_parse_payload_json(r["payload"]),
-                    next_fire_iso=datetime.fromtimestamp(
-                        r["fire_at_or_next"]
-                    ).isoformat(),
+                    next_fire_iso=_to_utc_iso(r["fire_at_or_next"]),
                     status=r["status"],
                 )
                 for r in rows
@@ -738,7 +792,7 @@ class SchedulerExtension:
                     message="",
                     error="Schedule not found or cancelled.",
                 )
-            iso = datetime.fromtimestamp(next_fire).isoformat()
+            iso = _to_utc_iso(next_fire)
             return UpdateRecurringResult(
                 success=True,
                 schedule_id=schedule_id,
@@ -765,11 +819,21 @@ class SchedulerExtension:
                 now = time.time()
                 due_one_shot = await store.fetch_due_one_shot(now)
                 for row in due_one_shot:
-                    await ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
+                    payload = _with_schedule_metadata(
+                        _parse_payload_json(row["payload"]),
+                        row["id"],
+                        "one_shot",
+                    )
+                    await ctx.emit(row["topic"], payload)
                     await store.mark_one_shot_fired(row["id"])
                 due_recurring = await store.fetch_due_recurring(now)
                 for row in due_recurring:
-                    await ctx.emit(row["topic"], _parse_payload_json(row["payload"]))
+                    payload = _with_schedule_metadata(
+                        _parse_payload_json(row["payload"]),
+                        row["id"],
+                        "recurring",
+                    )
+                    await ctx.emit(row["topic"], payload)
                     await store.advance_next(row["id"], now)
             except asyncio.CancelledError:
                 break

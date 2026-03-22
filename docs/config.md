@@ -11,6 +11,12 @@ Configuration is stored in `config/settings.yaml`. The file is optional: missing
 - **Loading:** On startup the app loads the file and merges it with internal defaults. Later changes require an app restart (or use the supervisor restart file).
 - **Example template:** `config/settings.example.yaml` can be copied to `config/settings.yaml` and edited.
 
+### Validation
+
+After the merge, settings are validated with Pydantic models in `core/settings_models.py` (`AppSettings` and nested section models). Invalid types or structure cause startup to fail with **path → message** diagnostics printed to stderr.
+
+Extension-specific merged config (manifest `config` + `extensions.<id>` overrides) can be validated when an extension class defines an optional **`ConfigModel`** class attribute (`pydantic.BaseModel`). If validation fails for any loaded extension, startup fails with a clear error (see ADR 035).
+
 ---
 
 ## Structure of `config/settings.yaml`
@@ -33,7 +39,7 @@ agents:
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: sandbox/prompts/default.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
     model: gpt-5.2
     provider: openai
 ```
@@ -76,16 +82,23 @@ Durable event journal and polling.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `file` | `sandbox/logs/app.log` | Log file path. |
-| `level` | `INFO` | Log level. |
+| `level` | `INFO` | Minimum level for the file handler (global default; per-prefix overrides via `subsystems`). |
+| `console_level` | *(same as `level`)* | Minimum level for the console handler when `log_to_console` is true. |
+| `console_style` | `text` | `text` or `json` (stderr). |
+| `file_style` | `text` | `text` or `json` (line-delimited JSON in the file). |
 | `log_to_console` | `false` | Whether to duplicate logs to stderr. |
 | `max_bytes` | `10485760` | Max size per log file (bytes). |
 | `backup_count` | `3` | Number of rotated backup files. |
+| `subsystems` | `{}` | Map of logger name prefix → level (e.g. `ext.memory: DEBUG`). Longest prefix wins. |
+| `console_subsystems` | `[]` | If non-empty, only these prefixes are printed to the console. |
 
-### `session`
+See [ADR 036](adr/036-subsystem-logging.md).
+
+### `thread`
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `timeout_sec` | `1800` | Session timeout in seconds. |
+| `timeout_sec` | `1800` | Thread timeout in seconds. |
 
 ### `supervisor`
 
@@ -158,7 +171,7 @@ agents:
     model: gpt-5.2
     provider: openai
   orchestrator:
-    instructions: sandbox/prompts/default.jinja2
+    instructions: sandbox/prompts/orchestrator.jinja2
     model: gpt-5.2
     provider: openai
 
@@ -173,9 +186,9 @@ extensions:
     provider: openai
 ```
 
-(Other sections such as `event_bus`, `logging`, `session`, `supervisor` keep their defaults if omitted.)
+(Other sections such as `event_bus`, `logging`, `thread`, `supervisor` keep their defaults if omitted.)
 
-### Override only logging and session
+### Override only logging and thread
 
 You can leave agents and providers as defaults and override a few keys:
 
@@ -184,9 +197,13 @@ logging:
   level: DEBUG
   log_to_console: true
 
-session:
+thread:
   timeout_sec: 3600
 ```
+
+### `models`
+
+Optional overrides for the model catalog (delegation / cost routing). Keys are model IDs; values include `cost_tier`, `capability_tier`, `strengths`, `context_window`. Validated as part of `AppSettings`.
 
 ---
 
@@ -195,3 +212,4 @@ session:
 - [Extensions](extensions.md) — extension contract and `get_config` usage.
 - [Secrets](secrets.md) — API keys and keyring.
 - Onboarding flow — creates initial `config/settings.yaml` and `.env`.
+

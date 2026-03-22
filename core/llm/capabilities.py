@@ -11,7 +11,6 @@ class EmbeddingCapability(Protocol):
         self,
         texts: list[str],
         model: str,
-        dimensions: int | None = None,
     ) -> list[list[float] | None]:
         """Generate embeddings for a list of texts.
 

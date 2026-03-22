@@ -9,7 +9,7 @@ import yaml
 from dotenv import dotenv_values
 
 from core.secrets import is_keyring_available, set_secret
-from core.settings import get_default_settings, get_setting, load_settings
+from core.settings import get_default_settings, load_settings
 from onboarding.state import WizardState
 
 logger = logging.getLogger(__name__)
@@ -38,13 +38,15 @@ def write_config(
     base["agents"] = state.agents
     # Ensure default agent has explicit default instructions path
     if "default" in base["agents"] and isinstance(base["agents"]["default"], dict):
-        base["agents"]["default"].setdefault("instructions", "sandbox/prompts/default.jinja2")
+        base["agents"]["default"].setdefault(
+            "instructions", "sandbox/prompts/default.jinja2"
+        )
+    base.setdefault("default_agent", "orchestrator_agent")
     default_cfg = base["agents"].get("default")
     if isinstance(default_cfg, dict):
-        base["agents"]["orchestrator"] = {
+        base["agents"]["orchestrator_agent"] = {
             k: v
             for k, v in {
-                "instructions": default_cfg.get("instructions", "sandbox/prompts/default.jinja2"),
                 "model": default_cfg.get("model"),
                 "provider": default_cfg.get("provider"),
             }.items()
@@ -80,10 +82,7 @@ def write_config(
     )
 
     settings = load_settings(project_root / "config")
-    restart_rel = get_setting(
-        settings, "supervisor.restart_file", "sandbox/.restart_requested"
-    )
-    restart_file = project_root / restart_rel
+    restart_file = project_root / settings.supervisor.restart_file
     restart_file.parent.mkdir(parents=True, exist_ok=True)
     restart_file.touch()
 

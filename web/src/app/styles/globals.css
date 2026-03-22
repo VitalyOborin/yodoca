@@ -1,0 +1,278 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: dark;
+
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+
+  --card: 240 6% 6%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 6% 6%;
+  --popover-foreground: 0 0% 98%;
+
+  --surface-1: 240 6% 6%;
+  --surface-2: 240 5% 10%;
+  --surface-3: 240 4% 14%;
+
+  --muted: 240 5% 10%;
+  --muted-foreground: 240 5% 65%;
+  --subtle-foreground: 240 4% 46%;
+
+  --primary: 245 82% 67%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 240 5% 10%;
+  --secondary-foreground: 0 0% 98%;
+  --accent: 199 89% 48%;
+  --accent-foreground: 0 0% 100%;
+
+  --success: 142 76% 36%;
+  --warning: 38 92% 50%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 199 89% 48%;
+
+  --border: 240 4% 16%;
+  --input: 240 5% 10%;
+  --ring: 245 82% 67%;
+
+  --glass-bg: 255 255 255;
+  --glass-bg-alpha: 0.04;
+  --glass-border-alpha: 0.08;
+
+  --radius: 0.75rem;
+
+  --sidebar: 240 6% 6%;
+  --sidebar-foreground: 0 0% 98%;
+  --sidebar-primary: 245 82% 67%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 5% 10%;
+  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-border: 240 4% 16%;
+  --sidebar-ring: 245 82% 67%;
+}
+
+@theme inline {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-subtle-foreground: hsl(var(--subtle-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-info: hsl(var(--info));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #app {
+    @apply min-h-screen;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at top left, hsl(var(--primary) / 0.12), transparent 32%),
+      radial-gradient(circle at 85% 15%, hsl(240 47% 11% / 0.16), transparent 30%),
+      radial-gradient(circle at bottom right, hsl(var(--accent) / 0.08), transparent 30%);
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.35);
+    color: white;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    background: rgb(var(--glass-bg) / var(--glass-bg-alpha));
+    border: 1px solid rgb(255 255 255 / var(--glass-border-alpha));
+    backdrop-filter: blur(16px);
+    box-shadow: 0 4px 24px rgb(0 0 0 / 0.24);
+  }
+
+  .surface-panel {
+    background: hsl(var(--surface-1));
+    border: 1px solid hsl(var(--border));
+  }
+
+  .animate-enter {
+    animation: fade-slide-in 240ms cubic-bezier(0, 0, 0.2, 1);
+  }
+
+  .agent-pending-caret {
+    display: inline-block;
+    width: 0.7rem;
+    height: 1.15rem;
+    border-radius: 0.2rem;
+    background: hsl(var(--foreground) / 0.28);
+    animation: pending-caret-blink 800ms steps(1, end) infinite;
+  }
+
+  .focus-ring {
+    @apply focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none;
+  }
+
+  .chat-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .chat-markdown h1,
+  .chat-markdown h2,
+  .chat-markdown h3 {
+    margin: 1rem 0 0.6rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: hsl(var(--foreground));
+  }
+
+  .chat-markdown h1 {
+    font-size: 1.2rem;
+  }
+
+  .chat-markdown h2 {
+    font-size: 1.05rem;
+  }
+
+  .chat-markdown h3 {
+    font-size: 1rem;
+  }
+
+  .chat-markdown p {
+    margin: 0.6rem 0;
+  }
+
+  .chat-markdown a {
+    color: hsl(var(--info));
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .chat-markdown strong {
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .chat-markdown em {
+    font-style: italic;
+  }
+
+  .chat-markdown ul,
+  .chat-markdown ol {
+    margin: 0.6rem 0;
+    padding-left: 1.2rem;
+  }
+
+  .chat-markdown li {
+    margin: 0.2rem 0;
+  }
+
+  .chat-markdown blockquote {
+    margin: 0.7rem 0;
+    border-left: 2px solid hsl(var(--border));
+    padding-left: 0.8rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .chat-markdown :not(pre) > code {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.375rem;
+    background: hsl(var(--secondary) / 0.5);
+    padding: 0.1rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+  }
+
+  .chat-markdown pre {
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.65rem;
+    background: hsl(var(--secondary));
+  }
+
+  .chat-markdown pre code.hljs {
+    display: block;
+    padding: 0.75rem 0.9rem;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+}
+
+@keyframes fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pending-caret-blink {
+  0%,
+  49.999% {
+    background: hsl(var(--foreground) / 0.28);
+  }
+  50%,
+  100% {
+    background: hsl(var(--foreground) / 0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

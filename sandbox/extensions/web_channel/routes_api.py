@@ -1,38 +1,254 @@
-"""Custom API routes for health, sessions, projects, and notifications."""
+"""Custom API routes for health, threads, projects, and notifications."""
 
+import asyncio
+import json
 import time
 import uuid
+from datetime import UTC, datetime
 
+from croniter import croniter
 from fastapi import APIRouter, Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
-from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.update_fields import UNSET
+from sandbox.extensions.inbox.models import InboxItemInput
 from sandbox.extensions.web_channel.models import (
+    CancelTaskRequest,
+    CancelTaskResponse,
+    CreateOnceScheduleRequest,
     CreateProjectRequest,
-    CreateSessionRequest,
+    CreateRecurringScheduleRequest,
+    CreateThreadRequest,
     HealthResponse,
+    InboxItem,
+    InboxListResponse,
     NotificationsResponse,
+    OperationResult,
     Project,
-    Session,
-    SessionDetailResponse,
+    ScheduleItem,
+    ScheduleListResponse,
+    ScheduleOnceResponse,
+    ScheduleRecurringResponse,
+    TaskItem,
+    TaskListResponse,
+    Thread,
+    ThreadDetailResponse,
     UpdateProjectRequest,
-    UpdateSessionRequest,
+    UpdateScheduleRequest,
+    UpdateScheduleResponse,
+    UpdateThreadRequest,
 )
 
 router = APIRouter(include_in_schema=True)
+
+_TASK_STATUSES = {
+    "active",
+    "all",
+    "pending",
+    "blocked",
+    "running",
+    "retry_scheduled",
+    "waiting_subtasks",
+    "human_review",
+    "done",
+    "failed",
+    "cancelled",
+}
 
 
 def _get_extension(request: Request):
     return request.app.state.extension
 
 
-def _session_model(data: SessionInfo | dict) -> Session:
-    return Session.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
+def _thread_model(data: ThreadInfo | dict) -> Thread:
+    return Thread.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
 
 
 def _project_model(data: ProjectInfo | dict) -> Project:
     return Project.model_validate(data.to_dict() if hasattr(data, "to_dict") else data)
+
+
+def _scheduler_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "message": "Scheduler extension is not loaded or not initialized",
+                "type": "service_unavailable",
+                "code": "scheduler_unavailable",
+            }
+        },
+    )
+
+
+def _parse_iso_to_timestamp(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_utc_iso(timestamp: float) -> str:
+    return (
+        datetime.fromtimestamp(timestamp, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _decode_payload(raw: object) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+        except (TypeError, ValueError):
+            return {"raw": raw}
+    return {"value": raw}
+
+
+def _payload_message(topic: str, payload: dict) -> str | None:
+    if topic == "system.user.notify":
+        value = payload.get("text")
+        return value if isinstance(value, str) else None
+    if topic in ("system.agent.task", "system.agent.background"):
+        value = payload.get("prompt")
+        return value if isinstance(value, str) else None
+    for key in ("message", "text", "prompt"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _build_event_payload(
+    topic: str,
+    message: str,
+    channel_id: str | None,
+    payload_extra: dict | None,
+) -> dict:
+    if topic == "system.user.notify":
+        payload: dict = {"text": message}
+    elif topic in ("system.agent.task", "system.agent.background"):
+        payload = {"prompt": message}
+    elif payload_extra:
+        payload = dict(payload_extra)
+        if (
+            "message" not in payload
+            and "text" not in payload
+            and "prompt" not in payload
+        ):
+            payload["message"] = message
+    else:
+        payload = {"message": message}
+    if channel_id:
+        payload["channel_id"] = channel_id
+    return payload
+
+
+def _schedule_item_model(row: dict) -> ScheduleItem:
+    payload = _decode_payload(row.get("payload"))
+    fire_ts = row.get("fire_at_or_next")
+    until_ts = row.get("until_at")
+    return ScheduleItem(
+        id=int(row["id"]),
+        type=row["type"],
+        topic=row["topic"],
+        message=_payload_message(row["topic"], payload),
+        channel_id=payload.get("channel_id")
+        if isinstance(payload.get("channel_id"), str)
+        else None,
+        payload=payload,
+        fires_at_iso=_to_utc_iso(float(fire_ts)),
+        status=row["status"],
+        cron_expr=row.get("cron_expr"),
+        every_seconds=row.get("every_sec"),
+        until_iso=_to_utc_iso(float(until_ts)) if until_ts is not None else None,
+        created_at=int(row.get("created_at", 0)),
+    )
+
+
+def _filter_schedule_rows(rows: list[dict], status: str | None) -> list[dict]:
+    if not status:
+        return rows
+    if status == "active":
+        return [
+            row
+            for row in rows
+            if (row.get("type") == "one_shot" and row.get("status") == "scheduled")
+            or (row.get("type") == "recurring" and row.get("status") == "active")
+        ]
+    return [row for row in rows if row.get("status") == status]
+
+
+def _get_scheduler_store(request: Request):
+    ext = _get_extension(request)
+    scheduler = ext.get_scheduler()
+    if not scheduler:
+        return None
+    return getattr(scheduler, "_store", None)
+
+
+def _inbox_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "inbox extension unavailable"},
+    )
+
+
+def _task_engine_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "task_engine extension unavailable"},
+    )
+
+
+def _get_inbox_extension(request: Request):
+    ext = _get_extension(request)
+    return ext.get_inbox()
+
+
+def _get_task_engine(request: Request):
+    ext = _get_extension(request)
+    return ext.get_task_engine()
+
+
+def _to_mapping(data: object) -> dict:
+    """Normalize Pydantic models / dataclasses / dict-like values to dict."""
+    if isinstance(data, dict):
+        return data
+    model_dump = getattr(data, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    to_dict = getattr(data, "to_dict", None)
+    if callable(to_dict):
+        dumped = to_dict()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
+def _task_item_model(data: object) -> TaskItem:
+    mapped = _to_mapping(data)
+    return TaskItem(
+        task_id=str(mapped.get("task_id", "")),
+        status=str(mapped.get("status", "")),
+        agent_id=str(mapped.get("agent_id", "")),
+        goal=str(mapped.get("goal", "")),
+        step=int(mapped.get("step", 0) or 0),
+        max_steps=int(mapped.get("max_steps", 0) or 0),
+        attempt_no=int(mapped.get("attempt_no", 0) or 0),
+        partial_result=mapped.get("partial_result"),
+        error=mapped.get("error"),
+        chain_id=mapped.get("chain_id"),
+        chain_order=mapped.get("chain_order"),
+        created_at=int(mapped.get("created_at", 0) or 0),
+        updated_at=int(mapped.get("updated_at", 0) or 0),
+    )
 
 
 @router.get("/health")
@@ -46,25 +262,25 @@ async def get_health(request: Request) -> HealthResponse:
     return HealthResponse(status="ok", uptime_seconds=int(uptime))
 
 
-@router.get("/sessions")
-async def get_sessions(request: Request) -> JSONResponse:
-    """List session metadata from the persistent repository."""
+@router.get("/threads")
+async def get_threads(request: Request) -> JSONResponse:
+    """List thread metadata from the persistent repository."""
     ext = _get_extension(request)
     ctx = ext._context
-    sessions = await ctx.list_sessions()
-    data = {"sessions": [_session_model(session).model_dump() for session in sessions]}
+    threads = await ctx.list_threads()
+    data = {"threads": [_thread_model(thread).model_dump() for thread in threads]}
     return JSONResponse(content=data)
 
 
-@router.post("/sessions")
-async def create_session(request: Request) -> JSONResponse:
-    """Create a persistent session row before any messages are sent."""
+@router.post("/threads")
+async def create_thread(request: Request) -> JSONResponse:
+    """Create a persistent thread row before any messages are sent."""
     ext = _get_extension(request)
     ctx = ext._context
-    payload = CreateSessionRequest.model_validate(await request.json())
+    payload = CreateThreadRequest.model_validate(await request.json())
     try:
-        session = await ctx.create_session(
-            session_id=payload.id or f"sess_{uuid.uuid4().hex}",
+        thread = await ctx.create_thread(
+            thread_id=payload.id or f"thread_{uuid.uuid4().hex}",
             channel_id=ext._channel_id,
             project_id=payload.project_id,
             title=payload.title,
@@ -80,43 +296,43 @@ async def create_session(request: Request) -> JSONResponse:
                 }
             },
         )
-    return JSONResponse(content={"session": _session_model(session).model_dump()})
+    return JSONResponse(content={"thread": _thread_model(thread).model_dump()})
 
 
-@router.get("/sessions/{session_id}")
-async def get_session(request: Request, session_id: str) -> JSONResponse:
-    """Return one session metadata record and stored history."""
+@router.get("/threads/{thread_id}")
+async def get_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Return one thread metadata record and stored history."""
     ext = _get_extension(request)
     ctx = ext._context
-    session = await ctx.get_session(session_id, include_archived=True)
-    history = await ctx.get_session_history(session_id)
-    if session is None or history is None:
+    thread = await ctx.get_thread(thread_id, include_archived=True)
+    history = await ctx.get_thread_history(thread_id)
+    if thread is None or history is None:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
-    response = SessionDetailResponse(
-        session=_session_model(session),
+    response = ThreadDetailResponse(
+        thread=_thread_model(thread),
         history=history,
     )
     return JSONResponse(content=response.model_dump())
 
 
-@router.patch("/sessions/{session_id}")
-async def patch_session(request: Request, session_id: str) -> JSONResponse:
-    """Update title, project binding, or archive state for a session."""
+@router.patch("/threads/{thread_id}")
+async def patch_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Update title, project binding, or archive state for a thread."""
     ext = _get_extension(request)
     ctx = ext._context
-    payload = UpdateSessionRequest.model_validate(await request.json())
+    payload = UpdateThreadRequest.model_validate(await request.json())
     try:
-        session = await ctx.update_session(
-            session_id,
+        thread = await ctx.update_thread(
+            thread_id,
             title=payload.title if "title" in payload.model_fields_set else UNSET,
             project_id=payload.project_id
             if "project_id" in payload.model_fields_set
@@ -136,34 +352,34 @@ async def patch_session(request: Request, session_id: str) -> JSONResponse:
                 }
             },
         )
-    if session is None:
+    if thread is None:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
-    return JSONResponse(content={"session": _session_model(session).model_dump()})
+    return JSONResponse(content={"thread": _thread_model(thread).model_dump()})
 
 
-@router.delete("/sessions/{session_id}")
-async def delete_session(request: Request, session_id: str) -> JSONResponse:
-    """Soft-archive a session without deleting its history."""
+@router.delete("/threads/{thread_id}")
+async def delete_thread(request: Request, thread_id: str) -> JSONResponse:
+    """Soft-archive a thread without deleting its history."""
     ext = _get_extension(request)
     ctx = ext._context
-    archived = await ctx.archive_session(session_id)
+    archived = await ctx.archive_thread(thread_id)
     if not archived:
         return JSONResponse(
             status_code=404,
             content={
                 "error": {
-                    "message": f"Session {session_id} not found",
+                    "message": f"Thread {thread_id} not found",
                     "type": "not_found",
-                    "code": "session_not_found",
+                    "code": "thread_not_found",
                 }
             },
         )
@@ -171,7 +387,7 @@ async def delete_session(request: Request, session_id: str) -> JSONResponse:
         content={
             "success": True,
             "message": (
-                "Session archived. Restore it with PATCH /api/sessions/{id} "
+                "Thread archived. Restore it with PATCH /api/threads/{id} "
                 "and is_archived=false."
             ),
         }
@@ -180,7 +396,7 @@ async def delete_session(request: Request, session_id: str) -> JSONResponse:
 
 @router.get("/projects")
 async def get_projects(request: Request) -> JSONResponse:
-    """List project metadata without embedded sessions."""
+    """List project metadata without embedded threads."""
     ext = _get_extension(request)
     ctx = ext._context
     projects = await ctx.list_projects()
@@ -216,22 +432,29 @@ async def create_project(request: Request) -> JSONResponse:
     payload = CreateProjectRequest.model_validate(await request.json())
     project = await ctx.create_project(
         name=payload.name,
+        description=payload.description,
+        icon=payload.icon,
         instructions=payload.instructions,
         agent_config=payload.agent_config,
         files=payload.files,
+        links=payload.links,
     )
     return JSONResponse(content={"project": _project_model(project).model_dump()})
 
 
 @router.patch("/projects/{project_id}")
 async def patch_project(request: Request, project_id: str) -> JSONResponse:
-    """Update project metadata and replace file attachments when provided."""
+    """Update project metadata and replace file/link attachments when provided."""
     ext = _get_extension(request)
     ctx = ext._context
     payload = UpdateProjectRequest.model_validate(await request.json())
     project = await ctx.update_project(
         project_id,
         name=payload.name if "name" in payload.model_fields_set else UNSET,
+        description=payload.description
+        if "description" in payload.model_fields_set
+        else UNSET,
+        icon=payload.icon if "icon" in payload.model_fields_set else UNSET,
         instructions=payload.instructions
         if "instructions" in payload.model_fields_set
         else UNSET,
@@ -239,6 +462,7 @@ async def patch_project(request: Request, project_id: str) -> JSONResponse:
         if "agent_config" in payload.model_fields_set
         else UNSET,
         files=payload.files if "files" in payload.model_fields_set else UNSET,
+        links=payload.links if "links" in payload.model_fields_set else UNSET,
     )
     if project is None:
         return JSONResponse(
@@ -256,7 +480,7 @@ async def patch_project(request: Request, project_id: str) -> JSONResponse:
 
 @router.delete("/projects/{project_id}")
 async def delete_project(request: Request, project_id: str) -> JSONResponse:
-    """Delete a project. Bound sessions are unlinked via foreign-key rules."""
+    """Delete a project. Bound threads are unlinked via foreign-key rules."""
     ext = _get_extension(request)
     ctx = ext._context
     deleted = await ctx.delete_project(project_id)
@@ -274,9 +498,680 @@ async def delete_project(request: Request, project_id: str) -> JSONResponse:
     return JSONResponse(
         content={
             "success": True,
-            "message": "Project deleted and bound sessions were unlinked.",
+            "message": "Project deleted and bound threads were unlinked.",
         }
     )
+
+
+@router.get("/inbox")
+async def get_inbox_items(
+    request: Request,
+    source_type: str | None = None,
+    entity_type: str | None = None,
+    status: str = "active",
+    unread: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> JSONResponse:
+    """List inbox items with filtering and pagination."""
+    if status not in {"active", "deleted", "all"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    if limit < 1 or limit > 100:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "limit must be between 1 and 100",
+                    "type": "invalid_request_error",
+                    "code": "invalid_limit",
+                }
+            },
+        )
+    if offset < 0:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "offset must be >= 0",
+                    "type": "invalid_request_error",
+                    "code": "invalid_offset",
+                }
+            },
+        )
+
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    status_filter = None if status == "all" else status
+    is_read_filter = False if unread is True else None
+
+    items, total = await inbox.list_items(
+        source_type=source_type,
+        entity_type=entity_type,
+        status=status_filter,
+        is_read=is_read_filter,
+        limit=limit,
+        offset=offset,
+    )
+    unread_count = await inbox.get_unread_count()
+    response = InboxListResponse(
+        items=[
+            InboxItem.model_validate(_to_mapping(item)).model_dump() for item in items
+        ],
+        total=total,
+        unread_count=unread_count,
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/inbox/stream", response_model=None)
+async def stream_inbox_items(request: Request):
+    """SSE stream for inbox.item.ingested events."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    ext = _get_extension(request)
+    queue = ext.create_inbox_stream_queue()
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        except asyncio.CancelledError:
+            return
+        finally:
+            ext.remove_inbox_stream_queue(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/inbox/{id}")
+async def get_inbox_item(request: Request, id: int) -> JSONResponse:
+    """Get a single inbox item by id."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+    return JSONResponse(
+        content=InboxItem.model_validate(_to_mapping(item)).model_dump()
+    )
+
+
+@router.post("/inbox/{id}/read")
+async def mark_inbox_read(request: Request, id: int) -> JSONResponse:
+    """Mark one inbox item as read."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+    await inbox.mark_read(id)
+    return JSONResponse(content={"success": True})
+
+
+@router.post("/inbox/read-all")
+async def mark_all_inbox_read(request: Request) -> JSONResponse:
+    """Mark all inbox items as read, optionally filtered by source_type."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    source_type: str | None = None
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        value = payload.get("source_type")
+        if isinstance(value, str) and value.strip():
+            source_type = value.strip()
+
+    await inbox.mark_all_read(source_type)
+    return JSONResponse(content={"success": True})
+
+
+@router.delete("/inbox/{id}")
+async def delete_inbox_item(request: Request, id: int) -> JSONResponse:
+    """Soft-delete an inbox item by upserting deleted status."""
+    inbox = _get_inbox_extension(request)
+    if not inbox:
+        return _inbox_unavailable_response()
+
+    item = await inbox.get_item(id)
+    if item is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Inbox item {id} not found",
+                    "type": "not_found",
+                    "code": "inbox_not_found",
+                }
+            },
+        )
+
+    result = await inbox.upsert_item(
+        InboxItemInput(
+            source_type=item.source_type,
+            source_account=item.source_account,
+            entity_type=item.entity_type,
+            external_id=item.external_id,
+            title=item.title,
+            occurred_at=item.occurred_at,
+            status="deleted",
+            payload=item.payload,
+        )
+    )
+    if not result.success:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": result.error or "Failed to delete inbox item",
+                    "type": "server_error",
+                    "code": "inbox_delete_failed",
+                }
+            },
+        )
+    return JSONResponse(content={"success": True})
+
+
+@router.get("/schedules")
+async def get_schedules(request: Request, status: str | None = None) -> JSONResponse:
+    """List one-shot and recurring schedules."""
+    if status and status not in {"scheduled", "fired", "active", "paused", "cancelled"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    rows = await store.list_all()
+    filtered_rows = _filter_schedule_rows(rows, status)
+    schedules = [_schedule_item_model(row) for row in filtered_rows]
+    response = ScheduleListResponse(
+        schedules=schedules,
+        count=len(schedules),
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.post("/schedules/once")
+async def create_once_schedule(request: Request) -> JSONResponse:
+    """Create one-shot schedule."""
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    try:
+        payload = CreateOnceScheduleRequest.model_validate(await request.json())
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    fire_at: float
+    if payload.delay_seconds is not None:
+        fire_at = now + payload.delay_seconds
+    else:
+        fire_at = _parse_iso_to_timestamp(payload.at_iso)
+        if fire_at is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "Invalid at_iso format. Use ISO 8601.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+        if fire_at <= now:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "at_iso must be in the future.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+
+    event_payload = _build_event_payload(
+        topic=payload.topic,
+        message=payload.message,
+        channel_id=payload.channel_id,
+        payload_extra=payload.payload_extra,
+    )
+    schedule_id = await store.insert_one_shot(
+        payload.topic,
+        json.dumps(event_payload, ensure_ascii=False),
+        fire_at,
+    )
+    response = ScheduleOnceResponse(
+        success=True,
+        schedule_id=schedule_id,
+        topic=payload.topic,
+        fires_in_seconds=max(int(fire_at - now), 0),
+        status="scheduled",
+    )
+    return JSONResponse(status_code=201, content=response.model_dump())
+
+
+@router.post("/schedules/recurring")
+async def create_recurring_schedule(request: Request) -> JSONResponse:
+    """Create recurring schedule."""
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    try:
+        payload = CreateRecurringScheduleRequest.model_validate(await request.json())
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    if payload.cron:
+        try:
+            next_fire = croniter(payload.cron.strip(), now).get_next(float)
+        except (ValueError, KeyError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": f"Invalid cron expression: {exc}",
+                        "type": "invalid_request_error",
+                        "code": "invalid_cron",
+                    }
+                },
+            )
+    else:
+        next_fire = now + (payload.every_seconds or 0)
+
+    until_at = _parse_iso_to_timestamp(payload.until_iso) if payload.until_iso else None
+    if payload.until_iso and until_at is None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid until_iso format. Use ISO 8601.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_datetime",
+                }
+            },
+        )
+    if until_at is not None and until_at <= now:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "until_iso must be in the future.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_datetime",
+                }
+            },
+        )
+
+    event_payload = _build_event_payload(
+        topic=payload.topic,
+        message=payload.message,
+        channel_id=payload.channel_id,
+        payload_extra=payload.payload_extra,
+    )
+    schedule_id = await store.insert_recurring(
+        payload.topic,
+        json.dumps(event_payload, ensure_ascii=False),
+        payload.cron.strip() if payload.cron else None,
+        payload.every_seconds,
+        until_at,
+        next_fire,
+    )
+    response = ScheduleRecurringResponse(
+        success=True,
+        schedule_id=schedule_id,
+        next_fire_iso=_to_utc_iso(next_fire),
+        status="created",
+    )
+    return JSONResponse(status_code=201, content=response.model_dump())
+
+
+@router.delete("/schedules/{type}/{id}")
+async def delete_schedule(request: Request, type: str, id: int) -> JSONResponse:
+    """Cancel one-shot or recurring schedule."""
+    if type not in {"one_shot", "recurring"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid schedule type",
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_type",
+                }
+            },
+        )
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    rows = await store.list_all()
+    row = next(
+        (item for item in rows if item.get("type") == type and item.get("id") == id),
+        None,
+    )
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Schedule {type}/{id} not found",
+                    "type": "not_found",
+                    "code": "schedule_not_found",
+                }
+            },
+        )
+
+    if type == "one_shot":
+        if row.get("status") != "scheduled":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "message": "Cannot cancel one-shot schedule in current status",
+                        "type": "conflict",
+                        "code": "schedule_conflict",
+                    }
+                },
+            )
+        ok = await store.cancel_one_shot(id)
+        if not ok:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "message": "Cannot cancel one-shot schedule in current status",
+                        "type": "conflict",
+                        "code": "schedule_conflict",
+                    }
+                },
+            )
+    else:
+        await store.cancel_recurring(id)
+
+    result = OperationResult(success=True, message=f"Schedule {type}/{id} cancelled.")
+    return JSONResponse(content=result.model_dump())
+
+
+@router.patch("/schedules/{type}/{id}")
+async def patch_schedule(request: Request, type: str, id: int) -> JSONResponse:
+    """Update recurring schedule fields or status."""
+    if type not in {"one_shot", "recurring"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid schedule type",
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_type",
+                }
+            },
+        )
+    if type == "one_shot":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "message": "PATCH is supported only for recurring schedules",
+                    "type": "invalid_request_error",
+                    "code": "one_shot_update_not_supported",
+                }
+            },
+        )
+
+    store = _get_scheduler_store(request)
+    if not store:
+        return _scheduler_unavailable_response()
+
+    raw_payload = await request.json()
+    try:
+        payload = UpdateScheduleRequest.model_validate(raw_payload)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "code": "invalid_schedule_payload",
+                }
+            },
+        )
+
+    now = time.time()
+    if payload.cron:
+        try:
+            croniter(payload.cron.strip(), now).get_next(float)
+        except (ValueError, KeyError) as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": f"Invalid cron expression: {exc}",
+                        "type": "invalid_request_error",
+                        "code": "invalid_cron",
+                    }
+                },
+            )
+
+    until_at = None
+    if "until_iso" in payload.model_fields_set and payload.until_iso is not None:
+        until_at = _parse_iso_to_timestamp(payload.until_iso)
+        if until_at is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "Invalid until_iso format. Use ISO 8601.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+        if until_at <= now:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "until_iso must be in the future.",
+                        "type": "invalid_request_error",
+                        "code": "invalid_datetime",
+                    }
+                },
+            )
+
+    next_fire = await store.update_recurring(
+        id,
+        cron_expr=payload.cron.strip() if payload.cron else None,
+        every_sec=payload.every_seconds,
+        until_at=until_at,
+        status=payload.status,
+        set_until="until_iso" in payload.model_fields_set,
+    )
+    if next_fire is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Recurring schedule {id} not found",
+                    "type": "not_found",
+                    "code": "schedule_not_found",
+                }
+            },
+        )
+    response = UpdateScheduleResponse(
+        success=True,
+        schedule_id=id,
+        next_fire_iso=_to_utc_iso(next_fire),
+        message=f"Schedule #{id} updated.",
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/tasks")
+async def get_tasks(request: Request, status: str = "active") -> JSONResponse:
+    """List tasks from task_engine with status filter."""
+    if status not in _TASK_STATUSES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid status filter",
+                    "type": "invalid_request_error",
+                    "code": "invalid_status",
+                }
+            },
+        )
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+    result = await task_engine.list_tasks(status=status)
+    response = TaskListResponse(
+        tasks=[_task_item_model(task) for task in result.tasks],
+        total=int(result.total),
+    )
+    return JSONResponse(content=response.model_dump())
+
+
+@router.get("/tasks/{task_id}")
+async def get_task(request: Request, task_id: str) -> JSONResponse:
+    """Get one task details."""
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+    task = await task_engine.get_task(task_id)
+    task_data = _to_mapping(task)
+    if task_data.get("status") == "not_found":
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Task {task_id} not found",
+                    "type": "not_found",
+                    "code": "task_not_found",
+                }
+            },
+        )
+    return JSONResponse(content=_task_item_model(task).model_dump())
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def post_task_cancel(request: Request, task_id: str) -> JSONResponse:
+    """Cancel a task."""
+    task_engine = _get_task_engine(request)
+    if not task_engine:
+        return _task_engine_unavailable_response()
+
+    reason = ""
+    try:
+        raw = await request.json()
+    except json.JSONDecodeError:
+        raw = {}
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid request payload",
+                    "type": "invalid_request_error",
+                    "code": "invalid_task_payload",
+                }
+            },
+        )
+    payload = CancelTaskRequest.model_validate(raw)
+    reason = payload.reason or ""
+
+    result = await task_engine.cancel_task(task_id, reason)
+    response = CancelTaskResponse(
+        task_id=result.task_id,
+        status=result.status,
+        message=result.message,
+    )
+    return JSONResponse(content=response.model_dump())
 
 
 @router.get("/notifications")

@@ -1,7 +1,6 @@
 """ExtensionContext: kernel API for extensions."""
 
 import asyncio
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -9,12 +8,13 @@ from typing import TYPE_CHECKING, Any
 
 from core.events.topics import SystemTopics
 from core.extensions.contract import TurnContext
-from core.extensions.persistence.models import ProjectInfo, SessionInfo
+from core.extensions.persistence.models import ProjectInfo, ThreadInfo
 from core.extensions.persistence.project_service import ProjectService
-from core.extensions.persistence.session_manager import SessionManager
+from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.router import MessageRouter
 from core.extensions.update_fields import UNSET, UnsetType
 from core.llm import ModelRouterProtocol
+from core.logging_config import SubsystemLogger
 from core.secrets import get_secret_async, set_secret_async
 
 if TYPE_CHECKING:
@@ -30,9 +30,9 @@ class ExtensionContext:
         self,
         extension_id: str,
         config: dict[str, Any],
-        logger: logging.Logger,
+        logger: SubsystemLogger,
         router: MessageRouter,
-        session_manager: SessionManager,
+        thread_manager: ThreadManager,
         project_service: ProjectService | None,
         get_extension: Callable[[str], Any],
         data_dir_path: Path,
@@ -45,12 +45,13 @@ class ExtensionContext:
         event_bus: "EventBus | None" = None,
         agent_registry: "AgentRegistry | None" = None,
         restart_file_path: Path | None = None,
+        default_agent_id: str = "orchestrator_agent",
     ) -> None:
         self.extension_id = extension_id
         self.config = config
         self.logger = logger
         self._router = router
-        self._sessions = session_manager
+        self._threads = thread_manager
         self._projects = project_service
         self._get_extension = get_extension
         self._data_dir_path = data_dir_path
@@ -63,6 +64,7 @@ class ExtensionContext:
         self._event_bus = event_bus
         self._agent_registry = agent_registry
         self._restart_file_path = restart_file_path
+        self.default_agent_id: str = default_agent_id
         self.on_user_message = self._router.handle_user_message
 
     @property
@@ -153,6 +155,19 @@ class ExtensionContext:
             {"prompt": prompt, "correlation_id": correlation_id},
         )
 
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+    ) -> int:
+        """Purge queued event_journal items linked to a cancelled schedule."""
+        if not self._event_bus:
+            return 0
+        return await self._event_bus.purge_scheduled_events(
+            schedule_id=schedule_id,
+            schedule_type=schedule_type,
+        )
+
     def subscribe_event(
         self,
         topic: str,
@@ -178,58 +193,58 @@ class ExtensionContext:
         """Get an instance of another extension (only from depends_on)."""
         return self._get_extension(extension_id)
 
-    async def list_sessions(
+    async def list_threads(
         self,
         include_archived: bool = False,
         project_id: str | None = None,
         channel_id: str | None = None,
-    ) -> list[SessionInfo]:
-        """List persisted session metadata from session.db."""
-        return await self._sessions.list_sessions(
+    ) -> list[ThreadInfo]:
+        """List persisted thread metadata from thread.db."""
+        return await self._threads.list_threads(
             include_archived=include_archived,
             project_id=project_id,
             channel_id=channel_id,
         )
 
-    async def create_session(
+    async def create_thread(
         self,
         *,
-        session_id: str,
+        thread_id: str,
         channel_id: str,
         project_id: str | None = None,
         title: str | None = None,
-    ) -> SessionInfo:
-        """Create a persisted session row before any messages are sent."""
+    ) -> ThreadInfo:
+        """Create a persisted thread row before any messages are sent."""
         if project_id is not None and self._projects is not None:
             project = await asyncio.to_thread(self._projects.get_project, project_id)
             if project is None:
                 raise ValueError(f"Project {project_id} not found")
         return await asyncio.to_thread(
-            self._sessions.session_repository.create_session,
-            session_id,
+            self._threads.thread_repository.create_thread,
+            thread_id,
             channel_id,
             project_id,
             title,
             int(time.time()),
         )
 
-    async def get_session(
-        self, session_id: str, include_archived: bool = False
-    ) -> SessionInfo | None:
-        """Read persisted session metadata."""
-        return await self._sessions.get_session(
-            session_id, include_archived=include_archived
+    async def get_thread(
+        self, thread_id: str, include_archived: bool = False
+    ) -> ThreadInfo | None:
+        """Read persisted thread metadata."""
+        return await self._threads.get_thread(
+            thread_id, include_archived=include_archived
         )
 
-    async def update_session(
+    async def update_thread(
         self,
-        session_id: str,
+        thread_id: str,
         *,
         title: str | None | UnsetType = UNSET,
         project_id: str | None | UnsetType = UNSET,
         is_archived: bool | UnsetType = UNSET,
-    ) -> SessionInfo | None:
-        """Update selected persisted session metadata fields."""
+    ) -> ThreadInfo | None:
+        """Update selected persisted thread metadata fields."""
         if (
             project_id is not UNSET
             and project_id is not None
@@ -238,20 +253,20 @@ class ExtensionContext:
             project = await asyncio.to_thread(self._projects.get_project, project_id)
             if project is None:
                 raise ValueError(f"Project {project_id} not found")
-        return await self._sessions.update_session(
-            session_id,
+        return await self._threads.update_thread(
+            thread_id,
             title=title,
             project_id=project_id,
             is_archived=is_archived,
         )
 
-    async def archive_session(self, session_id: str) -> bool:
-        """Soft-archive a session without deleting its history."""
-        return await self._sessions.archive_session(session_id)
+    async def archive_thread(self, thread_id: str) -> bool:
+        """Soft-archive a thread without deleting its history."""
+        return await self._threads.archive_thread(thread_id)
 
-    async def get_session_history(self, session_id: str) -> list[dict[str, Any]] | None:
-        """Return stored messages/items for a session. None if session is unknown."""
-        return await self._sessions.get_session_history(session_id)
+    async def get_thread_history(self, thread_id: str) -> list[dict[str, Any]] | None:
+        """Return stored messages/items for a thread. None if thread is unknown."""
+        return await self._threads.get_thread_history(thread_id)
 
     async def list_projects(self) -> list[ProjectInfo]:
         """List persisted projects."""
@@ -269,19 +284,25 @@ class ExtensionContext:
         self,
         *,
         name: str,
+        description: str | None = None,
+        icon: str | None = None,
         instructions: str | None = None,
         agent_config: dict[str, Any] | None = None,
         files: list[str] | None = None,
+        links: list[str] | None = None,
     ) -> ProjectInfo:
-        """Create a project in session.db."""
+        """Create a project in thread.db."""
         if self._projects is None:
             raise RuntimeError("Project service is not configured")
         return await asyncio.to_thread(
             self._projects.create_project,
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files or [],
+            links=links or [],
             now_ts=int(time.time()),
         )
 
@@ -290,9 +311,12 @@ class ExtensionContext:
         project_id: str,
         *,
         name: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon: str | None | UnsetType = UNSET,
         instructions: str | None | UnsetType = UNSET,
         agent_config: dict[str, Any] | None | UnsetType = UNSET,
         files: list[str] | UnsetType = UNSET,
+        links: list[str] | UnsetType = UNSET,
     ) -> ProjectInfo | None:
         """Update selected project metadata fields."""
         if self._projects is None:
@@ -301,14 +325,17 @@ class ExtensionContext:
             self._projects.update_project,
             project_id,
             name=name,
+            description=description,
+            icon=icon,
             instructions=instructions,
             agent_config=agent_config,
             files=files,
+            links=links,
             now_ts=int(time.time()),
         )
 
     async def delete_project(self, project_id: str) -> bool:
-        """Delete a project and unlink bound sessions via foreign key rules."""
+        """Delete a project and unlink bound threads via foreign key rules."""
         if self._projects is None:
             return False
         return await asyncio.to_thread(self._projects.delete_project, project_id)

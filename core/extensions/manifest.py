@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class AgentLimits(BaseModel):
@@ -49,7 +49,6 @@ class ScheduleEntry(BaseModel):
         description="Task name passed to execute_task. If empty, uses name.",
     )
 
-    @computed_field
     @property
     def task_name(self) -> str:
         """Task name passed to execute_task."""
@@ -60,8 +59,9 @@ class AgentManifestConfig(BaseModel):
     """Agent section in manifest.yaml."""
 
     integration_mode: Literal["tool", "handoff"] = "tool"
-    model: str
+    model: str = ""
     instructions: str = ""
+    parallel_tool_calls: bool = False
     parameters: dict[str, Any] = Field(default_factory=dict)
     uses_tools: list[str] = Field(default_factory=list)
     limits: AgentLimits = Field(default_factory=AgentLimits)
@@ -78,7 +78,7 @@ class ExtensionManifest(BaseModel):
     setup_instructions: str = ""
     depends_on: list[str] = Field(default_factory=list)
     secrets: list[str] = Field(default_factory=list)
-    config: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     agent: AgentManifestConfig | None = None
     # Optional: agent_id for ModelRouter.get_model(agent_id); defaults to extension id

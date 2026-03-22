@@ -4,7 +4,7 @@ import logging
 
 import httpx
 
-from interfaces import ReadResult
+from sandbox.extensions.web_search.interfaces import ReadResult
 
 logger = logging.getLogger(__name__)
 

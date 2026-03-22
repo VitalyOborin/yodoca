@@ -17,7 +17,7 @@ The heaviest coupling points were:
 
 - `MessageRouter` acting as both routing coordinator and session/project CRUD facade
 - `ExtensionContext` proxying persistence through `MessageRouter`
-- session and project schema ownership living inside `SessionRepository`
+- session and project schema ownership living inside `ThreadRepository`
 - duplicated manifest iteration logic in loader-related code
 
 This made testing harder, increased pass-through code, and blurred domain boundaries.
@@ -27,14 +27,14 @@ This made testing harder, increased pass-through code, and blurred domain bounda
 Refactor internals around explicit service boundaries while preserving the public `core.extensions` entrypoints:
 
 1. Introduce typed persistence models:
-   - `SessionInfo`
+   - `ThreadInfo`
    - `ProjectInfo`
 
 2. Move shared SQLite DDL into a dedicated schema module used by both repositories.
 
 3. Remove session/project CRUD responsibilities from `MessageRouter`.
 
-4. Inject `SessionManager` and `ProjectService` directly into `ExtensionContext`.
+4. Inject `ThreadManager` and `ProjectService` directly into `ExtensionContext`.
 
 5. Update the built-in project context provider to depend on persistence services instead of `MessageRouter`.
 
@@ -58,3 +58,4 @@ Negative:
 
 - internal APIs changed for tests and callers using non-public implementation details
 - `core/extensions/` is still a flat package; a later move to subpackages remains possible
+

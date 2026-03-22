@@ -25,6 +25,7 @@ dependencies = [
     "tavily-python>=0.5.0",
     "aioimaplib>=1.1.0",
     "beautifulsoup4>=4.12.0",
+    "ag-ui-protocol>=0.1.13",
 ]
 
 [project.optional-dependencies]
@@ -38,11 +39,15 @@ observability = [
 dev = [
     "ruff>=0.8.0",
     "mypy>=1.11.0",
+    "types-PyYAML>=6.0.12.20250915",
+    "types-croniter>=6.0.0.20250809",
     "import-linter>=2.0.0",
     "bandit>=1.7.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-httpx>=0.30.0",
+    "vulture>=2.14",
+    "pre-commit>=4.0.0",
 ]
 
 [build-system]
@@ -58,6 +63,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]  # flake8 + isort + bugbear + pyupgrade
+ignore = ["E402", "E501"]
 
 [tool.ruff.format]
 # drop-in replacement for black
@@ -65,8 +71,8 @@ select = ["E", "F", "I", "B", "UP"]  # flake8 + isort + bugbear + pyupgrade
 [tool.importlinter]
 root_package = "core"
 include_external_packages = true
-# Extensions are loaded dynamically (importlib) under synthetic names, so they are not
-# importable as sandbox.extensions.*; only the forbidden contract is enforced.
+# Extensions are loaded dynamically via package imports (sandbox.extensions.*);
+# this contract only enforces one-way core -> extensions isolation.
 
 [[tool.importlinter.contracts]]
 name = "Core is independent of extensions"
@@ -82,6 +88,7 @@ warn_unused_configs = true
 warn_unreachable = true
 warn_no_return = true
 show_error_codes = true
+exclude = "(^|/)(\\.venv|tests|scripts|sandbox/extensions)(/|$)"
 
 [[tool.mypy.overrides]]
 module = ["tests.*", "scripts.*", "migrations.*"]
@@ -102,6 +109,17 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.vulture]
+min_confidence = 80
+paths = [
+    "core",
+    "sandbox/extensions",
+    "onboarding",
+    "supervisor",
+    "scripts/vulture_allowlist.py",
+]
+exclude = [".venv", "tests", "**/__pycache__"]
 
 [dependency-groups]
 dev = [

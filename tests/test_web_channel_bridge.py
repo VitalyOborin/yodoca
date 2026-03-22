@@ -1,6 +1,5 @@
 """Tests for web_channel RequestBridge."""
 
-
 import pytest
 
 from sandbox.extensions.web_channel.bridge import STREAM_END, RequestBridge

@@ -1,16 +1,14 @@
 """Tests for Execution Tracing extension: storage CRUD, extension lifecycle, hooks."""
 
-import asyncio
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sandbox.extensions.tracing.main import TracingExtension
 from sandbox.extensions.tracing.models import Span, SpanStatus, SpanType
 from sandbox.extensions.tracing.storage import TracingStorage
-from sandbox.extensions.tracing.main import TracingExtension
-
 
 # ---------------------------------------------------------------------------
 # Storage CRUD tests
@@ -121,16 +119,29 @@ async def test_storage_trace_stats(tmp_path: Path) -> None:
     try:
         t = time.time()
         await storage.save_span(
-            Span(id="s1", session_id="sess", status=SpanStatus.COMPLETED,
-                 started_at=t, duration_ms=100, token_input=10, token_output=20)
+            Span(
+                id="s1",
+                session_id="sess",
+                status=SpanStatus.COMPLETED,
+                started_at=t,
+                duration_ms=100,
+                token_input=10,
+                token_output=20,
+            )
         )
         await storage.save_span(
-            Span(id="s2", session_id="sess", status=SpanStatus.ERROR,
-                 started_at=t + 1, error_message="fail")
+            Span(
+                id="s2",
+                session_id="sess",
+                status=SpanStatus.ERROR,
+                started_at=t + 1,
+                error_message="fail",
+            )
         )
         await storage.save_span(
-            Span(id="s3", session_id="sess", status=SpanStatus.RUNNING,
-                 started_at=t + 2)
+            Span(
+                id="s3", session_id="sess", status=SpanStatus.RUNNING, started_at=t + 2
+            )
         )
         stats = await storage.get_trace_stats(session_id="sess")
         assert stats["total_spans"] == 3
@@ -150,12 +161,8 @@ async def test_storage_cleanup_old_traces(tmp_path: Path) -> None:
     await storage.initialize()
     try:
         old_time = time.time() - (31 * 86400)  # 31 days ago
-        await storage.save_span(
-            Span(id="old", session_id="s", started_at=old_time)
-        )
-        await storage.save_span(
-            Span(id="new", session_id="s", started_at=time.time())
-        )
+        await storage.save_span(Span(id="old", session_id="s", started_at=old_time))
+        await storage.save_span(Span(id="new", session_id="s", started_at=time.time()))
         deleted = await storage.cleanup_old_traces(retention_days=30)
         assert deleted == 1
         assert await storage.get_span("old") is None
@@ -174,12 +181,14 @@ def _make_mock_context(tmp_path: Path) -> MagicMock:
     ctx = MagicMock()
     ctx.data_dir = tmp_path / "data" / "tracing"
     ctx.data_dir.mkdir(parents=True, exist_ok=True)
-    ctx.get_config = MagicMock(side_effect=lambda key, default=None: {
-        "max_input_summary_len": 2000,
-        "max_output_summary_len": 2000,
-        "trace_tool_calls": True,
-        "retention_days": 30,
-    }.get(key, default))
+    ctx.get_config = MagicMock(
+        side_effect=lambda key, default=None: {
+            "max_input_summary_len": 2000,
+            "max_output_summary_len": 2000,
+            "trace_tool_calls": True,
+            "retention_days": 30,
+        }.get(key, default)
+    )
     ctx.emit = AsyncMock()
     # Mock router/invoker path
     invoker = MagicMock()
@@ -204,15 +213,18 @@ async def test_extension_initialize_and_health(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_extension_provides_tools(tmp_path: Path) -> None:
-    """get_tools returns two tools after initialization."""
+    """get_tools returns tracing analytics tools after initialization."""
     ctx = _make_mock_context(tmp_path)
     ext = TracingExtension()
     await ext.initialize(ctx)
     tools = ext.get_tools()
-    assert len(tools) == 2
+    assert len(tools) == 5
     names = {getattr(t, "name", "") for t in tools}
-    assert "get_execution_trace" in names
-    assert "get_trace_stats" in names
+    assert "tracing_get_last_trace" in names
+    assert "tracing_get_session_stats" in names
+    assert "tracing_get_tool_usage" in names
+    assert "tracing_get_cost_report" in names
+    assert "tracing_explain_last_turn" in names
     await ext.destroy()
 
 
@@ -370,16 +382,43 @@ async def test_extension_execute_task_cleanup(tmp_path: Path) -> None:
 async def test_input_summary_truncation(tmp_path: Path) -> None:
     """Input summary is truncated to max_input_summary_len."""
     ctx = _make_mock_context(tmp_path)
-    ctx.get_config = MagicMock(side_effect=lambda key, default=None: {
-        "max_input_summary_len": 10,
-        "max_output_summary_len": 10,
-        "trace_tool_calls": True,
-        "retention_days": 30,
-    }.get(key, default))
+    ctx.get_config = MagicMock(
+        side_effect=lambda key, default=None: {
+            "max_input_summary_len": 10,
+            "max_output_summary_len": 10,
+            "trace_tool_calls": True,
+            "retention_days": 30,
+        }.get(key, default)
+    )
     ext = TracingExtension()
     await ext.initialize(ctx)
     span_id = await ext.on_invoke_start("a" * 100, "sess", "agent")
     span = await ext._storage.get_span(span_id)
     assert span is not None
     assert len(span.input_summary) == 10
+    await ext.destroy()
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_and_exceeded_events(tmp_path: Path) -> None:
+    """Budget events are emitted once when configured thresholds are crossed."""
+    ctx = _make_mock_context(tmp_path)
+    ctx.get_config = MagicMock(
+        side_effect=lambda key, default=None: {
+            "max_input_summary_len": 2000,
+            "max_output_summary_len": 2000,
+            "trace_tool_calls": True,
+            "retention_days": 30,
+            "warn_at_session_tokens": 1,
+            "stop_at_session_tokens": 2,
+            "pricing": {},
+        }.get(key, default)
+    )
+    ext = TracingExtension()
+    await ext.initialize(ctx)
+    span_id = await ext.on_invoke_start("hello", "sess-budget", "agent")
+    await ext.on_invoke_end(span_id, "world")
+    topics = [call.args[0] for call in ctx.emit.await_args_list]
+    assert "tracing.budget.warning" in topics
+    assert "tracing.budget.exceeded" in topics
     await ext.destroy()

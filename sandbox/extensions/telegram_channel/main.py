@@ -1,17 +1,9 @@
 """Telegram channel extension: aiogram-based polling, Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider."""
 
 import asyncio
-import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
-
-from formatting import escape_html, md_to_tg_html
+from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -19,9 +11,16 @@ from aiogram.enums import ParseMode
 from aiogram.types import Message
 from aiogram.utils.token import TokenValidationError, validate_token
 
+from sandbox.extensions.telegram_channel.formatting import (
+    escape_html,
+    md_to_tg_html,
+    split_for_telegram,
+)
+
 if TYPE_CHECKING:
-    from core.extensions.contract import TurnContext
     from core.extensions.context import ExtensionContext
+    from core.extensions.contract import TurnContext
+    from sandbox.extensions.kv.main import KvStoreProtocol
 
 
 # Typing action is shown for 5 seconds; repeat every 4 seconds while agent is working.
@@ -29,6 +28,15 @@ TYPING_HEARTBEAT_INTERVAL_SEC = 4
 
 
 MAX_TG_MESSAGE_LEN = 4096
+
+
+def _is_valid_chat_id(value: str) -> bool:
+    """Telegram chat IDs are integers (positive for users, negative for groups)."""
+    try:
+        int(value)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 @dataclass
@@ -42,14 +50,11 @@ class StreamState:
 
 
 class TelegramChannelExtension:
-    """Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider.
-
-    Single-user app: always sends to self._chat_id regardless of user_id argument.
-    """
+    """Extension + ChannelProvider + ServiceProvider + SetupProvider + ContextProvider."""
 
     def __init__(self) -> None:
-        self._ctx: "ExtensionContext | None" = None
-        self._kv: Any = None
+        self._ctx: ExtensionContext | None = None
+        self._kv: KvStoreProtocol | None = None
         self._bot: Bot | None = None
         self._dp: Dispatcher | None = None
         self._token: str | None = None
@@ -60,17 +65,11 @@ class TelegramChannelExtension:
         self._stream_min_chunk_chars = 20
         self._streams: dict[str, StreamState] = {}
 
-    # ------------------------------------------------------------------ #
-    # ContextProvider                                                       #
-    # ------------------------------------------------------------------ #
-
     @property
     def context_priority(self) -> int:
         return 10  # inject before Memory (priority=100)
 
-    async def get_context(
-        self, prompt: str, turn_context: "TurnContext"
-    ) -> str | None:
+    async def get_context(self, prompt: str, turn_context: "TurnContext") -> str | None:
         if self._bot and self._token and self._chat_id:
             return (
                 "## Available channels\n"
@@ -81,18 +80,16 @@ class TelegramChannelExtension:
         if self._token:
             return (
                 "## Available channels\n"
-                "- telegram_channel — TOKEN OK, awaiting first /start from user to capture chat_id. "
-                "Cannot send proactive messages yet.\n"
+                "- telegram_channel — PARTIALLY CONFIGURED. Token is set, "
+                "but chat_id is missing. The user MUST open Telegram and send /start "
+                "to the bot before messages can be sent. "
+                "Do NOT attempt send_to_channel — it will fail.\n"
             )
         return (
             "## Available channels\n"
             "- telegram_channel — NOT CONFIGURED (token missing). "
             "Ask the user to run Telegram setup before attempting to send.\n"
         )
-
-    # ------------------------------------------------------------------ #
-    # SetupProvider                                                         #
-    # ------------------------------------------------------------------ #
 
     def get_setup_schema(self) -> list[dict]:
         """SetupProvider: schema for interactive configuration."""
@@ -103,39 +100,32 @@ class TelegramChannelExtension:
                 "secret": True,
                 "required": True,
             },
-            {
-                "name": "chat_id",
-                "description": "Telegram chat ID (auto-captured from first message if omitted)",
-                "secret": False,
-                "required": False,
-            },
         ]
 
     async def apply_config(self, name: str, value: str) -> None:
-        """SetupProvider: save token to keyring, chat_id to KV."""
+        """SetupProvider: save token to keyring. chat_id is auto-captured only."""
         if not self._ctx:
             raise RuntimeError("Extension not initialized")
-        value = (value or "").strip() or None
-        if name == "token":
-            token_key = self._ctx.get_config(
-                "token_secret", f"{self._ctx.extension_id}_token"
+        if name != "token":
+            raise ValueError(
+                f"Unknown config param '{name}'. "
+                "Only 'token' can be set manually; chat_id is auto-captured "
+                "when the user sends /start to the bot."
             )
-            if value:
-                await self._ctx.set_secret(token_key, value)
+        value = (value or "").strip()
+        if not value:
             return
-        kv = self._ctx.get_extension("kv")
-        if not kv:
-            raise RuntimeError("KV extension not available")
-        key = f"{self._ctx.extension_id}.{name}"
-        await kv.set(key, value)
+        token_key = self._ctx.get_config("token_secret", "telegram_bot_token")
+        await self._ctx.set_secret(token_key, value)
+        # New token invalidates any previously captured chat_id.
+        await self._clear_chat_id()
+        await self._activate_token(value)
 
     async def on_setup_complete(self) -> tuple[bool, str]:
         """SetupProvider: verify token is valid via Telegram API. chat_id is optional (auto-captured)."""
         if not self._ctx:
             return False, "Extension not initialized"
-        token_key = self._ctx.get_config(
-            "token_secret", f"{self._ctx.extension_id}_token"
-        )
+        token_key = self._ctx.get_config("token_secret", "telegram_bot_token")
         token = await self._ctx.get_secret(token_key)
         if not token and self._kv:
             token = await self._kv.get(f"{self._ctx.extension_id}.token")
@@ -151,15 +141,119 @@ class TelegramChannelExtension:
             try:
                 me = await bot.get_me()
                 display = f"@{me.username}" if me.username else me.first_name
-                return True, f"Telegram connected: {display}"
+                await self._load_chat_id()
+                if self._chat_id:
+                    # Verify the stored chat_id is reachable via this token.
+                    try:
+                        await bot.get_chat(chat_id=int(self._chat_id))
+                    except Exception:
+                        await self._clear_chat_id()
+                        return True, (
+                            f"Token verified (bot {display}), but the stored chat_id "
+                            "is no longer valid and has been cleared. "
+                            "The user must open Telegram and send /start to the bot. "
+                            "After that, the bot will auto-capture a new chat_id."
+                        )
+                    return (
+                        True,
+                        f"Telegram fully configured: bot {display}, ready to send.",
+                    )
             finally:
                 await bot.session.close()
         except Exception:
             return False, "Telegram API rejected the token"
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle                                                             #
-    # ------------------------------------------------------------------ #
+        return True, (
+            f"Token verified (bot {display}), but chat_id is not yet captured. "
+            "The user must open Telegram and send /start to the bot first. "
+            "After that, the bot will auto-capture the chat_id and become ready."
+        )
+
+    async def _load_chat_id(self) -> None:
+        if not self._ctx or not self._kv:
+            return
+        chat_id_raw = await self._kv.get(f"{self._ctx.extension_id}.chat_id")
+        if not chat_id_raw:
+            self._chat_id = None
+            return
+        value = str(chat_id_raw).strip()
+        if not _is_valid_chat_id(value):
+            self._ctx.logger.warning(
+                "Telegram channel: ignoring invalid chat_id '%s' in KV (expected numeric)",
+                value,
+            )
+            await self._kv.set(f"{self._ctx.extension_id}.chat_id", None)
+            self._chat_id = None
+            return
+        self._chat_id = value
+
+    async def _clear_chat_id(self) -> None:
+        """Remove stale chat_id from KV and in-memory state."""
+        self._chat_id = None
+        if self._ctx and self._kv:
+            await self._kv.set(f"{self._ctx.extension_id}.chat_id", None)
+
+    def _wire_dispatcher(self) -> None:
+        if not self._ctx or not self._kv:
+            return
+        self._dp = Dispatcher()
+        ctx = self._ctx
+        ext_id = ctx.extension_id
+        kv = self._kv
+
+        async def on_message(message: Message) -> None:
+            if not message.text:
+                return
+            chat = message.chat
+            if not chat:
+                return
+            msg_chat_id = str(chat.id)
+            if self._chat_id is None:
+                self._chat_id = msg_chat_id
+                await kv.set(f"{ext_id}.chat_id", msg_chat_id)
+                ctx.logger.info("Telegram channel: auto-saved chat_id=%s", msg_chat_id)
+            if msg_chat_id != self._chat_id:
+                return
+            await ctx.emit(
+                "user.message",
+                {"text": message.text, "user_id": msg_chat_id, "channel_id": ext_id},
+            )
+
+        self._dp.message.register(on_message)
+
+    async def _close_bot(self) -> None:
+        """Close the active bot session if one exists."""
+        if self._bot:
+            try:
+                await self._bot.session.close()
+            except Exception:
+                pass
+            self._bot = None
+
+    async def _activate_token(self, token: str) -> None:
+        if not self._ctx:
+            return
+        token = token.strip()
+        await self._close_bot()
+        if not token:
+            self._token = None
+            self._dp = None
+            return
+        try:
+            validate_token(token)
+        except TokenValidationError as e:
+            self._ctx.logger.warning("Telegram token format is invalid: %s", e)
+            self._token = None
+            self._dp = None
+            return
+
+        self._token = token
+        self._bot = Bot(
+            token=self._token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        self._wire_dispatcher()
+        await self._load_chat_id()
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
@@ -174,17 +268,14 @@ class TelegramChannelExtension:
         )
         self._polling_timeout = int(context.get_config("polling_timeout", 30))
 
-        token_key = context.get_config("token_secret", f"{context.extension_id}_token")
+        token_key = context.get_config("token_secret", "telegram_bot_token")
         token = await context.get_secret(token_key)
         if not token:
             token = await self._kv.get(f"{context.extension_id}.token")
-        if token:
-            token = token.strip()
-
+        token = token.strip() if token else ""
         if not token:
             context.logger.info(
-                "Telegram channel: no token. Use request_secure_input for secret '%s', "
-                "then request_restart().",
+                "Telegram channel: no token. Use request_secure_input for secret '%s'.",
                 token_key,
             )
             self._token = None
@@ -193,51 +284,15 @@ class TelegramChannelExtension:
             self._dp = None
             return
 
-        try:
-            validate_token(token)
-        except TokenValidationError as e:
-            raise RuntimeError(f"Invalid Telegram bot token: {e}") from e
-
-        chat_id_raw = await self._kv.get(f"{context.extension_id}.chat_id")
-        chat_id = str(chat_id_raw).strip() if chat_id_raw else None
-
-        self._token = token
-        self._chat_id = chat_id
-
-        self._bot = Bot(
-            token=self._token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
-        self._dp = Dispatcher()
-
-        ctx = context
-        ext_id = context.extension_id
-        kv = self._kv
-
-        async def on_message(message: Message) -> None:
-            if not message.text:
-                return
-            chat = message.chat
-            if not chat:
-                return
-            msg_chat_id = str(chat.id)
-
-            if self._chat_id is None:
-                self._chat_id = msg_chat_id
-                await kv.set(f"{ext_id}.chat_id", msg_chat_id)
-                ctx.logger.info("Telegram channel: auto-saved chat_id=%s", msg_chat_id)
-
-            if msg_chat_id != self._chat_id:
-                return
-            await ctx.emit(
-                "user.message",
-                {"text": message.text, "user_id": msg_chat_id, "channel_id": ext_id},
+        await self._activate_token(token)
+        if not self._token:
+            context.logger.warning(
+                "Telegram channel: stored token is invalid. Awaiting reconfiguration."
             )
-
-        self._dp.message.register(on_message)
-        if chat_id:
+            return
+        if self._chat_id:
             context.logger.info(
-                "Telegram channel initialized (polling, chat_id=%s)", chat_id
+                "Telegram channel initialized (polling, chat_id=%s)", self._chat_id
             )
         else:
             context.logger.info(
@@ -248,49 +303,48 @@ class TelegramChannelExtension:
         pass
 
     async def stop(self) -> None:
-        """Loader cancels run_background task; no extra cleanup needed."""
-        pass
+        if self._dp:
+            await self._dp.stop_polling()
 
     async def destroy(self) -> None:
-        if self._bot:
-            try:
-                await self._bot.session.close()
-            except Exception:
-                pass
-            self._bot = None
+        await self._close_bot()
         self._dp = None
         self._token = None
 
     def health_check(self) -> bool:
         return bool(self._bot and self._token and self._chat_id)
 
-    # ------------------------------------------------------------------ #
-    # ServiceProvider                                                       #
-    # ------------------------------------------------------------------ #
+    def get_channel_status(self) -> str:
+        """Human-readable setup state for orchestrator context (duck-typed on router)."""
+        if self._bot and self._token and self._chat_id:
+            return "READY"
+        if self._token:
+            return "TOKEN OK — waiting for user to /start the bot in Telegram"
+        return "NOT CONFIGURED — token missing"
 
     async def run_background(self) -> None:
         """ServiceProvider: run aiogram long-polling until cancelled."""
-        if not self._bot or not self._dp or not self._token:
-            return
-        try:
-            await self._dp.start_polling(
-                self._bot,
-                handle_signals=False,
-                polling_timeout=self._polling_timeout,
-                allowed_updates=["message"],
-            )
-        except asyncio.CancelledError:
-            raise
-        finally:
-            if self._bot:
-                try:
-                    await self._bot.session.close()
-                except Exception:
-                    pass
-
-    # ------------------------------------------------------------------ #
-    # Streaming helpers                                                     #
-    # ------------------------------------------------------------------ #
+        backoff = 1.0
+        max_backoff = 60.0
+        while True:
+            try:
+                if not self._bot or not self._dp or not self._token:
+                    await asyncio.sleep(0.5)
+                    continue
+                backoff = 1.0  # reset on every successful polling start
+                await self._dp.start_polling(
+                    self._bot,
+                    handle_signals=False,
+                    polling_timeout=self._polling_timeout,
+                    allowed_updates=["message"],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._ctx:
+                    self._ctx.logger.exception("Telegram polling failed: %s", e)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _typing_heartbeat(self) -> None:
         """Send typing action every 4 seconds (Telegram shows it for 5s). Run as task until cancelled."""
@@ -306,7 +360,10 @@ class TelegramChannelExtension:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    pass
+                    if self._ctx:
+                        self._ctx.logger.debug(
+                            "Typing heartbeat send_chat_action failed", exc_info=True
+                        )
         except asyncio.CancelledError:
             pass
 
@@ -350,7 +407,8 @@ class TelegramChannelExtension:
             )
             state.last_edit_at = now
         except Exception:
-            pass
+            if self._ctx:
+                self._ctx.logger.debug("Stream chunk edit failed", exc_info=True)
 
     async def on_stream_status(self, user_id: str, status: str) -> None:
         if not self._streaming_enabled or not self._bot:
@@ -358,7 +416,10 @@ class TelegramChannelExtension:
         try:
             await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
         except Exception:
-            return
+            if self._ctx:
+                self._ctx.logger.debug(
+                    "Stream status send_chat_action failed", exc_info=True
+                )
 
     async def on_stream_end(self, user_id: str, full_text: str) -> None:
         if not self._bot:
@@ -376,52 +437,38 @@ class TelegramChannelExtension:
             except asyncio.CancelledError:
                 pass
         try:
-            formatted = md_to_tg_html(full_text)
-            if len(formatted) <= MAX_TG_MESSAGE_LEN:
-                await self._bot.edit_message_text(
+            parts = split_for_telegram(full_text, MAX_TG_MESSAGE_LEN)
+            first, *rest = parts if parts else [md_to_tg_html(full_text)]
+            await self._bot.edit_message_text(
+                chat_id=self._chat_id,
+                message_id=state.message_id,
+                text=first,
+                parse_mode=ParseMode.HTML,
+            )
+            for part in rest:
+                await self._bot.send_message(
                     chat_id=self._chat_id,
-                    message_id=state.message_id,
-                    text=formatted,
+                    text=part,
                     parse_mode=ParseMode.HTML,
                 )
-            else:
-                parts = [
-                    formatted[i : i + MAX_TG_MESSAGE_LEN]
-                    for i in range(0, len(formatted), MAX_TG_MESSAGE_LEN)
-                ]
-                await self._bot.edit_message_text(
-                    chat_id=self._chat_id,
-                    message_id=state.message_id,
-                    text=parts[0],
-                    parse_mode=ParseMode.HTML,
-                )
-                for part in parts[1:]:
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        text=part,
-                        parse_mode=ParseMode.HTML,
-                    )
         except Exception as e:
             if self._ctx:
                 self._ctx.logger.exception(
                     "Failed to finalize stream for %s: %s", user_id, e
                 )
 
-    # ------------------------------------------------------------------ #
-    # ChannelProvider                                                       #
-    # ------------------------------------------------------------------ #
-
     async def send_to_user(self, user_id: str, message: str) -> None:
-        """ChannelProvider: deliver message to the configured chat_id.
-
-        Single-user app: user_id argument is ignored — always sends to self._chat_id.
-        Raises RuntimeError if the channel is not ready so the agent gets an explicit
-        error instead of a silent no-op.
-        """
-        if not self._bot or not self._token or not self._chat_id:
+        """ChannelProvider: deliver message to configured chat_id or raise RuntimeError."""
+        if not self._bot or not self._token:
             raise RuntimeError(
-                "telegram_channel is not ready: token or chat_id missing. "
-                "Ask the user to complete Telegram setup."
+                "telegram_channel: bot token is not configured. "
+                "Use request_secure_input to collect the token first."
+            )
+        if not self._chat_id:
+            raise RuntimeError(
+                "telegram_channel: chat_id is not yet captured. "
+                "The user must send /start to the bot in Telegram first. "
+                "Cannot send proactive messages until that happens."
             )
         try:
             await self._bot.send_message(

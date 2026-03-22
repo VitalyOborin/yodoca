@@ -134,7 +134,9 @@ class TestSchedulerExtension:
         await ext.destroy()
 
     @pytest.mark.asyncio
-    async def test_schedule_once_tool_returns_structured_result(self, tmp_path: Path) -> None:
+    async def test_schedule_once_tool_returns_structured_result(
+        self, tmp_path: Path
+    ) -> None:
         """schedule_once tool returns ScheduleOnceResult with success, schedule_id, topic."""
         data_dir = tmp_path / "scheduler"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -145,7 +147,9 @@ class TestSchedulerExtension:
         ctx.emit = AsyncMock()
         await ext.initialize(ctx)
         tools = ext.get_tools()
-        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        schedule_once = next(
+            t for t in tools if getattr(t, "name", None) == "schedule_once"
+        )
         args = json.dumps(
             {
                 "topic": "system.user.notify",
@@ -179,7 +183,9 @@ class TestSchedulerExtension:
         ctx.emit = AsyncMock()
         await ext.initialize(ctx)
         tools = ext.get_tools()
-        schedule_once = next(t for t in tools if getattr(t, "name", None) == "schedule_once")
+        schedule_once = next(
+            t for t in tools if getattr(t, "name", None) == "schedule_once"
+        )
         args = json.dumps(
             {
                 "topic": "system.user.notify",
@@ -197,7 +203,9 @@ class TestSchedulerExtension:
         await ext.destroy()
 
     @pytest.mark.asyncio
-    async def test_list_schedules_returns_structured_result(self, tmp_path: Path) -> None:
+    async def test_list_schedules_returns_structured_result(
+        self, tmp_path: Path
+    ) -> None:
         """list_schedules returns ListSchedulesResult with success and schedules list."""
         data_dir = tmp_path / "scheduler"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +217,9 @@ class TestSchedulerExtension:
         await ext.initialize(ctx)
         await ext._store.insert_one_shot("test.topic", "{}", time.time() + 60)
         tools = ext.get_tools()
-        list_tool = next(t for t in tools if getattr(t, "name", None) == "list_schedules")
+        list_tool = next(
+            t for t in tools if getattr(t, "name", None) == "list_schedules"
+        )
         args = json.dumps({"status": "scheduled"}, ensure_ascii=False)
         result = await list_tool.on_invoke_tool(
             _make_tool_ctx(list_tool.name, args), args
@@ -265,7 +275,8 @@ class TestSchedulerExtension:
         ctx.emit.assert_called()
         call_args = ctx.emit.call_args
         assert call_args[0][0] == "tick.topic"
-        assert call_args[0][1] == {"x": 1}
+        assert call_args[0][1]["x"] == 1
+        assert call_args[0][1]["__schedule"]["type"] == "one_shot"
         await ext.destroy()
 
     @pytest.mark.asyncio
@@ -311,6 +322,33 @@ class TestSchedulerExtension:
         assert ok is True
         due = await ext._store.fetch_due_one_shot(time.time() + 120)
         assert len(due) == 0
+        await ext.destroy()
+
+    @pytest.mark.asyncio
+    async def test_cancel_purges_pending_events(self, tmp_path: Path) -> None:
+        """Cancel paths call context purge hook with schedule metadata."""
+        data_dir = tmp_path / "scheduler"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ext = SchedulerExtension()
+        ctx = MagicMock()
+        ctx.data_dir = data_dir
+        ctx.get_config = lambda k, d=None: 30 if k == "tick_interval" else d
+        ctx.emit = AsyncMock()
+        ctx.purge_scheduled_events = AsyncMock(return_value=2)
+        await ext.initialize(ctx)
+
+        one_shot_id = await ext._store.insert_one_shot(
+            "cancel.topic", "{}", time.time() + 60
+        )
+        ok = await ext._store.cancel_one_shot(one_shot_id)
+        assert ok is True
+        ctx.purge_scheduled_events.assert_awaited_with(one_shot_id, "one_shot")
+
+        recurring_id = await ext._store.insert_recurring(
+            "cancel.recur", "{}", None, 60.0, None, time.time() + 60
+        )
+        await ext._store.cancel_recurring(recurring_id)
+        assert ctx.purge_scheduled_events.await_count >= 2
         await ext.destroy()
 
     @pytest.mark.asyncio

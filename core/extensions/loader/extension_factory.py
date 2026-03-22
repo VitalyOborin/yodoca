@@ -1,8 +1,8 @@
 """ExtensionFactory: instantiate extensions from manifests."""
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
+from typing import cast
 
 from core.extensions.contract import Extension
 from core.extensions.manifest import ExtensionManifest
@@ -26,17 +26,7 @@ class ExtensionFactory:
                 f"{manifest.id} must have entrypoint for programmatic extensions"
             )
         module_name, class_name = manifest.entrypoint.split(":", 1)
-        extension_dir = self._extensions_dir / manifest.id
-        py_path = extension_dir / f"{module_name}.py"
-        if not py_path.exists():
-            raise FileNotFoundError(f"{py_path} not found")
-        spec = importlib.util.spec_from_file_location(
-            f"ext_{manifest.id}_{module_name}", py_path
-        )
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load {py_path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module_path = f"sandbox.extensions.{manifest.id}.{module_name}"
+        module = importlib.import_module(module_path)
         cls = getattr(module, class_name)
-        return cls()
+        return cast(Extension, cls())

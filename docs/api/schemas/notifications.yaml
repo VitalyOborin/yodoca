@@ -1,0 +1,19 @@
+# Notification domain schemas.
+# Referenced from the main OpenAPI document.
+
+Notification:
+  type: object
+  properties:
+    id: { type: string }
+    text: { type: string }
+    created_at: { type: integer }
+  required: [id, text, created_at]
+
+NotificationsResponse:
+  type: object
+  properties:
+    notifications:
+      type: array
+      items:
+        $ref: "#/components/schemas/Notification"
+  required: [notifications]

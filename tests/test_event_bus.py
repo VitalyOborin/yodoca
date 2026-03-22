@@ -80,8 +80,8 @@ class TestEventBusClaimPending:
 
         events = await journal.claim_pending(limit=5)
         assert len(events) == 1
-        assert events[0][1] == "a"
-        assert events[0][2] == "b"
+        assert events[0].topic == "a"
+        assert events[0].source == "b"
 
         cursor = await conn.execute(
             "SELECT status, processing_since FROM event_journal"
@@ -228,13 +228,44 @@ class TestEventBusRetryAndDeadLetter:
         assert retry_count >= 2
 
 
+class TestEventBusHandlerTimeout:
+    """Per-handler asyncio.wait_for limit."""
+
+    @pytest.mark.asyncio
+    async def test_handler_timeout_dead_letters(self, db_path: Path) -> None:
+        bus = EventBus(
+            db_path=db_path,
+            poll_interval=0.05,
+            batch_size=5,
+            max_retries=0,
+            handler_timeout=0.15,
+        )
+        await bus.recover()
+
+        async def slow_handler(event: Event) -> None:
+            await asyncio.sleep(999)
+
+        bus.subscribe("slow.topic", slow_handler, "slow_sub")
+        await bus.start()
+        await bus.publish("slow.topic", "src", {})
+        await asyncio.sleep(0.5)
+
+        conn = await bus._journal._ensure_conn()
+        cursor = await conn.execute("SELECT status, error FROM event_journal")
+        rows = await cursor.fetchall()
+        await bus.stop()
+        assert len(rows) == 1
+        status, err = rows[0]
+        assert status == "dead_letter"
+        assert err is not None
+        assert "timed out" in (err or "").lower() or "slow_sub" in (err or "")
+
+
 class TestUserMessageDedupJournal:
     """user_message_processing table: is_user_message_completed, record_user_message_completed."""
 
     @pytest.mark.asyncio
-    async def test_is_completed_false_when_not_recorded(
-        self, db_path: Path
-    ) -> None:
+    async def test_is_completed_false_when_not_recorded(self, db_path: Path) -> None:
         journal = EventJournal(db_path)
         await journal._ensure_conn()
         assert await journal.is_user_message_completed(1) is False
@@ -255,3 +286,85 @@ class TestUserMessageDedupJournal:
         assert await event_bus.is_user_message_completed(1) is False
         await event_bus.record_user_message_completed(1)
         assert await event_bus.is_user_message_completed(1) is True
+
+
+class TestSchedulePurgeJournal:
+    """Purge scheduled events by __schedule metadata."""
+
+    @pytest.mark.asyncio
+    async def test_purge_scheduled_events_removes_only_matching_pending_processing(
+        self, db_path: Path
+    ) -> None:
+        journal = EventJournal(db_path)
+        conn = await journal._ensure_conn()
+        now = time.time()
+        await conn.executemany(
+            """
+            INSERT INTO event_journal (topic, source, payload, status, created_at)
+            VALUES (?, 'scheduler', ?, ?, ?)
+            """,
+            [
+                (
+                    "system.agent.task",
+                    '{"prompt":"A","__schedule":{"id":7,"type":"recurring"}}',
+                    "pending",
+                    now,
+                ),
+                (
+                    "system.user.notify",
+                    '{"text":"B","__schedule":{"id":7,"type":"recurring"}}',
+                    "processing",
+                    now,
+                ),
+                (
+                    "system.agent.task",
+                    '{"prompt":"C","__schedule":{"id":8,"type":"recurring"}}',
+                    "pending",
+                    now,
+                ),
+                (
+                    "system.agent.task",
+                    '{"prompt":"D","__schedule":{"id":7,"type":"recurring"}}',
+                    "done",
+                    now,
+                ),
+            ],
+        )
+        await conn.commit()
+
+        deleted = await journal.purge_scheduled_events(
+            schedule_id=7,
+            schedule_type="recurring",
+            topics=[
+                "system.agent.task",
+                "system.user.notify",
+                "system.agent.background",
+            ],
+        )
+        assert deleted == 2
+
+        cursor = await conn.execute(
+            "SELECT status, payload FROM event_journal ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        assert len(rows) == 2
+        assert '"id":8' in rows[0][1]
+        assert rows[1][0] == "done"
+        await journal.close()
+
+    @pytest.mark.asyncio
+    async def test_event_bus_exposes_schedule_purge(self, event_bus: EventBus) -> None:
+        await event_bus.publish(
+            "system.agent.task",
+            "scheduler",
+            {"prompt": "A", "__schedule": {"id": 10, "type": "one_shot"}},
+        )
+        await event_bus.publish(
+            "system.agent.task",
+            "scheduler",
+            {"prompt": "B", "__schedule": {"id": 11, "type": "one_shot"}},
+        )
+        deleted = await event_bus.purge_scheduled_events(
+            schedule_id=10, schedule_type="one_shot"
+        )
+        assert deleted == 1

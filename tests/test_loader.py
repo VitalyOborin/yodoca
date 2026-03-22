@@ -1,11 +1,13 @@
 """Tests for Loader: dependency order, discover, protocol detection, lifecycle."""
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from core.agents.registry import AgentRecord, AgentRegistry
 from core.events import EventBus
@@ -16,22 +18,26 @@ from core.extensions.contract import (
     AgentResponse,
     ChannelProvider,
     Extension,
-    ServiceProvider,
-    ToolProvider,
+    SetupProvider,
 )
-from core.extensions.routing.event_wiring import EventWiringManager
-from core.extensions.loader import Loader, ExtensionState
+from core.extensions.loader import (
+    ExtensionConfigValidationError,
+    ExtensionState,
+    Loader,
+)
 from core.extensions.manifest import ExtensionManifest
+from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.router import MessageRouter
+from core.settings_models import AppSettings
 
-
-_EMPTY_SETTINGS: dict = {"extensions": {}}
+_EMPTY_SETTINGS = AppSettings()
 
 
 def _manifest(
     ext_id: str,
     depends_on: list[str] | None = None,
     config: dict | None = None,
+    setup_instructions: str = "",
 ) -> ExtensionManifest:
     data: dict = {
         "id": ext_id,
@@ -41,6 +47,8 @@ def _manifest(
     }
     if config is not None:
         data["config"] = config
+    if setup_instructions:
+        data["setup_instructions"] = setup_instructions
     return ExtensionManifest.model_validate(data)
 
 
@@ -166,7 +174,7 @@ class TestLoadAllAndProtocolDetection:
         await loader.discover()
         await loader.load_all()
         assert len(loader._extensions) >= 1
-        for ext_id, ext in loader._extensions.items():
+        for _ext_id, ext in loader._extensions.items():
             assert isinstance(ext, Extension)
 
     @pytest.mark.asyncio
@@ -190,6 +198,33 @@ class TestLoadAllAndProtocolDetection:
         )
         has_tools = len(tools) > 0  # kv provides kv_set, kv_get
         assert has_channel or has_tools or len(loader._extensions) == 0
+
+    def test_get_tool_catalog_includes_manifest_description(self) -> None:
+        class _ToolExt:
+            def get_tools(self) -> list:
+                return []
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [
+            ExtensionManifest.model_validate(
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "entrypoint": "main:Cls",
+                    "description": "Search and read web pages",
+                }
+            ),
+        ]
+        loader._extensions = {"web_search": _ToolExt()}
+        loader._state = {"web_search": ExtensionState.ACTIVE}
+
+        catalog = loader.get_tool_catalog()
+
+        assert "core_tools" in catalog
+        assert "web_search" in catalog
+        assert catalog["web_search"]["description"] == "Search and read web pages"
 
 
 class TestProactiveLoop:
@@ -227,7 +262,9 @@ class TestProactiveLoop:
 
         manager = EventWiringManager(
             router=None,
-            manifests=[self._manifest_with_invoke_agent("email_agent", "email.received")],
+            manifests=[
+                self._manifest_with_invoke_agent("email_agent", "email.received")
+            ],
             state={"email_agent": ExtensionState.INACTIVE},
             extensions={"email_agent": mock_agent},
             agent_registry=registry,
@@ -284,13 +321,16 @@ class TestProactiveLoop:
         loader._agent_registry = registry
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
-        await event_bus.recover()
-        loader.wire_event_subscriptions(event_bus)
+        try:
+            await event_bus.recover()
+            loader.wire_event_subscriptions(event_bus)
 
-        assert "email.received" in event_bus._subscribers
-        handlers = event_bus._subscribers["email.received"]
-        proactive = [h for h in handlers if h[1] == "kernel.proactive"]
-        assert len(proactive) == 1
+            assert "email.received" in event_bus._subscribers
+            handlers = event_bus._subscribers["email.received"]
+            proactive = [h for h in handlers if h[1] == "kernel.proactive"]
+            assert len(proactive) == 1
+        finally:
+            await event_bus.stop()
 
     @pytest.mark.asyncio
     async def test_wire_event_subscriptions_registers_system_topics(
@@ -307,32 +347,51 @@ class TestProactiveLoop:
         loader._agent_registry = AgentRegistry()
 
         event_bus = EventBus(db_path=tmp_path / "events.db")
-        await event_bus.recover()
-        loader.wire_event_subscriptions(event_bus)
+        try:
+            await event_bus.recover()
+            loader.wire_event_subscriptions(event_bus)
 
-        for topic in (
-            SystemTopics.USER_NOTIFY,
-            SystemTopics.AGENT_TASK,
-            SystemTopics.AGENT_BACKGROUND,
-        ):
-            assert topic in event_bus._subscribers
-            handlers = event_bus._subscribers[topic]
-            kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
-            assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
+            for topic in (
+                SystemTopics.USER_NOTIFY,
+                SystemTopics.AGENT_TASK,
+                SystemTopics.AGENT_BACKGROUND,
+            ):
+                assert topic in event_bus._subscribers
+                handlers = event_bus._subscribers[topic]
+                kernel_handlers = [h for h in handlers if h[1] == "kernel.system"]
+                assert len(kernel_handlers) == 1, f"Expected kernel handler for {topic}"
+        finally:
+            await event_bus.stop()
 
     @pytest.mark.asyncio
-    async def test_on_agent_task_passes_turn_context_channel(self, tmp_path: Path) -> None:
-        """system.agent.task passes channel_id into background invoke turn_context."""
-        loader = Loader(extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS)
+    async def test_on_agent_task_passes_turn_context_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """system.agent.task runs non-blocking and still passes channel_id into turn_context."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=tmp_path, settings=_EMPTY_SETTINGS
+        )
         router = MessageRouter()
-        router.invoke_agent_background = AsyncMock(return_value="done")  # type: ignore[method-assign]
+
+        async def _slow_invoke(*_args, **_kwargs):
+            await asyncio.sleep(0.2)
+            return "done"
+
+        router.invoke_agent_background = AsyncMock(side_effect=_slow_invoke)  # type: ignore[method-assign]
         router.notify_user = AsyncMock()  # type: ignore[method-assign]
         loader._router = router
 
         event = SimpleNamespace(
-            payload={"prompt": "run this", "channel_id": "telegram_channel"}
+            id=42,
+            correlation_id="corr-1",
+            payload={"prompt": "run this", "channel_id": "telegram_channel"},
         )
+        started_at = time.perf_counter()
         await loader._on_agent_task(event)
+        elapsed = time.perf_counter() - started_at
+        assert elapsed < 0.1
+
+        await asyncio.sleep(0.3)
 
         assert router.invoke_agent_background.await_count == 1
         _args, kwargs = router.invoke_agent_background.await_args
@@ -397,7 +456,9 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        settings_with_override = {"extensions": {"x": {"tick_interval": 120}}}
+        settings_with_override = AppSettings(
+            extensions={"x": {"tick_interval": 120}},
+        )
         loader = Loader(
             extensions_dir=Path("."),
             data_dir=Path("."),
@@ -434,7 +495,7 @@ class TestInitializeAndLifecycle:
                 return True
 
         manifest_with_config = _manifest("x", config={"tick_interval": 30})
-        settings_no_override = {"extensions": {}}
+        settings_no_override = AppSettings()
         loader = Loader(
             extensions_dir=Path("."), data_dir=Path("."), settings=settings_no_override
         )
@@ -447,6 +508,44 @@ class TestInitializeAndLifecycle:
         ctx = received_ctx[0]
         assert ctx.get_config("tick_interval", 10) == 30  # manifest wins
         assert ctx.get_config("missing_key", 10) == 10  # default wins
+
+    @pytest.mark.asyncio
+    async def test_initialize_all_raises_when_configmodel_validation_fails(
+        self,
+    ) -> None:
+        class StrictConfig(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            allowed: int = 1
+
+        class MockExtWithSchema:
+            ConfigModel = StrictConfig
+
+            async def initialize(self, context: object) -> None:
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("x", config={"bad_key": 99})]
+        loader._extensions = {"x": MockExtWithSchema()}
+        loader._state = {"x": ExtensionState.INACTIVE}
+        router = MessageRouter()
+        with pytest.raises(ExtensionConfigValidationError) as exc_info:
+            await loader.initialize_all(router)
+        assert "x" in exc_info.value.message
+        assert "bad_key" in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_start_all_calls_start_and_sets_active(self) -> None:
@@ -658,3 +757,81 @@ class TestDependencyCascadeAndFailFast:
             RuntimeError, match="Dependency 'b' of 'a' is in ERROR state"
         ):
             get_ext("b")
+
+
+class TestSetupProviders:
+    """SetupProvider detection and setup_instructions in capabilities summary."""
+
+    @pytest.mark.asyncio
+    async def test_update_setup_providers_populates_configured_state(self) -> None:
+        """_update_setup_providers_state calls on_setup_complete and stores result."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(return_value=(True, "OK"))
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._extensions = {"setup_ext": mock_ext}
+        loader._state = {"setup_ext": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+
+        assert loader._setup_providers == {"setup_ext": True}
+        mock_ext.on_setup_complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_setup_providers_stores_false_when_not_configured(
+        self,
+    ) -> None:
+        """_update_setup_providers_state stores False when on_setup_complete returns (False, msg)."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(return_value=(False, "token required"))
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._extensions = {"setup_ext": mock_ext}
+        loader._state = {"setup_ext": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+
+        assert loader._setup_providers == {"setup_ext": False}
+
+    @pytest.mark.asyncio
+    async def test_get_capabilities_summary_includes_unconfigured_setup_instructions(
+        self,
+    ) -> None:
+        """get_capabilities_summary includes Extensions needing setup when SetupProvider is unconfigured."""
+        mock_ext = MagicMock(spec=SetupProvider)
+        mock_ext.on_setup_complete = AsyncMock(return_value=(False, "token required"))
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [
+            _manifest(
+                "telegram_channel",
+                setup_instructions="Use request_secure_input for token.",
+            ),
+        ]
+        loader._extensions = {"telegram_channel": mock_ext}
+        loader._state = {"telegram_channel": ExtensionState.INACTIVE}
+
+        await loader._update_setup_providers_state()
+        summary = loader.get_capabilities_summary()
+
+        assert "Extensions needing setup" in summary
+        assert "telegram_channel" in summary
+        assert "request_secure_input" in summary
+
+    def test_get_extensions_returns_extensions_dict(self) -> None:
+        """get_extensions returns the extensions dict."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        ext_a, ext_b = object(), object()
+        loader._extensions = {"a": ext_a, "b": ext_b}
+        ext = loader.get_extensions()
+        assert ext is loader._extensions
+        assert ext["a"] is ext_a
+        assert ext["b"] is ext_b

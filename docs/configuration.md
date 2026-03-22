@@ -8,7 +8,7 @@ Application settings are loaded from `config/settings.yaml`. Secrets (API keys) 
 
 - **Path:** `config/settings.yaml` (relative to project root)
 - **Format:** YAML
-- **Merge:** Values are deep-merged over built-in defaults in `core/settings.py`
+- **Merge:** Values are deep-merged over built-in defaults, then validated as `AppSettings` in `core/settings_models.py` (see `core/settings.py`). Invalid YAML or schema errors prevent startup.
 
 ---
 

@@ -1,9 +1,11 @@
 """Key-Value Store extension. Provides kv_set and kv_get tools backed by a JSON file in data_dir."""
 
+import asyncio
 import fnmatch
 import json
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from agents import function_tool
 from pydantic import BaseModel, Field
@@ -31,19 +33,50 @@ class KvGetResult(BaseModel):
     error: str | None = None
 
 
+@runtime_checkable
+class KvStoreProtocol(Protocol):
+    """Typed programmatic KV API for extensions via context.get_extension('kv')."""
+
+    async def get(self, key: str) -> str | None: ...
+
+    async def set(self, key: str, value: str | None) -> None: ...
+
+    async def get_matching(self, pattern: str) -> dict[str, str]: ...
+
+
 _DATA_FILE = "values.json"
 _TEMP_FILE = "values.json.tmp"
+
+
+def _parse_max_entries(raw: Any) -> int:
+    """Resolve max_entries from config; invalid or non-positive falls back to 500."""
+    if raw is None:
+        return 500
+    try:
+        n = int(raw)
+        return n if n > 0 else 500
+    except (TypeError, ValueError):
+        return 500
 
 
 class _FileStore:
     """JSON file-backed key-value store. Atomic writes via temp file + replace."""
 
-    def __init__(self, data_dir: Path, namespace: str) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        namespace: str,
+        logger: logging.Logger,
+        max_entries: int,
+    ) -> None:
         self._data_dir = data_dir
         self._namespace = (namespace or "").strip()
         self._path = data_dir / _DATA_FILE
         self._temp_path = data_dir / _TEMP_FILE
         self._healthy = False
+        self._logger = logger
+        self._max_entries = max_entries
+        self._lock = asyncio.Lock()
 
     def _ns(self, key: str) -> str:
         return f"{self._namespace}:{key}" if self._namespace else key
@@ -61,7 +94,10 @@ class _FileStore:
             raw = self._path.read_text(encoding="utf-8")
             data = json.loads(raw)
             return data if isinstance(data, dict) else {}
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            self._logger.warning(
+                "KV store file corrupt or unreadable, starting fresh: %s", exc
+            )
             return {}
 
     def _save(self, store: dict[str, str]) -> None:
@@ -76,29 +112,36 @@ class _FileStore:
         self._healthy = True
 
     async def get(self, key: str) -> str | None:
-        store = self._load()
-        return store.get(self._ns(key.strip()))
+        async with self._lock:
+            store = await asyncio.to_thread(self._load)
+            return store.get(self._ns(key.strip()))
 
     async def get_matching(self, pattern: str) -> dict[str, str]:
         """Return all key-value pairs where user-facing key matches the glob pattern.
         Pattern uses * (any chars) and ? (single char), e.g. 'key:*', '*what*', 'start*:part*'.
         """
-        store = self._load()
-        result: dict[str, str] = {}
-        for stored_key, value in store.items():
-            user_key = self._to_user_key(stored_key)
-            if fnmatch.fnmatch(user_key, pattern):
-                result[user_key] = value
-        return dict(sorted(result.items()))
+        async with self._lock:
+            store = await asyncio.to_thread(self._load)
+            result: dict[str, str] = {}
+            for stored_key, value in store.items():
+                user_key = self._to_user_key(stored_key)
+                if fnmatch.fnmatch(user_key, pattern):
+                    result[user_key] = value
+            return dict(sorted(result.items()))
 
     async def set(self, key: str, value: str | None) -> None:
-        store = self._load()
-        ns_key = self._ns(key.strip())
-        if value is None:
-            store.pop(ns_key, None)
-        else:
-            store[ns_key] = value
-        self._save(store)
+        async with self._lock:
+            store = await asyncio.to_thread(self._load)
+            ns_key = self._ns(key.strip())
+            if value is None:
+                store.pop(ns_key, None)
+            else:
+                if ns_key not in store and len(store) >= self._max_entries:
+                    raise ValueError(
+                        f"KV store entry limit reached ({self._max_entries} entries)."
+                    )
+                store[ns_key] = value
+            await asyncio.to_thread(self._save, store)
 
     async def close(self) -> None:
         self._healthy = False
@@ -117,7 +160,13 @@ class KvExtension:
     async def initialize(self, context: Any) -> None:
         self._context = context
         namespace = context.get_config("namespace", "") or ""
-        self._store = _FileStore(context.data_dir, namespace)
+        max_entries = _parse_max_entries(context.get_config("max_entries", None))
+        self._store = _FileStore(
+            context.data_dir,
+            namespace,
+            context.logger,
+            max_entries,
+        )
         self._store.initialize()
 
     async def start(self) -> None:
@@ -134,33 +183,29 @@ class KvExtension:
     def health_check(self) -> bool:
         return self._store is not None and self._store.is_healthy()
 
-    async def get(self, key: str) -> str | None:
-        """Return value for key (for other extensions via context.get_extension('kv'))."""
+    def _require_store(self) -> _FileStore:
+        """Return initialized store or raise a consistent runtime error."""
         if not self._store:
             raise RuntimeError("KV store not initialized")
-        return await self._store.get(key)
+        return self._store
+
+    async def get(self, key: str) -> str | None:
+        """Return value for key (for other extensions via context.get_extension('kv'))."""
+        return await self._require_store().get(key)
 
     async def get_matching(self, pattern: str) -> dict[str, str]:
         """Return all key-value pairs matching the glob pattern (for other extensions)."""
-        if not self._store:
-            raise RuntimeError("KV store not initialized")
-        return await self._store.get_matching(pattern)
+        return await self._require_store().get_matching(pattern)
 
     async def set(self, key: str, value: str | None) -> None:
         """Write or delete key (for other extensions via context.get_extension('kv'))."""
-        if not self._store:
-            raise RuntimeError("KV store not initialized")
-        await self._store.set(key, value)
+        await self._require_store().set(key, value)
 
-    def get_tools(self) -> list[Any]:
-        if not self._store:
-            return []
-        store = self._store
-
-        @function_tool(name_override="kv_set", strict_mode=False)
+    def _build_kv_set_tool(self, store: _FileStore) -> Any:
+        @function_tool(name_override="kv_set")
         async def kv_set(
             key: str,
-            value: Any = "",
+            value: str = "",
         ) -> KvSetResult:
             """Store a value under key in the persistent key-value store.
 
@@ -168,7 +213,7 @@ class KvExtension:
 
             Args:
                 key: Non-empty key name. Use alphanumeric, underscore, hyphen for best compatibility.
-                value: Value to store. Can be string, number, or boolean. Empty string to delete.
+                value: String value to store. Empty string to delete.
             """
             if not key or not key.strip():
                 return KvSetResult(
@@ -177,19 +222,27 @@ class KvExtension:
                     error="key must be a non-empty string.",
                 )
 
-            if value is not None:
-                value = str(value)
-
+            normalized_key = key.strip()
             val: str | None = value.strip() if value else None
             if val == "":
                 val = None
 
-            await store.set(key.strip(), val)
+            try:
+                await store.set(normalized_key, val)
+            except ValueError as exc:
+                return KvSetResult(
+                    success=False,
+                    status="error",
+                    error=str(exc),
+                )
 
             if val is None:
-                return KvSetResult(success=True, key=key.strip(), status="deleted")
-            return KvSetResult(success=True, key=key.strip(), status="set")
+                return KvSetResult(success=True, key=normalized_key, status="deleted")
+            return KvSetResult(success=True, key=normalized_key, status="set")
 
+        return kv_set
+
+    def _build_kv_get_tool(self, store: _FileStore) -> Any:
         @function_tool(name_override="kv_get")
         async def kv_get(key: str) -> KvGetResult:
             """Retrieve value(s) from the persistent key-value store.
@@ -208,27 +261,41 @@ class KvExtension:
                     status="error",
                     error="key must be a non-empty string.",
                 )
-            k = key.strip()
-            if "*" in k or "?" in k:
-                matches = await store.get_matching(k)
+            normalized_key = key.strip()
+            if "*" in normalized_key or "?" in normalized_key:
+                matches = await store.get_matching(normalized_key)
                 if not matches:
                     return KvGetResult(
                         success=False,
-                        key=k,
+                        key=normalized_key,
                         status="not_found",
-                        error=f"No keys matching pattern '{k}'.",
+                        error=f"No keys matching pattern '{normalized_key}'.",
                     )
                 return KvGetResult(
-                    success=True, key=k, matches=matches, status="pattern_match"
+                    success=True,
+                    key=normalized_key,
+                    matches=matches,
+                    status="pattern_match",
                 )
-            result = await store.get(k)
+            result = await store.get(normalized_key)
             if result is None:
                 return KvGetResult(
                     success=False,
-                    key=k,
+                    key=normalized_key,
                     status="not_found",
-                    error=f"Key '{k}' not found.",
+                    error=f"Key '{normalized_key}' not found.",
                 )
-            return KvGetResult(success=True, key=k, value=result, status="found")
+            return KvGetResult(
+                success=True,
+                key=normalized_key,
+                value=result,
+                status="found",
+            )
 
-        return [kv_set, kv_get]
+        return kv_get
+
+    def get_tools(self) -> list[Any]:
+        if not self._store:
+            return []
+        store = self._store
+        return [self._build_kv_set_tool(store), self._build_kv_get_tool(store)]

@@ -1,12 +1,9 @@
+default_agent: orchestrator_agent
 agents:
   default:
     instructions: sandbox/prompts/default.jinja2
     model: gpt-5-mini
     provider: openai
-  orchestrator:
-    instructions: sandbox/prompts/orchestrator.jinja2
-    model: qwen/qwen3.5-9b
-    provider: lm_studio
 event_bus:
   batch_size: 3
   db_path: sandbox/data/event_journal.db
@@ -22,8 +19,15 @@ logging:
   backup_count: 3
   file: sandbox/logs/app.log
   level: INFO
+  # console_level: WARNING   # optional; defaults to level (independent from file)
+  # console_style: text      # text | json
+  # file_style: text         # text | json
   log_to_console: false
   max_bytes: 10485760
+  # subsystems:
+  #   ext.memory: DEBUG
+  #   core.events.bus: INFO
+  # console_subsystems: []    # if set, only these prefixes on console
 providers:
   openai:
     api_key_secret: OPENAI_API_KEY
@@ -47,6 +51,11 @@ models:
     capability_tier: standard
     strengths: [speed, general, cost-effective]
     context_window: 400000
+  gpt-5.4-mini:
+    cost_tier: low
+    capability_tier: standard
+    strengths: [speed, general, cost-effective]
+    context_window: 400000
   gpt-5.4:
     cost_tier: high
     capability_tier: frontier
@@ -62,7 +71,7 @@ models:
     capability_tier: frontier
     strengths: [code, reasoning, tool-use]
     context_window: 128000
-session:
+thread:
   timeout_sec: 1800
 supervisor:
   restart_file: sandbox/.restart_requested

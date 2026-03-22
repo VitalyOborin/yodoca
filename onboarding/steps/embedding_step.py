@@ -4,6 +4,8 @@ Memory requires an embedding model. User can use the same provider as default
 or select a different one (including adding a new provider).
 """
 
+from typing import cast
+
 import questionary
 from questionary import Choice
 
@@ -11,7 +13,7 @@ from onboarding.state import WizardState
 from onboarding.steps.provider_step import (
     _ask_until_nonempty,
     add_provider_credentials_only,
-    get_provider_choices_not_in_state,
+    get_provider_choices,
 )
 from onboarding.ui import STYLE
 
@@ -70,6 +72,8 @@ def run_embedding_step(state: WizardState) -> bool:
         use_same = False
 
     if use_same:
+        if default_provider is None:
+            return False
         provider_id = default_provider
     else:
         provider_id = _choose_or_add_embedding_provider(state, embedding_capable)
@@ -89,7 +93,7 @@ def _choose_or_add_embedding_provider(
 ) -> str | None:
     """Let user pick an existing embedding-capable provider or add a new one. Returns provider_id or None."""
     choices: list[Choice] = [Choice(_label(p), p) for p in embedding_capable]
-    remaining = get_provider_choices_not_in_state(state)
+    remaining = get_provider_choices()
     # Only show "Add new provider" for types that support embeddings
     remaining_embedding = [
         (lbl, pid) for lbl, pid in remaining if pid in _EMBEDDING_MODELS
@@ -97,21 +101,27 @@ def _choose_or_add_embedding_provider(
     if remaining_embedding:
         choices.append(Choice("Add new provider...", _ADD_NEW_PROVIDER))
 
-    provider_id = questionary.select(
-        "Select embedding provider:",
-        choices=choices,
-        style=STYLE,
-    ).ask()
+    provider_id = cast(
+        str | None,
+        questionary.select(
+            "Select embedding provider:",
+            choices=choices,
+            style=STYLE,
+        ).ask(),
+    )
     if provider_id is None:
         return None
 
     if provider_id == _ADD_NEW_PROVIDER:
         add_choices = [Choice(lbl, pid) for lbl, pid in remaining_embedding]
-        which = questionary.select(
-            "Which provider to add?",
-            choices=add_choices,
-            style=STYLE,
-        ).ask()
+        which = cast(
+            str | None,
+            questionary.select(
+                "Which provider to add?",
+                choices=add_choices,
+                style=STYLE,
+            ).ask(),
+        )
         if which is None:
             return None
         if not add_provider_credentials_only(state, which):
@@ -140,11 +150,14 @@ def _select_embedding_model(provider_id: str) -> str | None:
     choices: list[Choice] = [Choice(m, m) for m in models]
     choices.append(Choice("Enter model name manually...", _MANUAL_ENTRY))
 
-    selected = questionary.select(
-        "Embedding model:",
-        choices=choices,
-        style=STYLE,
-    ).ask()
+    selected = cast(
+        str | None,
+        questionary.select(
+            "Embedding model:",
+            choices=choices,
+            style=STYLE,
+        ).ask(),
+    )
     if selected is None:
         return None
     if selected == _MANUAL_ENTRY:

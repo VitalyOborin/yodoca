@@ -13,8 +13,8 @@ class SystemTopics:
     # Invoke the Orchestrator silently; no response to user
     AGENT_BACKGROUND = "system.agent.background"
 
-    # Session rotated due to inactivity; triggers consolidation
-    SESSION_COMPLETED = "session.completed"
+    # Thread rotated due to inactivity; triggers consolidation
+    THREAD_COMPLETED = "thread.completed"
 
     # Request secure input from a channel (secret collection without LLM exposure)
     SECURE_INPUT_REQUEST = "system.channel.secure_input_request"
@@ -22,31 +22,3 @@ class SystemTopics:
     # MCP tool approval: pause run, ask user, resume on approve/reject
     MCP_TOOL_APPROVAL_REQUEST = "system.mcp.tool_approval_request"
     MCP_TOOL_APPROVAL_RESPONSE = "system.mcp.tool_approval_response"
-
-
-# Payload contracts (documentation + runtime validation)
-USER_NOTIFY_PAYLOAD = {"text": "str", "channel_id": "str | None"}
-AGENT_TASK_PAYLOAD = {
-    "prompt": "str",
-    "channel_id": "str | None",
-    "correlation_id": "str | None",
-}
-AGENT_BACKGROUND_PAYLOAD = {"prompt": "str", "correlation_id": "str | None"}
-SESSION_COMPLETED_PAYLOAD = {"session_id": "str", "reason": "str"}
-SECURE_INPUT_REQUEST_PAYLOAD = {
-    "secret_id": "str",
-    "prompt": "str",
-    "target_channel": "str",
-}
-MCP_TOOL_APPROVAL_REQUEST_PAYLOAD = {
-    "request_id": "str",
-    "tool_name": "str",
-    "arguments": "str",
-    "server_alias": "str",
-    "channel_id": "str | None",
-}
-MCP_TOOL_APPROVAL_RESPONSE_PAYLOAD = {
-    "request_id": "str",
-    "approved": "bool",
-    "reason": "str | None",
-}

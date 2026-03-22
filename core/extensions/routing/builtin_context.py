@@ -24,8 +24,12 @@ class ActiveChannelContextProvider:
         for cid in ids:
             desc = descriptions.get(cid) or cid
             ch = self._router.get_channel(cid)
-            ready = getattr(ch, "health_check", lambda: True)()
-            status = "READY" if ready else "NOT CONFIGURED"
+            get_status = getattr(ch, "get_channel_status", None)
+            if callable(get_status):
+                status = get_status()
+            else:
+                ready = getattr(ch, "health_check", lambda: True)()
+                status = "READY" if ready else "NOT CONFIGURED"
             lines.append(f"- {cid} ({desc}) — {status}")
         return (
             "[Available Channels]\n"
@@ -42,7 +46,7 @@ class ActiveChannelContextProvider:
         if channels_section:
             parts.append(channels_section)
 
-        # When user is on a specific channel, add session context
+        # When user is on a specific channel, add thread context
         if turn_context.channel_id:
             descriptions = self._router.get_channel_descriptions()
             channel_desc = (
@@ -50,7 +54,7 @@ class ActiveChannelContextProvider:
             )
             user_id = turn_context.user_id or "unknown"
             parts.append(
-                "[Current Session Context]\n"
+                "[Current Thread Context]\n"
                 f"Channel: {turn_context.channel_id} ({channel_desc})\n"
                 f"User ID: {user_id}\n\n"
                 f"IMPORTANT: You are currently communicating with the user through the '{turn_context.channel_id}'. "

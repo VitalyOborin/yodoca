@@ -65,3 +65,70 @@ def md_to_tg_html(text: str) -> str:
 def escape_html(text: str) -> str:
     """HTML-escape only — used for partial streaming buffers."""
     return html.escape(text, quote=False)
+
+
+def split_for_telegram(text: str, max_len: int = 4096) -> list[str]:
+    """Split markdown text into Telegram HTML parts, each within max_len chars.
+
+    Splits on paragraph boundaries (double newline) in the original markdown,
+    then converts each chunk independently. This guarantees no HTML tag is ever
+    broken mid-element. Falls back to single-newline splits for oversized paragraphs,
+    and to hard character splits only as a last resort.
+    """
+    if not text:
+        return []
+
+    parts: list[str] = []
+    current_md: list[str] = []
+    current_len = 0
+
+    def _flush() -> None:
+        chunk = md_to_tg_html("\n\n".join(current_md))
+        parts.append(chunk)
+        current_md.clear()
+        nonlocal current_len
+        current_len = 0
+
+    paragraphs = re.split(r"\n{2,}", text)
+
+    for para in paragraphs:
+        para_html_len = len(md_to_tg_html(para))
+
+        if para_html_len > max_len:
+            if current_md:
+                _flush()
+            lines = para.splitlines()
+            sub_md: list[str] = []
+            sub_len = 0
+            for line in lines:
+                line_html_len = len(md_to_tg_html(line))
+                if line_html_len > max_len:
+                    if sub_md:
+                        parts.append(md_to_tg_html("\n".join(sub_md)))
+                        sub_md.clear()
+                        sub_len = 0
+                    converted = md_to_tg_html(line)
+                    for i in range(0, len(converted), max_len):
+                        parts.append(converted[i : i + max_len])
+                elif sub_len + line_html_len > max_len:
+                    parts.append(md_to_tg_html("\n".join(sub_md)))
+                    sub_md = [line]
+                    sub_len = line_html_len
+                else:
+                    sub_md.append(line)
+                    sub_len += line_html_len
+            if sub_md:
+                parts.append(md_to_tg_html("\n".join(sub_md)))
+            continue
+
+        separator_len = len(md_to_tg_html("\n\n")) if current_md else 0
+        if current_len + separator_len + para_html_len > max_len:
+            _flush()
+
+        current_md.append(para)
+        current_len += para_html_len
+
+    if current_md:
+        _flush()
+
+    return parts or [md_to_tg_html(text)]

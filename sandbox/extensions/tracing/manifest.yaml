@@ -13,8 +13,21 @@ depends_on: []
 
 config:
   retention_days: 30
+  vacuum_after_cleanup: true
   max_input_summary_len: 2000
   max_output_summary_len: 2000
+  warn_at_session_tokens: 200000
+  stop_at_session_tokens: 400000
+  pricing:
+    gpt-4o:
+      input: 2.5
+      output: 10.0
+    gpt-4o-mini:
+      input: 0.15
+      output: 0.6
+    claude-3-5-sonnet:
+      input: 3.0
+      output: 15.0
   trace_context_enrichment: true
   trace_tool_calls: true
   trace_llm_calls: true
@@ -27,9 +40,11 @@ schedules:
 
 events:
   publishes:
-    - topic: trace.span.started
-      description: "A new tracing span has started"
-    - topic: trace.span.completed
-      description: "A tracing span has completed"
+    - topic: tracing.span.update
+      description: "A tracing span changed state (started/completed)"
+    - topic: tracing.budget.warning
+      description: "Session token budget warning threshold reached"
+    - topic: tracing.budget.exceeded
+      description: "Session token budget stop threshold reached"
 
 enabled: true

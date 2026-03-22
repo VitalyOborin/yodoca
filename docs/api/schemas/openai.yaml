@@ -1,0 +1,131 @@
+# OpenAI-compatible API schemas.
+# Referenced from the main OpenAPI document.
+
+ModelsResponse:
+  type: object
+  properties:
+    object:
+      type: string
+      const: list
+    data:
+      type: array
+      items:
+        $ref: "#/components/schemas/ModelObject"
+  required: [object, data]
+
+ModelObject:
+  type: object
+  properties:
+    id: { type: string }
+    object: { type: string, const: model }
+    created: { type: integer }
+    owned_by: { type: string }
+  required: [id, object, created, owned_by]
+
+ChatMessage:
+  type: object
+  properties:
+    role:
+      type: string
+      enum: [system, user, assistant, tool]
+    content:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            type: object
+            additionalProperties: true
+  required: [role, content]
+
+ChatCompletionsRequest:
+  type: object
+  properties:
+    model:
+      type: string
+      default: yodoca
+    messages:
+      type: array
+      minItems: 1
+      items:
+        $ref: "#/components/schemas/ChatMessage"
+    stream:
+      type: boolean
+      default: false
+    temperature:
+      type: number
+      minimum: 0
+      maximum: 2
+  required: [model, messages]
+
+ChatCompletionsResponse:
+  type: object
+  properties:
+    id: { type: string }
+    object: { type: string, const: chat.completion }
+    created: { type: integer }
+    model: { type: string }
+    choices:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+    usage:
+      $ref: "#/components/schemas/UsageChat"
+  required: [id, object, created, model, choices, usage]
+
+ResponsesRequest:
+  type: object
+  properties:
+    model:
+      type: string
+      default: yodoca
+    input:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            type: object
+            additionalProperties: true
+      nullable: true
+    messages:
+      type: array
+      nullable: true
+      items:
+        type: object
+        additionalProperties: true
+    stream:
+      type: boolean
+      default: false
+  required: [model]
+
+ResponsesResponse:
+  type: object
+  properties:
+    id: { type: string }
+    object: { type: string, const: response }
+    status: { type: string }
+    output:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+    model: { type: string }
+    usage:
+      $ref: "#/components/schemas/UsageResponses"
+  required: [id, object, status, output, model, usage]
+
+UsageChat:
+  type: object
+  properties:
+    prompt_tokens: { type: integer, minimum: 0 }
+    completion_tokens: { type: integer, minimum: 0 }
+    total_tokens: { type: integer, minimum: 0 }
+  required: [prompt_tokens, completion_tokens, total_tokens]
+
+UsageResponses:
+  type: object
+  properties:
+    input_tokens: { type: integer, minimum: 0 }
+    output_tokens: { type: integer, minimum: 0 }
+    total_tokens: { type: integer, minimum: 0 }
+  required: [input_tokens, output_tokens, total_tokens]

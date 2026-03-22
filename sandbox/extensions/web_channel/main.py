@@ -5,52 +5,53 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
 from sandbox.extensions.web_channel.app import create_app
 from sandbox.extensions.web_channel.bridge import RequestBridge
 
 if TYPE_CHECKING:
+    from core.events.models import Event
     from core.extensions.context import ExtensionContext
 
 logger = logging.getLogger(__name__)
 
 
+class WebChannelExtensionConfig(BaseModel):
+    """Merged manifest config + settings.extensions.web_channel overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+    api_key: str = ""
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    request_timeout_seconds: int = 120
+    model_name: str = "yodoca"
+    default_user_id: str = "web_user"
+    log_file: str = "sandbox/logs/web.log"
+
+
 class WebChannelExtension:
     """ChannelProvider + StreamingChannelProvider + ServiceProvider for HTTP API."""
+
+    ConfigModel = WebChannelExtensionConfig
 
     def __init__(self) -> None:
         self._context: ExtensionContext | None = None
         self._config: dict[str, Any] = {}
         self._bridge: RequestBridge | None = None
+        self._scheduler: Any = None
+        self._inbox: Any = None
+        self._task_engine: Any = None
         self._request_logger: logging.Logger | None = None
         self._app: Any = None
         self._server: Any = None
         self._server_task: asyncio.Task[Any] | None = None
         self._channel_id = "web_channel"
-
-    def _resolve_log_file_from_telegram_manifest(self) -> str:
-        """Read web_channel log file path from telegram_channel manifest config."""
-        default_path = "sandbox/logs/web.log"
-        manifest_path = (
-            Path(__file__).resolve().parents[2]
-            / "extensions"
-            / "telegram_channel"
-            / "manifest.yaml"
-        )
-        if not manifest_path.exists():
-            return default_path
-        try:
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return default_path
-        config = manifest.get("config") if isinstance(manifest, dict) else None
-        if not isinstance(config, dict):
-            return default_path
-        value = config.get("web_channel_log_file")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return default_path
+        self._inbox_stream_queues: dict[
+            asyncio.Queue[dict[str, Any]], asyncio.AbstractEventLoop
+        ] = {}
 
     def _setup_request_logger(self, log_file: str) -> logging.Logger:
         """Configure a dedicated file logger for web_channel HTTP audit events."""
@@ -80,6 +81,9 @@ class WebChannelExtension:
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self._context = context
+        self._scheduler = None
+        self._inbox = None
+        self._task_engine = None
         self._config = {
             "host": context.get_config("host", "127.0.0.1"),
             "port": context.get_config("port", 8080),
@@ -91,7 +95,7 @@ class WebChannelExtension:
             "model_name": context.get_config("model_name", "yodoca"),
             "default_user_id": context.get_config("default_user_id", "web_user"),
         }
-        log_file = self._resolve_log_file_from_telegram_manifest()
+        log_file = context.get_config("log_file", "sandbox/logs/web.log")
         self._request_logger = self._setup_request_logger(log_file)
         api_key = self._config.get("api_key")
         if not api_key:
@@ -110,7 +114,50 @@ class WebChannelExtension:
                 self._config.get("request_timeout_seconds", 120)
             )
         )
+        context.subscribe_event("inbox.item.ingested", self._on_inbox_item_ingested)
         self._app = create_app(self)
+
+    async def _on_inbox_item_ingested(self, event: "Event") -> None:
+        """Forward inbox ingestion events to SSE subscribers."""
+        payload = dict(event.payload or {})
+        payload["event"] = "inbox.item.ingested"
+        self.push_inbox_stream_event(payload)
+
+    def get_scheduler(self) -> Any | None:
+        """Resolve scheduler extension lazily. Returns None when unavailable."""
+        if self._scheduler is not None:
+            return self._scheduler
+        if not self._context:
+            return None
+        try:
+            self._scheduler = self._context.get_extension("scheduler")
+        except Exception:
+            self._scheduler = None
+        return self._scheduler
+
+    def get_inbox(self) -> Any | None:
+        """Resolve inbox extension lazily. Returns None when unavailable."""
+        if self._inbox is not None:
+            return self._inbox
+        if not self._context:
+            return None
+        try:
+            self._inbox = self._context.get_extension("inbox")
+        except Exception:
+            self._inbox = None
+        return self._inbox
+
+    def get_task_engine(self) -> Any | None:
+        """Resolve task_engine extension lazily. Returns None when unavailable."""
+        if self._task_engine is not None:
+            return self._task_engine
+        if not self._context:
+            return None
+        try:
+            self._task_engine = self._context.get_extension("task_engine")
+        except Exception:
+            self._task_engine = None
+        return self._task_engine
 
     async def start(self) -> None:
         pass
@@ -145,7 +192,7 @@ class WebChannelExtension:
                 pass
 
     async def destroy(self) -> None:
-        pass
+        self._inbox_stream_queues.clear()
 
     def health_check(self) -> bool:
         return self._bridge is not None
@@ -178,3 +225,25 @@ class WebChannelExtension:
         if self._bridge:
             self._bridge.push_stream_event("end", full_text)
             self._bridge.push_stream_end(full_text)
+
+    def create_inbox_stream_queue(self) -> asyncio.Queue[dict[str, Any]]:
+        """Create and register queue for /api/inbox/stream SSE."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._inbox_stream_queues[queue] = asyncio.get_running_loop()
+        return queue
+
+    def remove_inbox_stream_queue(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        """Remove queue from inbox SSE subscribers."""
+        self._inbox_stream_queues.pop(queue, None)
+
+    def push_inbox_stream_event(self, payload: dict[str, Any]) -> None:
+        """Broadcast event payload to all active inbox SSE subscribers."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        for queue, loop in tuple(self._inbox_stream_queues.items()):
+            if current_loop is loop:
+                queue.put_nowait(payload)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, payload)

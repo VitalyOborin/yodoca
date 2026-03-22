@@ -1,6 +1,6 @@
 """DeclarativeAgentAdapter: AgentProvider created from manifest only — no main.py needed."""
 
-from agents import Agent, Runner
+from agents import Agent, ModelSettings, Runner
 
 from core.extensions.context import ExtensionContext
 from core.extensions.contract import (
@@ -19,6 +19,9 @@ class DeclarativeAgentAdapter:
         self._agent: Agent | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
+        agent_cfg = self._manifest.agent
+        if agent_cfg is None:
+            raise RuntimeError("Declarative agent config is missing in manifest")
         if context.model_router and context.agent_id:
             model = context.model_router.get_model(context.agent_id)
         else:
@@ -28,6 +31,9 @@ class DeclarativeAgentAdapter:
             instructions=context.resolved_instructions,
             model=model,
             tools=context.resolved_tools,
+            model_settings=ModelSettings(
+                parallel_tool_calls=agent_cfg.parallel_tool_calls
+            ),
         )
 
     async def start(self) -> None:
@@ -42,11 +48,19 @@ class DeclarativeAgentAdapter:
     def health_check(self) -> bool:
         return self._agent is not None
 
+    @property
+    def agent(self) -> Agent | None:
+        """Underlying SDK Agent after initialize(); None before init."""
+        return self._agent
+
     def get_agent_descriptor(self) -> AgentDescriptor:
+        agent_cfg = self._manifest.agent
+        if agent_cfg is None:
+            raise RuntimeError("Declarative agent config is missing in manifest")
         return AgentDescriptor(
             name=self._manifest.name,
             description=self._manifest.description,
-            integration_mode=self._manifest.agent.integration_mode,
+            integration_mode=agent_cfg.integration_mode,
         )
 
     async def invoke(
@@ -59,10 +73,17 @@ class DeclarativeAgentAdapter:
                 error="Agent not initialized",
             )
         try:
+            agent_cfg = self._manifest.agent
+            if agent_cfg is None:
+                return AgentResponse(
+                    status="error",
+                    content="",
+                    error="Declarative agent config is missing in manifest",
+                )
             result = await Runner.run(
                 self._agent,
                 task,
-                max_turns=self._manifest.agent.limits.max_turns,
+                max_turns=agent_cfg.limits.max_turns,
             )
             return AgentResponse(
                 status="success",

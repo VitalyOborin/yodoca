@@ -826,7 +826,7 @@ No external observability stack (LangSmith, Jaeger) in MVP. The SQLite tables ar
 ### Phase 4: Observability and polish
 
 1. **Task cleanup** — periodic cleanup of old `done`/`failed` tasks (configurable retention).
-2. **Structured logging** — JSON log entries per step with session_id, step_type, duration, tokens.
+2. **Structured logging** — JSON log entries per step with thread_id, step_type, duration, tokens.
 3. **Human-in-the-loop** — `human_review` status: task pauses and asks user for input via channel.
 
 ## Consequences
@@ -894,3 +894,4 @@ No external observability stack (LangSmith, Jaeger) in MVP. The SQLite tables ar
 - ADR 002: Nano-Kernel + Extensions
 - ADR 003: Agent-as-Extension
 - ADR 004: Event Bus in Core
+

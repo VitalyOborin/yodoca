@@ -1,0 +1,26 @@
+id: thread_titler
+name: Thread Titler
+version: "1.0.0"
+
+entrypoint: main:ThreadTitlerExtension
+
+description: |
+  Automatically assigns thread titles in two phases: immediate local derivation
+  from the first user message and optional async AI refinement on a cheap model.
+
+depends_on: []
+
+config:
+  title_max_length: 50
+  refine_threshold: 80
+
+agent_config:
+  thread_title_agent:
+    model: gpt-5-mini
+
+events:
+  publishes:
+    - topic: thread.title.updated
+      description: "Thread title metadata changed."
+
+enabled: true

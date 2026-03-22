@@ -3,10 +3,10 @@
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 
-class SpanType(str, Enum):
+class SpanType(StrEnum):
     AGENT_INVOKE = "agent_invoke"
     TOOL_CALL = "tool_call"
     LLM_CALL = "llm_call"
@@ -14,7 +14,7 @@ class SpanType(str, Enum):
     MEMORY_RETRIEVAL = "memory_retrieval"
 
 
-class SpanStatus(str, Enum):
+class SpanStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     ERROR = "error"
@@ -37,4 +37,5 @@ class Span:
     duration_ms: float | None = None
     token_input: int | None = None
     token_output: int | None = None
+    cost_usd: float | None = None
     metadata: dict = field(default_factory=dict)

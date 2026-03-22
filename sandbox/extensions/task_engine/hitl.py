@@ -5,8 +5,8 @@ import logging
 import time
 from typing import Any
 
-from models import SubmitTaskResult
-from state import TaskState
+from sandbox.extensions.task_engine.models import SubmitTaskResult
+from sandbox.extensions.task_engine.state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ async def request_human_review(
     cursor = await conn.execute(
         """UPDATE agent_task SET status = 'human_review', updated_at = ?
            WHERE task_id = ? AND status = 'running'""",
-        (time.time(), task_id),
+        (int(time.time()), task_id),
     )
     await conn.commit()
     if not cursor.rowcount:
@@ -49,7 +49,7 @@ async def request_human_review(
         state.context["review_question"] = question
         await conn.execute(
             "UPDATE agent_task SET checkpoint = ?, updated_at = ? WHERE task_id = ?",
-            (state.to_json(), time.time(), task_id),
+            (state.to_json(), int(time.time()), task_id),
         )
         await conn.commit()
 
@@ -90,7 +90,7 @@ async def respond_to_review(db: Any, task_id: str, response: str) -> SubmitTaskR
 
     await conn.execute(
         "UPDATE agent_task SET status = 'pending', checkpoint = ?, updated_at = ? WHERE task_id = ?",
-        (state.to_json(), time.time(), task_id),
+        (state.to_json(), int(time.time()), task_id),
     )
     await conn.commit()
     return SubmitTaskResult(

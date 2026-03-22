@@ -1,0 +1,53 @@
+import { createRouter, createWebHistory } from 'vue-router';
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/',
+      redirect: '/chat',
+    },
+    {
+      path: '/chat',
+      name: 'chat',
+      component: () => import('@/pages/chat/ChatPage.vue'),
+    },
+    {
+      path: '/chat/:threadId',
+      name: 'chat-thread',
+      component: () => import('@/pages/chat/ChatPage.vue'),
+    },
+    {
+      path: '/inbox',
+      name: 'inbox',
+      component: () => import('@/pages/inbox/InboxPage.vue'),
+    },
+    {
+      path: '/tasks',
+      name: 'tasks',
+      component: () => import('@/pages/tasks/TasksPage.vue'),
+    },
+    {
+      path: '/projects',
+      name: 'projects',
+      component: () => import('@/pages/projects/ProjectsPage.vue'),
+    },
+    {
+      path: '/projects/:projectId',
+      name: 'project-detail',
+      component: () => import('@/pages/projects/ProjectDetailPage.vue'),
+    },
+    {
+      path: '/schedule',
+      name: 'schedule',
+      component: () => import('@/pages/schedule/SchedulePage.vue'),
+    },
+    {
+      path: '/agents',
+      name: 'agents',
+      component: () => import('@/pages/agents/AgentsPage.vue'),
+    },
+  ],
+});
+
+export default router;

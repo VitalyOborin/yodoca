@@ -4,7 +4,7 @@ Bootstraps the full extension stack (including embedding + model_router),
 then calls MemoryExtension.execute_task("run_nightly_maintenance").
 
 Pipeline steps:
-  1. Consolidate pending sessions (LLM write-path agent)
+  1. Consolidate pending threads (LLM write-path agent)
   2. Apply Ebbinghaus decay + prune low-confidence nodes
   3. Enrich sparse entities (LLM summaries)
   4. Infer causal edges between consecutive episodes (LLM)
@@ -43,7 +43,7 @@ from core import secrets
 async def print_stats(storage: object) -> None:
     stats = await storage.get_graph_stats()
     size_mb = storage.get_storage_size_mb()
-    unconsolidated = await storage.get_unconsolidated_sessions()
+    unconsolidated = await storage.get_unconsolidated_threads()
 
     print("\n=== Memory Graph Stats ===")
     print(f"  Nodes: {stats.get('nodes', {})}")
@@ -51,7 +51,7 @@ async def print_stats(storage: object) -> None:
     print(f"  Entities: {stats.get('entities', 0)}")
     print(f"  Orphan nodes: {stats.get('orphan_nodes', 0)}")
     print(f"  Avg edges/node: {stats.get('avg_edges_per_node', 0):.2f}")
-    print(f"  Unconsolidated sessions: {len(unconsolidated)} {unconsolidated}")
+    print(f"  Unconsolidated threads: {len(unconsolidated)} {unconsolidated}")
     print(f"  Storage size: {size_mb:.2f} MB\n")
 
 
@@ -72,9 +72,16 @@ async def main() -> None:
     loader.set_model_router(model_router)
     router = MessageRouter()
 
-    eb_cfg = settings.get("event_bus", {})
-    db_path = _PROJECT_ROOT / eb_cfg.get("db_path", "sandbox/data/event_journal.db")
-    event_bus = EventBus(db_path=db_path, poll_interval=5.0, batch_size=3)
+    eb = settings.event_bus
+    db_path = _PROJECT_ROOT / eb.db_path
+    event_bus = EventBus(
+        db_path=db_path,
+        poll_interval=eb.poll_interval,
+        batch_size=eb.batch_size,
+        max_retries=eb.max_retries,
+        busy_timeout=eb.busy_timeout,
+        stale_timeout=eb.stale_timeout,
+    )
     await event_bus.recover()
     loader.set_event_bus(event_bus)
 

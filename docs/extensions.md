@@ -8,7 +8,7 @@ This document describes the extension architecture in the assistant4 system: how
 
 Extensions are **pluggable modules** that extend the system with tools, channels, agents, schedulers, and services. They live in `sandbox/extensions/<id>/` and are discovered, loaded, and wired by the **Loader** at startup. Capabilities are detected via **`@runtime_checkable` Protocol classes** (`core/extensions/contract.py`), not via manifest fields.
 
-**Key principle:** Extensions interact with the system **only** through `ExtensionContext` and protocol contracts — no direct imports of loader, routing, or persistence internals.
+**Key principle:** Extensions interact with the system **only** through `ExtensionContext` and protocol contracts — no direct imports of loader, routing, or persistence internals. Automated boundary checks enforce this at CI time; see [boundary-checks.md](boundary-checks.md).
 
 ---
 
@@ -25,7 +25,7 @@ Extensions are **pluggable modules** that extend the system with tools, channels
 ┌──────────────────┐         ┌──────────────────┐         ┌─────────────────────┐
 │     Loader       │         │  MessageRouter   │         │    EventBus         │
 │  - manifests     │         │  - channels      │         │  - durable pub/sub  │
-│  - extensions    │         │  - sessions      │         │  - system topics    │
+│  - extensions    │         │  - threads      │         │  - system topics    │
 │  - lifecycle     │         │  - invoke_agent  │         │  - recovery         │
 │  - protocol      │         │  - notify_user   │         │                     │
 │    detection     │         │  - delivery      │         │                     │
@@ -54,12 +54,13 @@ The startup sequence in `core/runner.py`:
 1. **discover** — Scan `sandbox/extensions/` for `manifest.yaml`; load manifests, filter `enabled: true`
 2. **load_all** — Topological sort by `depends_on`; dynamic import or `DeclarativeAgentAdapter`; instantiate
 3. **initialize_all** — Create `ExtensionContext` per extension; call `initialize(ctx)`
-4. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
-5. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
-6. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
-7. **configure_session** — `router.configure_session()` creates persistent session/project services and the default runtime session
-8. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
-9. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
+4. **_update_setup_providers_state** — For each SetupProvider, call `on_setup_complete()`; store configured vs unconfigured
+5. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
+6. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
+7. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
+8. **configure_thread** — `router.configure_thread()` creates persistent thread/project services and the default runtime thread
+9. **wire_context_providers** — Collect `ContextProvider` extensions plus built-ins, chain into router middleware
+10. **start** — EventBus, then `loader.start_all()` (extensions' `start()`, ServiceProvider tasks, cron + health loops)
 
 Shutdown: `event_bus.stop()` → `loader.shutdown()` (reverse dependency order: cancel service/cron/health tasks → `stop()` → `destroy()`).
 
@@ -228,13 +229,13 @@ Use `prompts: "auto"` to fetch all prompts from the server. Config: `prompts_cac
 The Web Channel extension ([ADR 026](adr/026-web-channel.md)) implements `ChannelProvider`, `StreamingChannelProvider`, and `ServiceProvider` to expose the system over HTTP. It provides:
 
 - OpenAI-compatible endpoints: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`
-- custom REST endpoints under `/api/` for health, sessions, projects, and proactive notification polling
+- custom REST endpoints under `/api/` for health, threads, projects, and proactive notification polling
 - SSE streaming mapped from `StreamingChannelProvider`
 - request/response bridging via `RequestBridge` (single active request guard, future/queue correlation, long-poll notifications)
 
-Unlike CLI and Telegram, `web_channel` can pass `session_id` from the `X-Session-Id` header into `router.handle_user_message(...)`, which activates named session pooling in `SessionManager`.
+Unlike CLI and Telegram, `web_channel` can pass `thread_id` from the `X-Thread-Id` header into `router.handle_user_message(...)`, which activates named thread pooling in `ThreadManager`.
 
-See [channels.md](channels.md#web-channel) and [api/web-channel-openapi.yaml](api/web-channel-openapi.yaml).
+See [channels.md](channels.md#web-channel) and [api/openapi.yaml](api/openapi.yaml).
 
 ### Web Search (`web_search` extension)
 
@@ -259,11 +260,11 @@ async def get_context(self, prompt: str, turn_context: TurnContext) -> str | Non
     """Return context string to inject, or None to skip."""
 ```
 
-`TurnContext` is a frozen dataclass with: `agent_id`, `channel_id`, `user_id`, `session_id`. The kernel passes it on every invocation so providers can tailor context (e.g. filter by channel).
+`TurnContext` is a frozen dataclass with: `agent_id`, `channel_id`, `user_id`, `thread_id`. The kernel passes it on every invocation so providers can tailor context (e.g. filter by channel).
 
 Wired by `loader.wire_context_providers()` after `start_all()`. The middleware concatenates all non-empty results with `---` separators and returns a **context string** (not an enriched user message).
 
-**Built-in provider:** `_ActiveChannelContextProvider` (priority 0) injects `[Current Session Context]` with channel identity and narrative instructions so the agent knows which channel the user is on.
+**Built-in provider:** `_ActiveChannelContextProvider` (priority 0) injects `[Current Thread Context]` with channel identity and narrative instructions so the agent knows which channel the user is on.
 
 **Two public behaviors:**
 
@@ -274,7 +275,14 @@ Wired by `loader.wire_context_providers()` after `start_all()`. The middleware c
 
 ### `SetupProvider`
 
-Extension that needs configuration (secrets, settings).
+Extension that needs configuration (secrets, settings). The Loader detects SetupProvider extensions at startup, calls `on_setup_complete()` to determine configured state, and injects `setup_instructions` from the manifest into the Orchestrator's capabilities summary when an extension is unconfigured.
+
+**Setup flow:**
+
+1. At startup, the Loader calls `on_setup_complete()` for each SetupProvider. If it returns `(False, msg)`, the extension is "unconfigured".
+2. The capabilities summary includes an "Extensions needing setup" section with `manifest.setup_instructions` for unconfigured extensions.
+3. The Orchestrator can use the `configure_extension(extension_id, param_name, value)` core tool to apply configuration. The tool calls `apply_config()` then `on_setup_complete()` and returns a structured result.
+4. For secrets (e.g. API tokens), the agent should use `request_secure_input` first to collect the value securely, then pass it to `configure_extension` or have the user provide it via a secure channel.
 
 ```python
 def get_setup_schema(self) -> list[dict]:
@@ -310,7 +318,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 |-------|------|---------|-------------|
 | `version` | str | `"1.0.0"` | Semantic version |
 | `description` | str | `""` | Shown in Orchestrator capabilities summary |
-| `setup_instructions` | str | `""` | User-facing setup help |
+| `setup_instructions` | str | `""` | Instructions for the agent when extension is unconfigured. Shown in capabilities summary; agent uses `configure_extension` or `request_secure_input` + `request_restart` per instructions. |
 | `depends_on` | list[str] | `[]` | Extension IDs; load order is topological |
 | `secrets` | list[str] | `[]` | Required env var names |
 | `config` | dict | `{}` | Passed to `context.get_config()` |
@@ -327,6 +335,7 @@ File: `sandbox/extensions/<id>/manifest.yaml`
 | `integration_mode` | `"tool"` \| `"handoff"` | `"tool"` | How Orchestrator uses the agent |
 | `model` | str | — | LLM model identifier |
 | `instructions` | str | `""` | Inline system prompt (optional). Merged with `prompt.jinja2` if both exist. |
+| `parallel_tool_calls` | bool | `false` | Allow concurrent tool calls within one model turn |
 | `parameters` | dict | `{}` | Extra agent params |
 | `uses_tools` | list[str] | `[]` | Extension IDs or `core_tools` for tools |
 | `limits` | object | defaults below | `max_turns`, `max_tokens_per_invocation`, `time_budget_ms` |
@@ -362,7 +371,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 |--------|-------------|
 | `extension_id` | Extension id from manifest |
 | `config` | Merged config: `settings.extensions.<id>` overrides + manifest `config` |
-| `logger` | `logging.getLogger(f"ext.{extension_id}")` |
+| `logger` | `create_subsystem_logger(f"ext.{extension_id}")` — [`SubsystemLogger`](../core/logging_config.py): `.child()`, `.is_enabled()`, optional `meta=` on level methods; see [ADR 036](adr/036-subsystem-logging.md) |
 | `data_dir` | `sandbox/data/<extension_id>/` (created on access) |
 
 ### Configuration & Dependencies
@@ -372,8 +381,10 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `get_config(key, default)` | Read config. Resolution order: `settings.yaml` → `extensions.<id>.<key>`, then manifest `config.<key>`, then `default` |
 | `get_secret(name)` | Read secret by name (keyring first, then `.env`). Async; use `await ctx.get_secret(name)`. |
 | `get_extension(ext_id)` | Get another extension instance **only if** in `depends_on` |
-| `list_sessions()` / `get_session()` / `create_session()` / `update_session()` / `archive_session()` / `get_session_history()` | Persistent session metadata and history access |
+| `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent thread metadata and history access |
 | `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
+
+**Extension class `ConfigModel` (optional):** On the extension entrypoint class, set `ConfigModel` to a Pydantic `BaseModel` matching the merged manifest + `settings.extensions.<id>` keys (e.g. `model_config = ConfigDict(extra="forbid")` for strict validation). The Loader validates before `initialize()`; failures abort startup with diagnostics. See [ADR 035](adr/035-pydantic-settings-models.md).
 
 ### Event Bus
 
@@ -392,7 +403,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `invoke_agent(prompt)` | Run Orchestrator with prompt, return response |
 | `invoke_agent_streamed(prompt, on_chunk, on_tool_call)` | Run Orchestrator with streaming callbacks; returns final text. For proactive extensions that want incremental delivery. |
 | `enrich_prompt(prompt, agent_id)` | Apply ContextProvider chain; returns context + separator + prompt for use as a single prompt by downstream agents. For invoke_agent, context is injected into system role instead. |
-| `on_user_message` | Alias for `router.handle_user_message` (full message cycle, including optional `session_id`) |
+| `on_user_message` | Alias for `router.handle_user_message` (full message cycle, including optional `thread_id`) |
 
 ### System Control
 
@@ -423,7 +434,7 @@ See [event_bus.md](event_bus.md) for full details.
 2. **Kernel** subscribes to `user.message`; calls `router.handle_user_message()`
 3. **MessageRouter** invokes Orchestrator; sends response via `channel.send_to_user()`
 
-`web_channel` may also include `session_id` in the event payload; the router then selects or creates a named runtime session instead of using the default rotated session.
+`web_channel` may also include `thread_id` in the event payload; the router then selects or creates a named runtime thread instead of using the default rotated thread.
 
 ### Flow: Proactive Agent (e.g. Reminders)
 
@@ -448,6 +459,12 @@ The **Orchestrator** is the main agent that coordinates user requests.
 - **Tools:** Core tools (`core/tools/`) + `loader.get_all_tools()` (ToolProvider) + delegation tools (`list_agents`, `delegate_task`, `create_agent`, `list_models`, `list_available_tools`)
 - **Instructions:** Include `loader.get_capabilities_summary()` — natural-language list of tools; agents are available on-demand via `list_agents`
 - **Routing:** Orchestrator discovers agents via `list_agents` (with cost/capability metadata) and delegates via `delegate_task`. Cost-aware: prefers lower-cost agents for simple tasks, higher-capability agents for complex ones.
+- **Dynamic agents:** `create_agent` accepts only extension IDs in `tools` (no function aliases). Semantics:
+  - `tools=null` → invalid (must pass explicit IDs or `[]`)
+  - `tools=[]` → explicitly create an agent without tools
+  - `tools=[...]` → strict validation; unknown IDs fail the call
+  - `parallel_tool_calls` defaults to `false`; set `true` to allow concurrent tool calls for that created agent
+- **Tool discovery:** `list_available_tools` returns IDs plus descriptions to help the Orchestrator choose tools before `create_agent`.
 
 Agent extensions are registered in `AgentRegistry` at startup. The Orchestrator discovers them via `list_agents` and invokes them via `delegate_task` — agent descriptions are not in the system prompt, loaded on-demand. See [ADR 017](adr/017-agents-registry.md) and [ADR 019](adr/019-cost-capability-routing.md).
 
@@ -467,6 +484,7 @@ description: A simple agent for testing
 agent:
   integration_mode: tool
   model: gpt-5-mini
+  parallel_tool_calls: false
   instructions: |
     Always reply in the format of a haiku
   uses_tools:
@@ -493,9 +511,18 @@ Has `entrypoint` and custom Python class implementing `AgentProvider` for full c
 
 ```
 sandbox/extensions/my_extension/
+├── __init__.py      # required (regular package)
 ├── manifest.yaml
-└── main.py          # if entrypoint is main:MyExtension
+├── main.py          # required if entrypoint is main:MyExtension
+├── tools.py         # optional
+├── prompt.jinja2    # optional
+└── README.md        # optional
 ```
+
+Import rules:
+
+- Use package imports (for example `from sandbox.extensions.my_extension.tools import ...`).
+- Do not mutate `sys.path` in extension runtime code.
 
 ### 2. Minimal manifest.yaml
 
@@ -624,9 +651,11 @@ Loader runs `health_check()` every 30 seconds. If it returns `False`, the extens
 ## References
 
 - [architecture.md](architecture.md) — System overview and bootstrap
+- [boundary-checks.md](boundary-checks.md) — Architecture boundary enforcement scripts
 - [event_bus.md](event_bus.md) — Event Bus architecture and topics
 - [channels.md](channels.md) — Channel providers (CLI, Telegram, Web)
 - [scheduler.md](scheduler.md) — Scheduler extension
 - [ADR 004: Event Bus](adr/004-event-bus.md) — Design decisions
 - `core/extensions/` — Contract, manifest, context, `loader/`, `routing/`, `persistence/`
 - `sandbox/extensions/` — Extensions: `cli_channel`, `telegram_channel`, `web_channel`, `memory`, `kv`, `scheduler`, `task_engine`, `web_search`, `mcp`, `shell_exec`, `embedding`, `inbox`, `builder_agent`, `simple_agent`
+

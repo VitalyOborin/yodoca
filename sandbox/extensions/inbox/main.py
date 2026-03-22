@@ -1,23 +1,17 @@
 """Inbox extension: unified storage for incoming data from external systems."""
 
-import sys
-from pathlib import Path
 from typing import Any
 
-_ext_dir = Path(__file__).resolve().parent
-if str(_ext_dir) not in sys.path:
-    sys.path.insert(0, str(_ext_dir))
+from agents import function_tool
 
-from agents import function_tool  # noqa: E402
-
-from sandbox.extensions.inbox.models import (  # noqa: E402
+from sandbox.extensions.inbox.models import (
     InboxItem,
     InboxItemInput,
     InboxListResult,
     InboxReadResult,
     InboxWriteResult,
 )
-from sandbox.extensions.inbox.repository import InboxRepository  # noqa: E402
+from sandbox.extensions.inbox.repository import InboxRepository
 
 
 class InboxExtension:
@@ -91,6 +85,7 @@ class InboxExtension:
         source_type: str | None = None,
         entity_type: str | None = None,
         status: str = "active",
+        is_read: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[InboxItem], int]:
@@ -101,10 +96,29 @@ class InboxExtension:
             source_type=source_type,
             entity_type=entity_type,
             status=status,
+            is_read=is_read,
             limit=limit,
             offset=offset,
         )
         return ([InboxItem.model_validate(r) for r in rows], total)
+
+    async def mark_read(self, inbox_id: int) -> bool:
+        """Mark one inbox item as read."""
+        if not self._repo:
+            return False
+        return await self._repo.mark_read(inbox_id)
+
+    async def mark_all_read(self, source_type: str | None = None) -> int:
+        """Mark all unread items as read (optionally by source)."""
+        if not self._repo:
+            return 0
+        return await self._repo.mark_all_read(source_type)
+
+    async def get_unread_count(self) -> int:
+        """Get unread inbox items count."""
+        if not self._repo:
+            return 0
+        return await self._repo.get_unread_count()
 
     async def get_cursor(
         self, source_type: str, source_account: str, stream: str

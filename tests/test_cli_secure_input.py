@@ -1,6 +1,5 @@
 """Tests for CLI channel secure input interceptor."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

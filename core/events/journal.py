@@ -4,20 +4,41 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-_EventRow = tuple[int, str, str, dict, float, str | None, int]
+
+class EventRow(NamedTuple):
+    """Row returned from claim_pending (journal → bus)."""
+
+    id: int
+    topic: str
+    source: str
+    payload: dict[str, Any]
+    created_at: float
+    correlation_id: str | None
+    retry_count: int
 
 
-def _row_to_event_tuple(row: tuple) -> _EventRow:
-    """Convert journal row to (id, topic, source, payload, created_at, correlation_id, retry_count)."""
+def _row_to_event_row(row: Sequence[Any]) -> EventRow:
+    """Convert journal row to EventRow."""
     payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
     retry_count = row[6] if len(row) > 6 else 0
-    return (row[0], row[1], row[2], payload, row[4], row[5], retry_count)
+    return EventRow(
+        id=row[0],
+        topic=row[1],
+        source=row[2],
+        payload=payload,
+        created_at=row[4],
+        correlation_id=row[5],
+        retry_count=retry_count,
+    )
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_journal (
@@ -58,6 +79,7 @@ class EventJournal:
     async def _ensure_conn(self) -> aiosqlite.Connection:
         async with self._conn_lock:
             if self._conn is None:
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
                 self._conn = await aiosqlite.connect(str(self._db_path))
                 await self._conn.execute("PRAGMA journal_mode=WAL")
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -120,7 +142,7 @@ class EventJournal:
         self,
         topic: str,
         source: str,
-        payload: dict,
+        payload: dict[str, Any],
         correlation_id: str | None = None,
     ) -> int:
         """Insert event and return row id."""
@@ -142,9 +164,8 @@ class EventJournal:
         await conn.commit()
         return cursor.lastrowid or 0
 
-    async def claim_pending(self, limit: int = 3) -> list[_EventRow]:
-        """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction.
-        Returns list of (id, topic, source, payload, created_at, correlation_id, retry_count)."""
+    async def claim_pending(self, limit: int = 3) -> list[EventRow]:
+        """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction."""
         conn = await self._ensure_conn()
         now = time.time()
         await conn.execute("BEGIN IMMEDIATE")
@@ -169,7 +190,7 @@ class EventJournal:
                     [now, *ids],
                 )
             await conn.commit()
-            return [_row_to_event_tuple(row) for row in rows]
+            return [_row_to_event_row(tuple(row)) for row in rows]
         except Exception:
             await conn.rollback()
             raise
@@ -237,7 +258,11 @@ class EventJournal:
         return cursor.rowcount or 0
 
     async def _reset_stale_to_pending(
-        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+        self,
+        conn: aiosqlite.Connection,
+        now: float,
+        stale_threshold: float,
+        max_retries: int,
     ) -> int:
         """Reset events stuck in processing (retry_count < max) to pending. Return count."""
         cursor = await conn.execute(
@@ -251,7 +276,11 @@ class EventJournal:
         return cursor.rowcount or 0
 
     async def _dead_letter_stale(
-        self, conn: aiosqlite.Connection, now: float, stale_threshold: float, max_retries: int
+        self,
+        conn: aiosqlite.Connection,
+        now: float,
+        stale_threshold: float,
+        max_retries: int,
     ) -> int:
         """Dead-letter events stuck in processing (retry_count >= max). Return count."""
         cursor = await conn.execute(
@@ -302,3 +331,35 @@ class EventJournal:
             (event_id, now),
         )
         await conn.commit()
+
+    async def get_status_counts(self) -> dict[str, int]:
+        """Return event counts grouped by status."""
+        conn = await self._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT status, COUNT(*) FROM event_journal GROUP BY status"
+        )
+        rows = await cursor.fetchall()
+        return {str(status): int(count) for status, count in rows}
+
+    async def purge_scheduled_events(
+        self,
+        schedule_id: int,
+        schedule_type: str,
+        topics: list[str],
+    ) -> int:
+        """Delete pending/processing events bound to a schedule metadata marker."""
+        conn = await self._ensure_conn()
+        placeholders = ",".join("?" * len(topics))
+        cursor = await conn.execute(
+            f"""
+            DELETE FROM event_journal
+            WHERE status IN ('pending', 'processing')
+              AND topic IN ({placeholders})
+              AND json_valid(payload) = 1
+              AND json_extract(payload, '$.__schedule.id') = ?
+              AND json_extract(payload, '$.__schedule.type') = ?
+            """,
+            [*topics, schedule_id, schedule_type],
+        )
+        await conn.commit()
+        return cursor.rowcount or 0

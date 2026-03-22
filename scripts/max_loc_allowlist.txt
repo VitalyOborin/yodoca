@@ -1,0 +1,10 @@
+# Grandfathered files over the default LOC threshold; remove lines as modules are split.
+core/extensions/loader/loader.py
+sandbox/extensions/memory/main.py
+sandbox/extensions/memory/retrieval.py
+sandbox/extensions/memory/storage.py
+sandbox/extensions/memory/tools.py
+sandbox/extensions/scheduler/main.py
+sandbox/extensions/task_engine/main.py
+sandbox/extensions/task_engine/worker.py
+sandbox/extensions/web_channel/routes_api.py

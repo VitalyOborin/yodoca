@@ -37,18 +37,6 @@ def _normalize_texts(texts: list[str]) -> list[tuple[int, str]]:
     return [(i, t) for i, t in enumerate(cleaned) if t]
 
 
-def _embed_request_kwargs(
-    model: str,
-    input_text: str | list[str],
-    dimensions: int | None = None,
-) -> dict:
-    """Build kwargs for embeddings.create. Handles single text or list."""
-    kwargs: dict = {"model": model, "input": input_text}
-    if dimensions is not None:
-        kwargs["dimensions"] = dimensions
-    return kwargs
-
-
 # --- OpenAIEmbedder ---
 
 
@@ -62,7 +50,6 @@ class OpenAIEmbedder:
         self,
         texts: list[str],
         model: str,
-        dimensions: int | None = None,
     ) -> list[list[float] | None]:
         if not texts:
             return []
@@ -70,8 +57,10 @@ class OpenAIEmbedder:
         if not non_empty:
             return [None] * len(texts)
         try:
-            kwargs = _embed_request_kwargs(model, [t for _, t in non_empty], dimensions)
-            resp = await self._client.embeddings.create(**kwargs)
+            resp = await self._client.embeddings.create(
+                model=model,
+                input=[t for _, t in non_empty],
+            )
             result: list[list[float] | None] = [None] * len(texts)
             for emb_data, (orig_idx, _) in zip(resp.data, non_empty, strict=True):
                 result[orig_idx] = list(emb_data.embedding)
@@ -80,26 +69,26 @@ class OpenAIEmbedder:
             logger.warning(
                 "OpenAI batch embedding failed, falling back to sequential: %s", e
             )
-            return await self._embed_batch_fallback(texts, model, dimensions)
+            return await self._embed_batch_fallback(texts, model)
 
     async def _embed_batch_fallback(
-        self, texts: list[str], model: str, dimensions: int | None
+        self, texts: list[str], model: str
     ) -> list[list[float] | None]:
         """Fallback: embed one by one when batch API fails."""
         results: list[list[float] | None] = []
         for t in texts:
-            vec = await self._embed_one(t.strip() if t else "", model, dimensions)
+            vec = await self._embed_one(t.strip() if t else "", model)
             results.append(vec)
         return results
 
-    async def _embed_one(
-        self, text: str, model: str, dimensions: int | None
-    ) -> list[float] | None:
+    async def _embed_one(self, text: str, model: str) -> list[float] | None:
         if not text:
             return None
         try:
-            kwargs = _embed_request_kwargs(model, text, dimensions)
-            resp = await self._client.embeddings.create(**kwargs)
+            resp = await self._client.embeddings.create(
+                model=model,
+                input=text,
+            )
             return list(resp.data[0].embedding) if resp.data else None
         except Exception as e:
             logger.warning("Embedding failed: %s", e)

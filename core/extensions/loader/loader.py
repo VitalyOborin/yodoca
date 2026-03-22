@@ -4,7 +4,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
+
+from pydantic import ValidationError
 
 from core.events import EventBus
 from core.events.models import Event
@@ -20,10 +22,14 @@ from core.extensions.contract import (
     ExtensionState,
     SchedulerProvider,
     ServiceProvider,
+    SetupProvider,
     ToolProvider,
     TurnContext,
 )
-from core.extensions.loader.context_builder import ExtensionContextBuilder
+from core.extensions.loader.context_builder import (
+    ExtensionContextBuilder,
+    merge_extension_config,
+)
 from core.extensions.loader.dependency_resolver import DependencyResolver
 from core.extensions.loader.extension_factory import ExtensionFactory
 from core.extensions.loader.health_check import HealthCheckManager
@@ -38,9 +44,18 @@ from core.extensions.routing.router import MessageRouter
 from core.extensions.routing.scheduler_manager import SchedulerManager
 from core.extensions.tool_resolver import ToolResolver
 from core.llm import ModelRouterProtocol
-from core.settings import get_setting
+from core.settings import format_validation_errors
+from core.settings_models import AppSettings
 
 logger = logging.getLogger(__name__)
+
+
+class ExtensionConfigValidationError(Exception):
+    """Raised when one or more extensions fail merged config validation (ConfigModel)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
 class Loader:
@@ -50,7 +65,7 @@ class Loader:
         self,
         extensions_dir: Path,
         data_dir: Path,
-        settings: dict[str, Any],
+        settings: AppSettings,
     ) -> None:
         self._extensions_dir = extensions_dir
         self._data_dir = data_dir
@@ -72,6 +87,7 @@ class Loader:
         self._scheduler_manager: SchedulerManager | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._event_bus: EventBus | None = None
+        self._setup_providers: dict[str, bool] = {}
 
     def _lifecycle(self) -> ExtensionStateMachine:
         """State machine bound to current state dict (tests may replace self._state)."""
@@ -177,14 +193,7 @@ class Loader:
 
     def _get_restart_file_path(self) -> Path:
         """Restart flag file path from `supervisor.restart_file`."""
-        restart_file = cast(
-            str,
-            get_setting(
-                self._settings,
-                "supervisor.restart_file",
-                "sandbox/.restart_requested",
-            ),
-        )
+        restart_file = self._settings.supervisor.restart_file
         return self._data_dir.parent.parent / restart_file
 
     def resolve_tools(
@@ -201,13 +210,33 @@ class Loader:
             restart_file_path=self._get_restart_file_path(),
         ).resolve_tools(tool_ids, agent_id)
 
+    def _collect_extension_config_errors(self) -> list[str]:
+        """Validate merged config for extensions that declare ConfigModel."""
+        errors: list[str] = []
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) != ExtensionState.INACTIVE:
+                continue
+            manifest = self._get_manifest(ext_id)
+            if not manifest:
+                continue
+            model_cls = getattr(type(ext), "ConfigModel", None)
+            if model_cls is None:
+                continue
+            merged = merge_extension_config(self._settings, ext_id, manifest)
+            try:
+                model_cls.model_validate(merged)
+            except ValidationError as e:
+                details = format_validation_errors(e, prefix=f"extensions.{ext_id}.")
+                errors.append(f"Extension {ext_id!r} config invalid:\n{details}")
+        return errors
+
     def _register_agent_config_from_manifests(self) -> None:
         """Register agent configs from manifests with model_router."""
         if not self._model_router:
             return
         default_provider = self._model_router.get_default_provider()
         for manifest in self._manifests:
-            if manifest.agent and default_provider:
+            if manifest.agent and default_provider and manifest.agent.model:
                 agent_id = manifest.agent_id or manifest.id
                 if manifest.agent_config and agent_id in manifest.agent_config:
                     continue
@@ -240,7 +269,7 @@ class Loader:
             ext_id,
             manifest,
             router,
-            router.session_manager,
+            router.thread_manager,
             router.project_service,
         )
 
@@ -248,6 +277,9 @@ class Loader:
         """Create context per extension, call initialize(ctx). Cascade dep failure."""
         self._router = router
         self._register_agent_config_from_manifests()
+        ext_cfg_errors = self._collect_extension_config_errors()
+        if ext_cfg_errors:
+            raise ExtensionConfigValidationError("\n\n".join(ext_cfg_errors))
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
                 continue
@@ -357,6 +389,23 @@ class Loader:
         )
         self._agent_registry.register(record, ext)
 
+    async def _update_setup_providers_state(self) -> None:
+        """Call on_setup_complete for each SetupProvider; store configured state."""
+        self._setup_providers.clear()
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if not isinstance(ext, SetupProvider):
+                continue
+            try:
+                ok, _msg = await ext.on_setup_complete()
+                self._setup_providers[ext_id] = ok
+            except Exception as e:
+                logger.warning(
+                    "SetupProvider %s on_setup_complete failed: %s", ext_id, e
+                )
+                self._setup_providers[ext_id] = False
+
     def detect_and_wire_all(self, router: MessageRouter) -> None:
         """Detect protocols via isinstance; wire ToolProvider, ChannelProvider, etc."""
         self._tool_providers = []
@@ -370,7 +419,8 @@ class Loader:
             if isinstance(ext, ToolProvider):
                 self._tool_providers.append(ext)
             if isinstance(ext, AgentProvider) and manifest:
-                self._register_static_agent(ext_id, ext, manifest)
+                if ext_id != self._settings.default_agent:
+                    self._register_static_agent(ext_id, ext, manifest)
             if isinstance(ext, ChannelProvider):
                 router.register_channel(ext_id, ext)
             if isinstance(ext, SchedulerProvider) and manifest:
@@ -456,6 +506,10 @@ class Loader:
                 logger.exception("get_mcp_servers failed for %s: %s", ext_id, e)
         return servers
 
+    def get_extensions(self) -> dict[str, Any]:
+        """Return extensions dict for tools that need to resolve SetupProvider."""
+        return self._extensions
+
     def get_available_tool_ids(self) -> list[str]:
         """Return tool IDs usable in agent uses_tools or create_agent.
 
@@ -468,6 +522,36 @@ class Loader:
             if isinstance(ext, ToolProvider):
                 ids.append(ext_id)
         return sorted(set(ids))
+
+    def get_tool_catalog(self) -> dict[str, dict[str, Any]]:
+        """Return tool metadata for create_agent/list_available_tools.
+
+        Format:
+        {
+            "tool_id": {
+                "description": str,
+            },
+            ...
+        }
+        """
+        catalog: dict[str, dict[str, Any]] = {
+            "core_tools": {
+                "description": "Built-in core tools (file, apply_patch, restart).",
+            }
+        }
+        for ext_id, ext in self._extensions.items():
+            if self._state.get(ext_id) == ExtensionState.ERROR:
+                continue
+            if not isinstance(ext, ToolProvider):
+                continue
+            manifest = self._get_manifest(ext_id)
+            description = ""
+            if manifest:
+                description = manifest.description.strip()
+            catalog[ext_id] = {
+                "description": description,
+            }
+        return catalog
 
     def get_all_tools(self) -> list[Any]:
         """Collect tools from all ToolProvider extensions."""
@@ -487,6 +571,8 @@ class Loader:
                 continue
             if not manifest.description:
                 continue
+            if ext_id == self._settings.default_agent:
+                continue
             is_agent = (
                 self._agent_registry is not None
                 and self._agent_registry.get(ext_id) is not None
@@ -495,6 +581,18 @@ class Loader:
                 continue
             tool_parts.append(f"- {ext_id}: {manifest.description.strip()}")
         return tool_parts
+
+    def _collect_setup_sections(self) -> list[str]:
+        """Return setup_instructions for unconfigured SetupProvider extensions."""
+        parts: list[str] = []
+        for ext_id, is_configured in self._setup_providers.items():
+            if is_configured:
+                continue
+            manifest = self._get_manifest(ext_id)
+            if not manifest or not manifest.setup_instructions.strip():
+                continue
+            parts.append(f"- {ext_id}: {manifest.setup_instructions.strip()}")
+        return parts
 
     def _collect_mcp_aliases(self) -> list[str]:
         """Collect MCP server aliases from ACTIVE extensions."""
@@ -519,8 +617,11 @@ class Loader:
     def get_capabilities_summary(self) -> str:
         """Build a natural-language capability summary for the orchestrator."""
         tool_parts = self._collect_tool_agent_parts()
+        setup_parts = self._collect_setup_sections()
         mcp_aliases = self._collect_mcp_aliases()
         sections: list[str] = []
+        if setup_parts:
+            sections.append("Extensions needing setup:\n" + "\n".join(setup_parts))
         if tool_parts:
             sections.append("Available tools:\n" + "\n".join(tool_parts))
         if self._agent_registry and self._agent_registry.list_agents():

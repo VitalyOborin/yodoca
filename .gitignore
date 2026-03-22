@@ -16,7 +16,7 @@ __pycache__
 .env.production.local
 .env.docker
 sandbox/.restart_requested
-# SQLite session DB (may contain private conversation data)
+# SQLite thread DB (may contain private conversation data)
 sandbox/data/
 sandbox/logs/
 config/settings.yaml
@@ -24,3 +24,5 @@ config/settings.yaml
 docs/discovery/
 node_modules/
 .vscode/
+web/dist/
+web/node_modules/

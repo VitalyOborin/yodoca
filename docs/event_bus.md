@@ -137,7 +137,7 @@ Guaranteed topics that always have a kernel-registered handler. Use these when y
 | `system.user.notify` | `{text, channel_id?}` | Delivers message to user via active channel |
 | `system.agent.task` | `{prompt, channel_id?, correlation_id?}` | Invokes Orchestrator; response to user |
 | `system.agent.background` | `{prompt, correlation_id?}` | Invokes Orchestrator silently |
-| `session.completed` | `{session_id, reason}` | Session lifecycle signal (used by memory/consolidation flows) |
+| `thread.completed` | `{thread_id, reason}` | Thread lifecycle signal (used by memory/consolidation flows) |
 | `system.channel.secure_input_request` | `{secret_id, prompt, target_channel}` | Requests secure user input via channel without exposing secret to LLM |
 | `system.mcp.tool_approval_request` | `{request_id, tool_name, arguments, server_alias, channel_id?}` | Requests user approval for an MCP tool call |
 | `system.mcp.tool_approval_response` | `{request_id, approved, reason?}` | Resumes/denies paused MCP tool invocation |
@@ -321,4 +321,5 @@ Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 
 - **event_journal**: Query by `topic`, `status`, `correlation_id` for debugging
 - Logs: `EventBus: recovered N events` at startup; handler exceptions logged with `subscriber_id` and `event_id`
+
 

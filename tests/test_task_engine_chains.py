@@ -1,23 +1,13 @@
 """Tests for task_engine chain logic (ADR 018)."""
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-_task_engine_dir = (
-    Path(__file__).resolve().parent.parent
-    / "sandbox"
-    / "extensions"
-    / "task_engine"
-)
-if str(_task_engine_dir) not in sys.path:
-    sys.path.insert(0, str(_task_engine_dir))
-
-from schema import TaskEngineDb  # type: ignore[import-not-found]
-from state import json_dumps_unicode  # type: ignore[import-not-found]
+from sandbox.extensions.task_engine.schema import TaskEngineDb
+from sandbox.extensions.task_engine.state import json_dumps_unicode
 
 
 def _payload(goal: str, **kwargs: object) -> str:
@@ -40,7 +30,7 @@ async def temp_db():
 @pytest.mark.asyncio
 async def test_unblock_successors_on_done(temp_db: TaskEngineDb) -> None:
     """When predecessor completes with done, successor gets result and becomes pending."""
-    from chains import unblock_successors  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.chains import unblock_successors
 
     conn = await temp_db.ensure_conn()
     now = 1000.0
@@ -78,7 +68,7 @@ async def test_unblock_successors_on_done(temp_db: TaskEngineDb) -> None:
 @pytest.mark.asyncio
 async def test_unblock_successors_cascade_failure(temp_db: TaskEngineDb) -> None:
     """When predecessor fails, blocked successors are cascaded to failed."""
-    from chains import unblock_successors  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.chains import unblock_successors
 
     conn = await temp_db.ensure_conn()
     now = 1000.0
@@ -119,7 +109,7 @@ async def test_unblock_successors_cascade_failure(temp_db: TaskEngineDb) -> None
 @pytest.mark.asyncio
 async def test_cancel_chain_downstream(temp_db: TaskEngineDb) -> None:
     """Cancel propagates to all downstream blocked tasks."""
-    from chains import cancel_chain_downstream  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.chains import cancel_chain_downstream
 
     conn = await temp_db.ensure_conn()
     now = 1000.0
@@ -159,11 +149,13 @@ async def test_cancel_chain_downstream(temp_db: TaskEngineDb) -> None:
 @pytest.mark.asyncio
 async def test_get_chain_tasks(temp_db: TaskEngineDb) -> None:
     """get_chain_tasks returns tasks ordered by chain_order."""
-    from chains import get_chain_tasks  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.chains import get_chain_tasks
 
     conn = await temp_db.ensure_conn()
     now = 1000.0
-    for i, (tid, goal) in enumerate([("t1", "First"), ("t2", "Second"), ("t3", "Third")]):
+    for i, (tid, goal) in enumerate(
+        [("t1", "First"), ("t2", "Second"), ("t3", "Third")]
+    ):
         await conn.execute(
             """
             INSERT INTO agent_task (task_id, parent_id, run_id, agent_id, status, priority, payload, created_at, updated_at, chain_id, chain_order)
@@ -183,7 +175,7 @@ async def test_get_chain_tasks(temp_db: TaskEngineDb) -> None:
 @pytest.mark.asyncio
 async def test_get_chain_tasks_empty(temp_db: TaskEngineDb) -> None:
     """get_chain_tasks returns empty list for unknown chain."""
-    from chains import get_chain_tasks  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.chains import get_chain_tasks
 
     tasks = await get_chain_tasks(temp_db, "nonexistent")
     assert tasks == []
@@ -192,8 +184,8 @@ async def test_get_chain_tasks_empty(temp_db: TaskEngineDb) -> None:
 @pytest.mark.asyncio
 async def test_predecessor_result_in_prompt() -> None:
     """predecessor_result appears in _build_step_prompt when provided."""
-    from state import TaskState  # type: ignore[import-not-found]
-    from worker import _build_step_prompt  # type: ignore[import-not-found]
+    from sandbox.extensions.task_engine.state import TaskState
+    from sandbox.extensions.task_engine.worker import _build_step_prompt
 
     state = TaskState(goal="Continue from previous")
     prompt = _build_step_prompt(
