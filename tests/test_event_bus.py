@@ -368,3 +368,124 @@ class TestSchedulePurgeJournal:
             schedule_id=10, schedule_type="one_shot"
         )
         assert deleted == 1
+
+
+class TestEventBusStatusCounts:
+    """get_status_counts reflects journal after delivery."""
+
+    @pytest.mark.asyncio
+    async def test_get_status_counts_pending_then_done(self, db_path: Path) -> None:
+        bus = EventBus(db_path=db_path, poll_interval=0.1, batch_size=5, max_retries=0)
+        await bus.recover()
+
+        counts_before = await bus.get_status_counts()
+        assert counts_before == {}
+
+        await bus.publish("t1", "src", {})
+        counts_pending = await bus.get_status_counts()
+        assert counts_pending.get("pending", 0) >= 1
+
+        async def handler(event: Event) -> None:
+            pass
+
+        bus.subscribe("t1", handler, "sub1")
+        await bus.start()
+        await asyncio.sleep(0.35)
+        counts_after = await bus.get_status_counts()
+        await bus.stop()
+
+        assert counts_after.get("done", 0) >= 1
+        assert counts_after.get("pending", 0) == 0
+
+
+class TestEventBusCorrelationId:
+    """correlation_id on publish is visible to handlers."""
+
+    @pytest.mark.asyncio
+    async def test_publish_correlation_id_delivered_to_handler(
+        self, db_path: Path
+    ) -> None:
+        bus = EventBus(db_path=db_path, poll_interval=0.1, batch_size=5)
+        await bus.recover()
+        received: list[Event | None] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        bus.subscribe("corr.topic", handler, "h1")
+        await bus.start()
+        await bus.publish(
+            "corr.topic",
+            "kernel",
+            {"x": 1},
+            correlation_id="corr-abc-42",
+        )
+        await asyncio.sleep(0.35)
+        await bus.stop()
+
+        assert len(received) == 1
+        assert received[0] is not None
+        assert received[0].correlation_id == "corr-abc-42"
+
+
+class TestEventBusMultipleHandlers:
+    """Multiple subscribers: one failure marks delivery failed for the event."""
+
+    @pytest.mark.asyncio
+    async def test_two_handlers_one_raises_dead_letters_when_max_retries_zero(
+        self, db_path: Path
+    ) -> None:
+        bus = EventBus(
+            db_path=db_path,
+            poll_interval=0.1,
+            batch_size=5,
+            max_retries=0,
+        )
+        await bus.recover()
+        good_calls = 0
+
+        async def good_handler(_event: Event) -> None:
+            nonlocal good_calls
+            good_calls += 1
+
+        async def bad_handler(_event: Event) -> None:
+            raise RuntimeError("second handler failed")
+
+        bus.subscribe("multi.topic", good_handler, "good")
+        bus.subscribe("multi.topic", bad_handler, "bad")
+        await bus.start()
+        await bus.publish("multi.topic", "src", {})
+        await asyncio.sleep(0.4)
+
+        assert good_calls == 1
+
+        conn = await bus._journal._ensure_conn()
+        cursor = await conn.execute(
+            "SELECT status, error FROM event_journal WHERE topic = 'multi.topic'"
+        )
+        row = await cursor.fetchone()
+        await bus.stop()
+        assert row is not None
+        assert row[0] == "dead_letter"
+        assert row[1] is not None
+
+
+class TestEventBusStop:
+    """Graceful shutdown clears background tasks."""
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_tasks_and_allows_new_instance_on_same_path(
+        self, db_path: Path
+    ) -> None:
+        bus = EventBus(db_path=db_path, poll_interval=0.2, batch_size=3)
+        await bus.recover()
+        await bus.start()
+        assert bus._dispatch_task is not None
+        assert bus._watchdog_task is not None
+        await bus.stop()
+        assert bus._dispatch_task is None
+        assert bus._watchdog_task is None
+
+        bus2 = EventBus(db_path=db_path, poll_interval=0.2, batch_size=3)
+        await bus2.recover()
+        await bus2.stop()

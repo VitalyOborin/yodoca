@@ -3,10 +3,12 @@
 import asyncio
 import sqlite3
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.events.topics import SystemTopics
 from core.extensions.contract import TurnContext
 from core.extensions.persistence.thread_manager import ThreadManager
 from core.extensions.routing.approval_coordinator import ApprovalCoordinator
@@ -144,6 +146,103 @@ class TestApprovalCoordinator:
 
         assert out is result_2
         assert mock_runner.run.await_count == 2
+        state.reject.assert_called_once()
+
+
+class TestApprovalCoordinatorEventBus:
+    """MCP approval flow when an EventBus delivers approval responses."""
+
+    @pytest.mark.asyncio
+    async def test_bind_event_bus_subscribes_response_topic(self) -> None:
+        bus = MagicMock()
+        bus.subscribe = MagicMock()
+        coordinator = ApprovalCoordinator()
+        coordinator.bind_event_bus(bus)
+        bus.subscribe.assert_called_once()
+        call = bus.subscribe.call_args
+        assert call[0][0] == SystemTopics.MCP_TOOL_APPROVAL_RESPONSE
+        assert call[0][2] == "kernel.router"
+
+    @pytest.mark.asyncio
+    async def test_approve_via_event_bus_runs_second_runner_round(self) -> None:
+        """Publish approval response after request; second run completes."""
+
+        class FakeEventBus:
+            def __init__(self) -> None:
+                self._response_handler: Any = None
+
+            def subscribe(
+                self,
+                topic: str,
+                handler: Any,
+                subscriber_id: str,
+            ) -> None:
+                if topic == SystemTopics.MCP_TOOL_APPROVAL_RESPONSE:
+                    self._response_handler = handler
+
+            async def publish(
+                self, topic: str, _source: str, payload: dict[str, Any]
+            ) -> None:
+                if topic != SystemTopics.MCP_TOOL_APPROVAL_REQUEST:
+                    return
+                rid = payload["request_id"]
+
+                async def respond() -> None:
+                    await asyncio.sleep(0.02)
+                    assert self._response_handler is not None
+                    ev = SimpleNamespace(
+                        payload={"request_id": rid, "approved": True, "reason": None}
+                    )
+                    await self._response_handler(ev)
+
+                asyncio.create_task(respond())
+
+        coordinator = ApprovalCoordinator(approval_timeout=30.0)
+        coordinator.bind_event_bus(FakeEventBus())
+
+        state = MagicMock()
+        result_1 = SimpleNamespace(
+            interruptions=[
+                SimpleNamespace(name="mcp_tool", arguments="{}", tool_name="x")
+            ],
+            to_state=MagicMock(return_value=state),
+        )
+        result_2 = SimpleNamespace(final_output="approved path", interruptions=None)
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(side_effect=[result_1, result_2])
+            out = await coordinator.run_with_approval_loop(
+                agent=MagicMock(),
+                input_or_state="hello",
+                session=None,
+                channel_id="cli",
+            )
+
+        assert out.final_output == "approved path"
+        assert mock_runner.run.await_count == 2
+        state.approve.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_without_event_bus_interruption_is_rejected(self) -> None:
+        """No EventBus: pending approval defaults to reject."""
+        coordinator = ApprovalCoordinator()
+        state = MagicMock()
+        result_1 = SimpleNamespace(
+            interruptions=[SimpleNamespace(name="tool", arguments="{}", tool_name="t")],
+            to_state=MagicMock(return_value=state),
+        )
+        result_2 = SimpleNamespace(final_output="after reject", interruptions=None)
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(side_effect=[result_1, result_2])
+            out = await coordinator.run_with_approval_loop(
+                agent=MagicMock(),
+                input_or_state="go",
+                session=None,
+                channel_id=None,
+            )
+
+        assert out.final_output == "after reject"
         state.reject.assert_called_once()
 
 

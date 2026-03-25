@@ -292,9 +292,59 @@ class TestSubscribeAndEmit:
         handler = MagicMock()
         router.subscribe("ev", handler)
         router.unsubscribe("ev", handler)
-        # Next _emit for "ev" should not call handler (we can't easily assert
-        # without calling _emit; at least we check no exception)
-        router._subscribers.get("ev", [])
+        assert handler not in router._subscribers.get("ev", [])
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_skips_handler_on_user_message_emit(
+        self, tmp_path: Path
+    ) -> None:
+        router = MessageRouter()
+        _configure_router_thread(router, tmp_path)
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        calls: list[int] = []
+
+        def removed_handler(_data: object) -> None:
+            calls.append(1)
+
+        router.subscribe("user_message", removed_handler)
+        router.unsubscribe("user_message", removed_handler)
+        router.set_agent(MagicMock())
+        with patch("agents.Runner") as mock_runner:
+            result_value = MagicMock()
+            result_value.final_output = "reply"
+            result_value.interruptions = None
+            mock_runner.run = AsyncMock(return_value=result_value)
+            await router.handle_user_message("hi", "u1", ch, "cli")
+        assert calls == []
+        assert ch.sent == [("u1", "reply")]
+
+    @pytest.mark.asyncio
+    async def test_emit_continues_after_subscriber_raises(self, tmp_path: Path) -> None:
+        """A synchronous subscriber that raises must not block later subscribers."""
+        router = MessageRouter()
+        _configure_router_thread(router, tmp_path)
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        after_bad: list[int] = []
+
+        def bad_subscriber(_data: object) -> None:
+            raise RuntimeError("subscriber boom")
+
+        def good_subscriber(_data: object) -> None:
+            after_bad.append(1)
+
+        router.subscribe("user_message", bad_subscriber)
+        router.subscribe("user_message", good_subscriber)
+        router.set_agent(MagicMock())
+        with patch("agents.Runner") as mock_runner:
+            result_value = MagicMock()
+            result_value.final_output = "ok"
+            result_value.interruptions = None
+            mock_runner.run = AsyncMock(return_value=result_value)
+            await router.handle_user_message("x", "u", ch, "cli")
+        assert after_bad == [1]
+        assert ch.sent == [("u", "ok")]
 
 
 class TestStreamingInvocation:
@@ -602,3 +652,86 @@ class TestUserMessageDeduplication:
             await router.handle_user_message("hi", "user1", ch, "cli")
 
         assert ch.sent == [("user1", "reply"), ("user1", "reply")]
+
+
+class TestInvokeAgentSyncErrors:
+    """Non-streaming invoke returns (Error: ...) when Runner.run fails."""
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_returns_error_string_on_runner_failure(self) -> None:
+        router = MessageRouter()
+        router.set_agent(MagicMock())
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(side_effect=RuntimeError("llm down"))
+            out = await router.invoke_agent("hello")
+        assert out.startswith("(Error:")
+        assert "llm down" in out
+
+
+class TestInvokeAgentBackgroundStreamed:
+    """invoke_agent_background_streamed uses background session and lock."""
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_background_streamed_returns_final_output(
+        self, tmp_path: Path
+    ) -> None:
+        router = MessageRouter()
+        router.set_agent(MagicMock())
+        router.configure_thread(
+            thread_db_path=str(tmp_path / "thread.db"),
+            thread_timeout=60,
+        )
+        chunks: list[str] = []
+
+        async def stream_events() -> None:
+            yield _FakeStreamEvent(
+                type="raw_response_event", data=_FakeResponseTextDeltaEvent("z")
+            )
+
+        def fake_streamed(*_a, **_k) -> SimpleNamespace:
+            return SimpleNamespace(
+                stream_events=stream_events,
+                final_output="full bg",
+            )
+
+        async def on_chunk(c: str) -> None:
+            chunks.append(c)
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run_streamed = MagicMock(side_effect=fake_streamed)
+            result = await router.invoke_agent_background_streamed(
+                "bg prompt",
+                on_chunk=on_chunk,
+            )
+        assert result == "full bg"
+        assert chunks == ["z"]
+
+
+class TestHandleUserMessageExplicitThread:
+    """handle_user_message(..., thread_id=...) reuses the same session."""
+
+    @pytest.mark.asyncio
+    async def test_same_thread_id_reuses_session_for_runner(
+        self, tmp_path: Path
+    ) -> None:
+        router = MessageRouter()
+        _configure_router_thread(router, tmp_path)
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        router.set_agent(MagicMock())
+        sessions: list[object] = []
+
+        async def capture_run(_agent: object, _inp: object, session: object = None):
+            sessions.append(session)
+            return SimpleNamespace(final_output="r", interruptions=None)
+
+        with patch("agents.Runner") as mock_runner:
+            mock_runner.run = AsyncMock(side_effect=capture_run)
+            await router.handle_user_message(
+                "one", "u", ch, "cli", thread_id="shared_thread"
+            )
+            await router.handle_user_message(
+                "two", "u", ch, "cli", thread_id="shared_thread"
+            )
+        assert len(sessions) == 2
+        assert sessions[0] is sessions[1]
