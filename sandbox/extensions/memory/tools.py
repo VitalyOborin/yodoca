@@ -104,6 +104,7 @@ class WeakFact(BaseModel):
     content: str
     confidence: float = 0.0
     last_accessed: int | None = None
+    has_superseding_version: bool = False
 
 
 class WeakFactsResult(BaseModel):
@@ -502,6 +503,10 @@ def build_tools(
     async def weak_facts(threshold: float = 0.3, limit: int = 10) -> WeakFactsResult:
         """List facts with low confidence that may need confirmation or will decay soon."""
         nodes = await storage.get_weak_nodes(threshold=threshold, limit=limit)
+        node_ids = [n.get("id", "") for n in nodes if n.get("id")]
+        superseded = (
+            await storage.get_superseded_node_ids(node_ids) if node_ids else set()
+        )
         facts = [
             WeakFact(
                 id=n.get("id", ""),
@@ -509,6 +514,7 @@ def build_tools(
                 + ("..." if len(n.get("content", "") or "") > 60 else ""),
                 confidence=n.get("confidence", 0.0),
                 last_accessed=n.get("last_accessed"),
+                has_superseding_version=n.get("id", "") in superseded,
             )
             for n in nodes
         ]

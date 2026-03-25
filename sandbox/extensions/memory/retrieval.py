@@ -298,6 +298,78 @@ class MemoryRetrieval:
         ranked = sorted(scores, key=scores.get, reverse=True)[:limit]
         return [{**all_items[nid], "_rrf_score": scores[nid]} for nid in ranked]
 
+    async def _resolve_supersedes_in_results(
+        self, results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Drop superseded nodes when the replacement is in results; else swap in the newer node."""
+        if not results:
+            return results
+        ids = [r["id"] for r in results]
+        superseded = await self._storage.get_superseded_node_ids(ids)
+        if not superseded:
+            return results
+        id_set = set(ids)
+        pairs = await self._storage.get_supersession_pairs_for_targets(list(superseded))
+        new_ids = {
+            pairs[rid]
+            for rid in superseded
+            if rid in pairs and pairs[rid] not in id_set
+        }
+        new_nodes_by_id: dict[str, dict[str, Any]] = {}
+        if new_ids:
+            fetched = await self._storage.get_nodes_by_ids(list(new_ids))
+            new_nodes_by_id = {n["id"]: n for n in fetched}
+        out: list[dict[str, Any]] = []
+        for r in results:
+            rid = r["id"]
+            if rid not in superseded:
+                out.append(r)
+                continue
+            new_id = pairs.get(rid)
+            if not new_id:
+                out.append(r)
+                continue
+            if new_id in id_set:
+                continue
+            replacement = new_nodes_by_id.get(new_id)
+            if replacement:
+                out.append(dict(replacement))
+            else:
+                out.append(r)
+        return out
+
+    async def _enrich_with_provenance(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        limit_per_fact: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Append source episodes for non-episodic nodes via derived_from (deduped by episode id)."""
+        fact_types = ("semantic", "procedural", "opinion")
+        fact_rows = [r for r in results if r.get("type") in fact_types]
+        fact_ids = [r["id"] for r in fact_rows]
+        if not fact_ids:
+            return results
+        existing_ids = {r["id"] for r in results}
+        by_fact = await self._storage.get_source_episodes_for_nodes(
+            fact_ids, limit_per_node=limit_per_fact
+        )
+        fact_by_id = {r["id"]: r for r in fact_rows}
+        extra: list[dict[str, Any]] = []
+        for fid, episodes in by_fact.items():
+            fact = fact_by_id.get(fid)
+            snippet = ((fact or {}).get("content") or "")[:80]
+            for ep in episodes:
+                eid = ep["id"]
+                if eid in existing_ids:
+                    continue
+                existing_ids.add(eid)
+                row = dict(ep)
+                row["_source_for"] = fid
+                row["_source_fact_snippet"] = snippet
+                extra.append(row)
+        return results + extra
+
     async def search(
         self,
         query: str,
@@ -310,6 +382,7 @@ class MemoryRetrieval:
         event_after: int | None = None,
         event_before: int | None = None,
         graph_depth: int | None = None,
+        enrich_provenance: bool = False,
     ) -> list[dict[str, Any]]:
         """Intent-aware hybrid search: FTS5 + vector + graph with RRF fusion."""
         if node_types is None:
@@ -393,6 +466,9 @@ class MemoryRetrieval:
             results = [r for r in results if r.get("_rrf_score", 0) >= min_score]
             for r in results:
                 r.pop("_rrf_score", None)
+            results = await self._resolve_supersedes_in_results(results)
+            if enrich_provenance:
+                results = await self._enrich_with_provenance(results)
             node_ids = [r["id"] for r in results]
             await self._storage.record_access_for_nodes(node_ids)
         logger.debug(
@@ -417,22 +493,30 @@ class MemoryRetrieval:
         results: list[dict[str, Any]],
         token_budget: int = 2000,
     ) -> str:
-        """Format results with budget shares: Facts 65%, Entity profiles 35%.
+        """Format results with budget shares: Facts 50%, Entity 25%, Temporal 15%, Evidence 10%.
 
         Deduplicates by normalized content so duplicate nodes (same text, different id) appear once.
+        Rows with ``_source_for`` are provenance episodes (derived_from) and go under Evidence.
         """
         if not results:
             return ""
         char_per_token = 4
         total_chars = token_budget * char_per_token
-        budget_facts = int(total_chars * 0.65)
-        budget_entities = int(total_chars * 0.35)
-        budget_temporal = 0
+        budget_facts = int(total_chars * 0.50)
+        budget_entities = int(total_chars * 0.25)
+        budget_temporal = int(total_chars * 0.15)
+        budget_evidence = int(total_chars * 0.10)
 
         facts = [
-            r for r in results if r.get("type") in ("semantic", "procedural", "opinion")
+            r
+            for r in results
+            if r.get("type") in ("semantic", "procedural", "opinion")
+            and "_source_for" not in r
         ]
-        episodic = [r for r in results if r.get("type") == "episodic"]
+        episodic = [
+            r for r in results if r.get("type") == "episodic" and "_source_for" not in r
+        ]
+        evidence_rows = [r for r in results if "_source_for" in r]
         node_ids = [r["id"] for r in results]
 
         sections: list[str] = []
@@ -495,6 +579,28 @@ class MemoryRetrieval:
                 chars += len(c) + 4
             if lines:
                 sections.append("## Temporal context\n" + "\n".join(lines))
+
+        if evidence_rows:
+            lines = []
+            chars = 0
+            max_ev_chars = 180
+            seen_evidence: set[str] = set()
+            for r in evidence_rows:
+                fact_snip = (r.get("_source_fact_snippet") or "?").strip() or "?"
+                c = r.get("content", "")
+                if len(c) > max_ev_chars:
+                    c = c[: max_ev_chars - 3] + "..."
+                line = f'- [source for "{fact_snip}"]: {c}'
+                key = self._normalize_content(line)
+                if key in seen_evidence or not key:
+                    continue
+                if chars + len(line) + 2 > budget_evidence:
+                    break
+                seen_evidence.add(key)
+                lines.append(line)
+                chars += len(line) + 2
+            if lines:
+                sections.append("## Evidence\n" + "\n".join(lines))
 
         if not sections:
             lines = []

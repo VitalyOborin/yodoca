@@ -59,8 +59,8 @@ Before every agent invocation the kernel calls `get_context(prompt)`. The extens
 
 1. Classifies query complexity (simple → budget 1000 tokens, complex → 3000).
 2. Generates a query embedding (if the `embedding` extension is available).
-3. Runs intent-aware hybrid search (FTS5 + vector + graph traversal via RRF).
-4. Assembles context with budget shares: facts 40%, entity profiles 25%, temporal context 25%, evidence 10%.
+3. Runs intent-aware hybrid search (FTS5 + vector + graph traversal via RRF), then post-processes merged hits (see Search).
+4. Assembles context with budget shares: facts 50%, entity profiles 25%, temporal context 15%, evidence 10%.
 5. Returns a markdown block prepended to the system prompt, or `None` if no matches.
 
 **Thread change detection:**
@@ -255,6 +255,11 @@ The `memory` extension implements four search strategies, combined via Reciproca
 
 **RRF merge:** `score(node) = Σ weight_i / (k + rank_i)` across FTS5, vector, and graph result lists. Weights (`rrf_weight_fts`, `rrf_weight_vector`, `rrf_weight_graph`) and `rrf_k` are configurable in the manifest.
 
+**Post-merge processing (not separate RRF channels):** After RRF and score filtering, retrieval applies:
+
+- **`supersedes` resolution** — If a hit is the *old* side of a `supersedes` edge and the *new* node is also in the result set, the old row is dropped. If only the old node appears, it is replaced by the newer node (so context reflects corrections). This is not graph traversal; it is consistency filtering on the merged list.
+- **Provenance enrichment (complex queries only, context injection)** — For `ContextProvider.get_context`, when query complexity is `complex`, source episodes linked via `derived_from` from top non-episodic hits are appended (deduped) for the Evidence section in `assemble_context`. The orchestrator `search_memory` tool does not enable this path (use `explain_fact` for explicit provenance).
+
 **Time-based filtering:** `search_memory` accepts `after` and `before` parameters. Supported formats: `last_week`, `last_month`, `YYYY-MM-DD`.
 
 **Adaptive complexity:** Queries are classified as `simple` or `complex`. Simple queries use graph depth 2 and limit 5; complex queries use depth 4 and limit 20.
@@ -273,8 +278,8 @@ The `memory` extension implements four search strategies, combined via Reciproca
 | `confirm_fact` | Set `decay_rate=0.0, confidence=1.0` — permanently protected from decay. |
 | `get_entity_info` | Entity profile: summary, related facts, timeline. |
 | `memory_stats` | Graph metrics: node/edge counts by type, entities, orphan nodes, storage size, maintenance timestamps. |
-| `explain_fact` | Provenance chain: source episodes (`derived_from`), supersedes chain, linked entities. |
-| `weak_facts` | List low-confidence facts that may need confirmation or will decay soon. |
+| `explain_fact` | Provenance chain: source episodes (`derived_from`); `supersedes` lists all older versions (transitive walk); `superseded_by` when this node was replaced; linked entities. |
+| `weak_facts` | List low-confidence facts that may need confirmation or will decay soon. Each entry may include `has_superseding_version` if the node is still targeted by a live `supersedes` edge (edge case when a replaced node remained active). |
 
 ### Write-path agent tools (internal — not exposed to Orchestrator)
 
@@ -323,8 +328,9 @@ ContextProvider.get_context(prompt)
   → embed_fn(prompt)                   [if embedding available]
   → intent_classifier.classify(prompt)
   → hybrid search: FTS5 + vector + graph strategy (by intent) → RRF fusion
+  → post-merge: supersedes resolution; if complexity=complex, derived_from provenance episodes
   → assemble_context(results, token_budget)
-      → Facts 40% | Entity profiles 25% | Temporal context 25% | Evidence 10%
+      → Facts 50% | Entity profiles 25% | Temporal context 15% | Evidence 10%
   → return formatted markdown or None
 ```
 

@@ -1347,6 +1347,135 @@ class MemoryStorage:
         rows = await cursor.fetchall()
         return [r[0] for r in rows]
 
+    async def get_source_episodes_for_nodes(
+        self,
+        node_ids: list[str],
+        *,
+        limit_per_node: int = 2,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """For each fact node id, return source episodes linked via derived_from (fact=source, episode=target)."""
+        if not self._read_conn or not node_ids:
+            return {}
+        seen: set[str] = set()
+        order: list[str] = []
+        for nid in node_ids:
+            if nid not in seen:
+                seen.add(nid)
+                order.append(nid)
+        placeholders = ",".join("?" * len(order))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT e.source_id, n.id, n.type, n.content, n.event_time, n.created_at,
+                   n.confidence, n.thread_id
+            FROM edges e
+            INNER JOIN nodes n ON n.id = e.target_id
+            WHERE e.source_id IN ({placeholders})
+              AND e.relation_type = 'derived_from'
+              AND e.valid_until IS NULL
+              AND n.valid_until IS NULL
+            ORDER BY e.source_id, n.event_time DESC
+            """,
+            tuple(order),
+        )
+        rows = await cursor.fetchall()
+        out: dict[str, list[dict[str, Any]]] = {nid: [] for nid in order}
+        counts: dict[str, int] = {nid: 0 for nid in order}
+        for r in rows:
+            fact_id = r[0]
+            if counts.get(fact_id, 0) >= limit_per_node:
+                continue
+            counts[fact_id] = counts.get(fact_id, 0) + 1
+            rec = {
+                "id": r[1],
+                "type": r[2],
+                "content": r[3],
+                "event_time": r[4],
+                "created_at": r[5],
+                "confidence": r[6],
+                "thread_id": r[7],
+            }
+            if fact_id in out:
+                out[fact_id].append(rec)
+        return out
+
+    async def get_superseded_node_ids(self, node_ids: list[str]) -> set[str]:
+        """Return subset of node_ids that are targets of a live supersedes edge (replaced by a newer node)."""
+        if not self._read_conn or not node_ids:
+            return set()
+        placeholders = ",".join("?" * len(node_ids))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT DISTINCT target_id FROM edges
+            WHERE target_id IN ({placeholders})
+              AND relation_type = 'supersedes'
+              AND valid_until IS NULL
+            """,
+            tuple(node_ids),
+        )
+        return {r[0] for r in await cursor.fetchall()}
+
+    async def get_supersession_pairs_for_targets(
+        self, target_ids: list[str]
+    ) -> dict[str, str]:
+        """Map target_id -> source_id for supersedes edges (old fact -> new fact). Batch helper for retrieval."""
+        if not self._read_conn or not target_ids:
+            return {}
+        placeholders = ",".join("?" * len(target_ids))
+        cursor = await self._read_conn.execute(
+            f"""
+            SELECT target_id, source_id FROM edges
+            WHERE target_id IN ({placeholders})
+              AND relation_type = 'supersedes'
+              AND valid_until IS NULL
+            """,
+            tuple(target_ids),
+        )
+        return {r[0]: r[1] for r in await cursor.fetchall()}
+
+    async def get_superseding_node(self, node_id: str) -> dict[str, Any] | None:
+        """Return the node that supersedes this one (newer fact), or None."""
+        pairs = await self.get_supersession_pairs_for_targets([node_id])
+        src = pairs.get(node_id)
+        if not src:
+            return None
+        nodes = await self.get_nodes_by_ids([src])
+        return nodes[0] if nodes else None
+
+    async def get_supersession_chain(self, node_id: str) -> list[dict[str, Any]]:
+        """Ordered nodes superseded by this one (immediate predecessor first), walking supersedes edges.
+
+        Edge semantics: ``source_id`` is the newer fact, ``target_id`` the older. Stops on missing
+        nodes or after ``max_depth`` steps to avoid cycles.
+        """
+        if not self._read_conn:
+            return []
+        chain: list[dict[str, Any]] = []
+        current = node_id
+        seen: set[str] = {node_id}
+        max_depth = 50
+        for _ in range(max_depth):
+            cursor = await self._read_conn.execute(
+                """
+                SELECT target_id FROM edges
+                WHERE source_id = ? AND relation_type = 'supersedes' AND valid_until IS NULL
+                LIMIT 1
+                """,
+                (current,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                break
+            tid = row[0]
+            if tid in seen:
+                break
+            seen.add(tid)
+            nodes = await self.get_nodes_by_ids([tid])
+            if not nodes:
+                break
+            chain.append(nodes[0])
+            current = tid
+        return chain
+
     async def get_graph_stats(self) -> dict[str, Any]:
         """Graph-level metrics: node counts by type, edge counts by relation_type, entities, orphans, avg edges/node."""
         if self._read_conn is None:
@@ -1416,7 +1545,7 @@ class MemoryStorage:
         return round(os.path.getsize(self._db_path) / (1024 * 1024), 1)
 
     async def get_provenance_chain(self, node_id: str) -> dict[str, Any]:
-        """Provenance chain: node, source episodes (derived_from), supersedes/superseded_by, linked entities."""
+        """Provenance chain: node, source episodes (derived_from), full supersedes history (transitive), superseded_by, entities."""
         node = await self.get_node(node_id)
         if not node:
             return {
@@ -1428,11 +1557,8 @@ class MemoryStorage:
             }
         source_ids = await self.get_derived_from_targets(node_id)
         source_episodes = await self.get_nodes_by_ids(source_ids) if source_ids else []
-        supersedes_ids = await self._get_supersedes_targets(node_id)
+        supersedes = await self.get_supersession_chain(node_id)
         superseded_by_ids = await self._get_supersedes_sources(node_id)
-        supersedes = (
-            await self.get_nodes_by_ids(supersedes_ids) if supersedes_ids else []
-        )
         superseded_by = (
             await self.get_nodes_by_ids(superseded_by_ids) if superseded_by_ids else []
         )

@@ -127,6 +127,7 @@ class MemoryExtension:
             limit=params["limit"],
             token_budget=params["token_budget"],
             graph_depth=params.get("graph_depth"),
+            enrich_provenance=(complexity == "complex"),
         )
         if not results:
             logger.debug(

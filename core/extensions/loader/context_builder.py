@@ -90,6 +90,7 @@ class ExtensionContextBuilder:
             agent_registry=self._agent_registry,
             restart_file_path=self._restart_file_path,
             default_agent_id=self._settings.default_agent,
+            extension_dir=self._extensions_dir / ext_id,
         )
 
     def _resolve_agent_tools(self, manifest: ExtensionManifest) -> list[Any]:

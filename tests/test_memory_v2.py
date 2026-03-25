@@ -167,6 +167,206 @@ class TestMemoryStorage:
         assert node["type"] == "semantic"
 
 
+class TestDerivedFromSupersedesStorage:
+    """Direct MemoryStorage tests for derived_from and supersedes traversal."""
+
+    @pytest.mark.asyncio
+    async def test_get_derived_from_targets_returns_episode_ids(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        ep = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "source episode",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "thread_id": "s1",
+            }
+        )
+        fact = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "extracted fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": fact,
+                "target_id": ep,
+                "relation_type": "derived_from",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
+        await asyncio.sleep(0.4)
+        targets = await storage.get_derived_from_targets(fact)
+        assert targets == [ep]
+
+    @pytest.mark.asyncio
+    async def test_get_source_episodes_for_nodes(self, storage: MemoryStorage) -> None:
+        now = int(time.time())
+        ep = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "episode text",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "thread_id": "s1",
+            }
+        )
+        fact = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "fact text",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": fact,
+                "target_id": ep,
+                "relation_type": "derived_from",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
+        await asyncio.sleep(0.4)
+        by_fact = await storage.get_source_episodes_for_nodes([fact], limit_per_node=2)
+        assert fact in by_fact
+        assert len(by_fact[fact]) == 1
+        assert by_fact[fact][0]["id"] == ep
+        assert "episode" in by_fact[fact][0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_get_supersession_chain_transitive(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        v1 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "v1 content",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        v2 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "v2 content",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
+        v3 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "v3 content",
+                "event_time": now + 2,
+                "created_at": now + 2,
+                "valid_from": now + 2,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": v2,
+                "target_id": v1,
+                "relation_type": "supersedes",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": v3,
+                "target_id": v2,
+                "relation_type": "supersedes",
+                "valid_from": now + 2,
+                "created_at": now + 2,
+            }
+        )
+        await asyncio.sleep(0.4)
+        chain = await storage.get_supersession_chain(v3)
+        assert len(chain) == 2
+        assert chain[0]["id"] == v2
+        assert chain[1]["id"] == v1
+
+    @pytest.mark.asyncio
+    async def test_graph_stats_includes_derived_from_and_supersedes_counts(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        a = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "a",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        b = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "b",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "thread_id": "s1",
+            }
+        )
+        c = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "c",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
+        d = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "d",
+                "event_time": now + 2,
+                "created_at": now + 2,
+                "valid_from": now + 2,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": a,
+                "target_id": b,
+                "relation_type": "derived_from",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": d,
+                "target_id": c,
+                "relation_type": "supersedes",
+                "valid_from": now + 2,
+                "created_at": now + 2,
+            }
+        )
+        await asyncio.sleep(0.4)
+        stats = await storage.get_graph_stats()
+        assert stats["edges"]["derived_from"] >= 1
+        assert stats["edges"]["supersedes"] >= 1
+
+
 class TestMemoryRetrieval:
     """MemoryRetrieval search and context assembly."""
 
@@ -199,6 +399,54 @@ class TestMemoryRetrieval:
         ctx = await retrieval.assemble_context(results, token_budget=500)
         assert ctx
         assert "budget" in ctx
+
+    @pytest.mark.asyncio
+    async def test_assemble_context_includes_evidence_with_provenance_enrichment(
+        self, storage: MemoryStorage
+    ) -> None:
+        """Evidence section appears when search uses enrich_provenance and derived_from exists."""
+        now = int(time.time())
+        ep = storage.insert_node(
+            {
+                "type": "episodic",
+                "content": "user told me uniquemarkerX",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+                "thread_id": "s1",
+            }
+        )
+        fact = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "user believes uniquemarkerX theory",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": fact,
+                "target_id": ep,
+                "relation_type": "derived_from",
+                "valid_from": now,
+                "created_at": now,
+            }
+        )
+        await asyncio.sleep(0.5)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        results = await retrieval.search(
+            "uniquemarkerX",
+            limit=5,
+            node_types=["semantic"],
+            enrich_provenance=True,
+        )
+        ctx = await retrieval.assemble_context(results, token_budget=1000)
+        assert "## Evidence" in ctx
+        assert "user told me uniquemarkerX" in ctx
 
     @pytest.mark.asyncio
     async def test_assemble_context_deduplicates_same_content(self) -> None:
@@ -1629,7 +1877,114 @@ class TestExplainFactTool:
             _tool_ctx(explain_tool.name, args_old), __import__("json").dumps(args_old)
         )
         out_old = str(result_old)
-        assert "superseded_by=" in out_old or "supersedes=" in out_old
+        assert "superseded_by=" in out_old
+        assert "new fact" in out_old
+
+    @pytest.mark.asyncio
+    async def test_explain_fact_multi_level_supersedes_chain(
+        self, storage: MemoryStorage
+    ) -> None:
+        now = int(time.time())
+        v1 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "version one fact",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        v2 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "version two fact",
+                "event_time": now + 1,
+                "created_at": now + 1,
+                "valid_from": now + 1,
+            }
+        )
+        v3 = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "version three fact",
+                "event_time": now + 2,
+                "created_at": now + 2,
+                "valid_from": now + 2,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": v2,
+                "target_id": v1,
+                "relation_type": "supersedes",
+                "valid_from": now + 1,
+                "created_at": now + 1,
+            }
+        )
+        storage.insert_edge(
+            {
+                "source_id": v3,
+                "target_id": v2,
+                "relation_type": "supersedes",
+                "valid_from": now + 2,
+                "created_at": now + 2,
+            }
+        )
+        await asyncio.sleep(0.4)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        explain_tool = next(t for t in tools if t.name == "explain_fact")
+        args = {"fact_id": v3}
+        result = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
+        )
+        out = str(result)
+        assert "version three" in out
+        assert "supersedes=" in out
+        assert "version two" in out
+        assert "version one" in out
+
+    @pytest.mark.asyncio
+    async def test_explain_fact_semantic_without_provenance_ok(
+        self, storage: MemoryStorage
+    ) -> None:
+        """Fact with no derived_from edges: tool succeeds, empty source episodes."""
+        now = int(time.time())
+        fact_id = storage.insert_node(
+            {
+                "type": "semantic",
+                "content": "standalone fact no episode link",
+                "event_time": now,
+                "created_at": now,
+                "valid_from": now,
+            }
+        )
+        await asyncio.sleep(0.4)
+
+        classifier = KeywordIntentClassifier()
+        retrieval = MemoryRetrieval(storage, classifier)
+        tools = build_tools(
+            retrieval=retrieval,
+            storage=storage,
+            embed_fn=None,
+            token_budget=1000,
+        )
+        explain_tool = next(t for t in tools if t.name == "explain_fact")
+        args = {"fact_id": fact_id}
+        result = await explain_tool.on_invoke_tool(
+            _tool_ctx(explain_tool.name, args), __import__("json").dumps(args)
+        )
+        out_full = str(result)
+        assert "standalone fact" in out_full
+        assert "source_episodes=" in out_full
+        assert "error: fact" not in out_full.lower()
 
     @pytest.mark.asyncio
     async def test_explain_fact_nonexistent(self, storage: MemoryStorage) -> None:

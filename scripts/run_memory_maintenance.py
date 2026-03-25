@@ -1,6 +1,6 @@
 """Manually trigger the Memory v2 nightly maintenance pipeline.
 
-Bootstraps the full extension stack (including embedding + model_router),
+Bootstraps only the memory extension (and its transitive dependencies),
 then calls MemoryExtension.execute_task("run_nightly_maintenance").
 
 Pipeline steps:
@@ -38,6 +38,20 @@ from agents import set_tracing_disabled
 set_tracing_disabled(True)
 
 from core import secrets
+
+
+def _filter_with_deps(root_id: str, manifests: list) -> list:
+    """Keep only *root_id* and its transitive depends_on from *manifests*."""
+    by_id = {m.id: m for m in manifests}
+    needed: set[str] = set()
+    stack = [root_id]
+    while stack:
+        ext_id = stack.pop()
+        if ext_id in needed or ext_id not in by_id:
+            continue
+        needed.add(ext_id)
+        stack.extend(by_id[ext_id].depends_on)
+    return [m for m in manifests if m.id in needed]
 
 
 async def print_stats(storage: object) -> None:
@@ -87,6 +101,7 @@ async def main() -> None:
 
     try:
         await loader.discover()
+        loader._manifests = _filter_with_deps("memory", loader._manifests)
         await loader.load_all()
         await loader.initialize_all(router)
         loader.detect_and_wire_all(router)

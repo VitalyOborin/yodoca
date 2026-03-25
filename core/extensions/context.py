@@ -46,6 +46,7 @@ class ExtensionContext:
         agent_registry: "AgentRegistry | None" = None,
         restart_file_path: Path | None = None,
         default_agent_id: str = "orchestrator_agent",
+        extension_dir: Path | None = None,
     ) -> None:
         self.extension_id = extension_id
         self.config = config
@@ -55,6 +56,7 @@ class ExtensionContext:
         self._projects = project_service
         self._get_extension = get_extension
         self._data_dir_path = data_dir_path
+        self._extension_dir = extension_dir
         self._shutdown_event = shutdown_event
         self.resolved_tools: list[Any] = resolved_tools or []
         self.resolved_instructions: str = resolved_instructions
@@ -345,6 +347,13 @@ class ExtensionContext:
         """Private extension folder: sandbox/data/<extension_id>/."""
         self._data_dir_path.mkdir(parents=True, exist_ok=True)
         return self._data_dir_path
+
+    @property
+    def extension_dir(self) -> Path:
+        """Source directory of this extension: sandbox/extensions/<extension_id>/."""
+        if self._extension_dir is None:
+            raise RuntimeError(f"extension_dir not set for {self.extension_id}")
+        return self._extension_dir
 
     def request_restart(self) -> None:
         """Ask supervisor to restart the kernel.
