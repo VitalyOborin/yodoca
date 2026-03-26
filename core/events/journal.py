@@ -80,7 +80,9 @@ class EventJournal:
         async with self._conn_lock:
             if self._conn is None:
                 self._db_path.parent.mkdir(parents=True, exist_ok=True)
-                self._conn = await aiosqlite.connect(str(self._db_path))
+                self._conn = await aiosqlite.connect(
+                    str(self._db_path), isolation_level=None
+                )
                 await self._conn.execute("PRAGMA journal_mode=WAL")
                 await self._conn.execute("PRAGMA synchronous=NORMAL")
                 await self._conn.execute(f"PRAGMA busy_timeout={self._busy_timeout}")
@@ -165,35 +167,25 @@ class EventJournal:
         return cursor.lastrowid or 0
 
     async def claim_pending(self, limit: int = 3) -> list[EventRow]:
-        """Atomically claim pending events: SELECT + UPDATE status='processing' in one transaction."""
+        """Atomically claim pending events via single UPDATE ... RETURNING (no nested transactions)."""
         conn = await self._ensure_conn()
         now = time.time()
-        await conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = await conn.execute(
-                """
-                SELECT id, topic, source, payload, created_at, correlation_id, retry_count
-                FROM event_journal
+        cursor = await conn.execute(
+            """
+            UPDATE event_journal
+            SET status = 'processing', processing_since = ?
+            WHERE id IN (
+                SELECT id FROM event_journal
                 WHERE status = 'pending'
                 ORDER BY created_at
                 LIMIT ?
-                """,
-                (limit,),
             )
-            rows = await cursor.fetchall()
-            ids = [row[0] for row in rows]
-            if ids:
-                placeholders = ",".join("?" * len(ids))
-                await conn.execute(
-                    f"UPDATE event_journal SET status = 'processing', processing_since = ? "
-                    f"WHERE id IN ({placeholders})",
-                    [now, *ids],
-                )
-            await conn.commit()
-            return [_row_to_event_row(tuple(row)) for row in rows]
-        except Exception:
-            await conn.rollback()
-            raise
+            RETURNING id, topic, source, payload, created_at, correlation_id, retry_count
+            """,
+            (now, limit),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_event_row(tuple(row)) for row in rows]
 
     async def mark_processing(self, event_id: int) -> None:
         """Mark event as processing."""
