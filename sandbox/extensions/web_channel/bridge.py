@@ -16,7 +16,8 @@ STREAM_END = object()
 class RequestBridge:
     """Bridges HTTP request-response with ChannelProvider callbacks.
 
-    - Busy guard: only one request at a time; 503 when held
+    - Busy guard: only one agent turn at a time; `acquire()` fails fast; `acquire_wait()`
+      waits up to a timeout so concurrent HTTP clients queue instead of immediate 503
     - Non-streaming: asyncio.Future for send_to_user
     - Streaming: asyncio.Queue for on_stream_* callbacks
     - Notifications: ring buffer + long-poll
@@ -40,6 +41,20 @@ class RequestBridge:
             return False
         try:
             await asyncio.wait_for(self._busy.acquire(), timeout=0.1)
+            self._held = True
+            return True
+        except TimeoutError:
+            return False
+
+    async def acquire_wait(self, timeout_seconds: float | None = None) -> bool:
+        """Acquire busy guard, waiting up to timeout_seconds (default: request_timeout)."""
+        wait = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else float(self._request_timeout)
+        )
+        try:
+            await asyncio.wait_for(self._busy.acquire(), timeout=wait)
             self._held = True
             return True
         except TimeoutError:

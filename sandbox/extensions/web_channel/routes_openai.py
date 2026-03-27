@@ -107,7 +107,8 @@ async def post_chat_completions(request: Request) -> JSONResponse | StreamingRes
             ).model_dump(),
         )
 
-    if not await bridge.acquire():
+    timeout = config.get("request_timeout_seconds", 120)
+    if not await bridge.acquire_wait(float(timeout)):
         return JSONResponse(
             status_code=503,
             headers={"Retry-After": "5"},
@@ -122,7 +123,6 @@ async def post_chat_completions(request: Request) -> JSONResponse | StreamingRes
 
     thread_id = request.headers.get("X-Thread-Id")
     user_id = config.get("default_user_id", "web_user")
-    timeout = config.get("request_timeout_seconds", 120)
     model_name = config.get("model_name", "yodoca")
     chat_id = generate_chat_id()
     created = int(time.time())
@@ -241,7 +241,8 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
             ).model_dump(),
         )
 
-    if not await bridge.acquire():
+    timeout = config.get("request_timeout_seconds", 120)
+    if not await bridge.acquire_wait(float(timeout)):
         return JSONResponse(
             status_code=503,
             headers={"Retry-After": "5"},
@@ -256,7 +257,6 @@ async def post_responses(request: Request) -> JSONResponse | StreamingResponse:
 
     thread_id = request.headers.get("X-Thread-Id")
     user_id = config.get("default_user_id", "web_user")
-    timeout = config.get("request_timeout_seconds", 120)
     model_name = config.get("model_name", "yodoca")
     resp_id = generate_response_id()
     msg_id = generate_msg_id()

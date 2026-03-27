@@ -311,7 +311,7 @@ All streaming uses **Server-Sent Events** (SSE). There are no WebSocket connecti
 
 The `RequestBridge` mediates between HTTP request/response semantics and the kernel's callback-based channel protocol:
 
-1. The HTTP handler calls `bridge.acquire()` (busy guard).
+1. The HTTP handler calls `bridge.acquire_wait(request_timeout)` (busy guard: waits in queue up to the configured timeout; `acquire()` remains for fail-fast callers).
 2. A stream queue is created via `bridge.create_stream_queue()`.
 3. The handler emits `user.message` to the kernel.
 4. The kernel invokes the agent, which calls `StreamingChannelProvider` callbacks.

@@ -1,5 +1,7 @@
 """Tests for web_channel RequestBridge."""
 
+import asyncio
+
 import pytest
 
 from sandbox.extensions.web_channel.bridge import STREAM_END, RequestBridge
@@ -22,6 +24,31 @@ class TestRequestBridge:
         assert got1 is True
         got2 = await bridge.acquire()
         assert got2 is False
+        bridge.release()
+
+    @pytest.mark.asyncio
+    async def test_acquire_wait_succeeds_after_release(self) -> None:
+        bridge = RequestBridge(request_timeout_seconds=5.0)
+        ok1 = await bridge.acquire_wait(1.0)
+        assert ok1 is True
+
+        async def delayed_release() -> None:
+            await asyncio.sleep(0.05)
+            bridge.release()
+
+        task = asyncio.create_task(delayed_release())
+        ok2 = await bridge.acquire_wait(1.0)
+        assert ok2 is True
+        bridge.release()
+        await task
+
+    @pytest.mark.asyncio
+    async def test_acquire_wait_times_out_if_held(self) -> None:
+        bridge = RequestBridge(request_timeout_seconds=5.0)
+        ok1 = await bridge.acquire_wait(1.0)
+        assert ok1 is True
+        ok2 = await bridge.acquire_wait(0.05)
+        assert ok2 is False
         bridge.release()
 
     @pytest.mark.asyncio

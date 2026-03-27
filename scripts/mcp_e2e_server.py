@@ -24,6 +24,9 @@ _BASE_URL = os.environ.get("YODOCA_BASE_URL", "http://127.0.0.1:8080").rstrip("/
 _API_KEY = os.environ.get("YODOCA_API_KEY", "").strip()
 _TIMEOUT_SEC = float(os.environ.get("YODOCA_TIMEOUT", "120"))
 
+# Serialize outbound /agent calls so parallel MCP tool invocations do not hit 503 busy.
+_send_message_lock = asyncio.Lock()
+
 mcp = FastMCP(
     "yodoca-e2e",
     instructions=(
@@ -75,81 +78,91 @@ async def _parse_ag_ui_sse(response: httpx.Response) -> tuple[str, str | None]:
     return "".join(parts), run_error
 
 
+def _effective_thread_id(thread_id: str) -> str:
+    """New thread if blank/whitespace; otherwise use caller id (MCP-safe: plain str, no null)."""
+    t = thread_id.strip()
+    return t if t else f"thread_{uuid.uuid4().hex[:16]}"
+
+
 @mcp.tool(
     name="send_message",
     description=(
         "Send a user message to the Yodoca agent via POST /agent (AG-UI). "
-        "Streams SSE until the run finishes; returns the full assistant text plus "
-        "thread_id and run_id for correlation."
+        "Streams SSE until the run finishes; returns JSON with response, thread_id, run_id. "
+        "For multi-turn: pass the same thread_id string returned from the previous call; "
+        "for a new conversation pass an empty string or omit thread_id (use schema default)."
     ),
 )
-async def send_message(text: str, thread_id: str | None = None) -> str:
-    """Send `text` to the agent; optional `thread_id` for conversation continuity."""
-    tid = thread_id.strip() if thread_id else f"thread_{uuid.uuid4().hex[:16]}"
-    rid = f"run_{uuid.uuid4().hex[:16]}"
-    body = {
-        "threadId": tid,
-        "runId": rid,
-        "messages": [{"role": "user", "content": text}],
-    }
-    headers = {
-        **_auth_headers(),
-        "Accept": "text/event-stream",
-        "Content-Type": "application/json",
-        "X-Thread-Id": tid,
-    }
-    url = f"{_BASE_URL}/agent"
+async def send_message(text: str, thread_id: str = "") -> str:
+    """Send user `text`. Use `thread_id` from a prior reply to continue; empty starts a new thread."""
+    async with _send_message_lock:
+        tid = _effective_thread_id(thread_id)
+        rid = f"run_{uuid.uuid4().hex[:16]}"
+        body = {
+            "threadId": tid,
+            "runId": rid,
+            "messages": [{"role": "user", "content": text}],
+        }
+        headers = {
+            **_auth_headers(),
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+            "X-Thread-Id": tid,
+        }
+        url = f"{_BASE_URL}/agent"
 
-    async with httpx.AsyncClient(timeout=_client_timeout()) as client:
-        async with client.stream("POST", url, json=body, headers=headers) as resp:
-            ct = (resp.headers.get("content-type") or "").lower()
-            if resp.status_code != 200:
-                raw = await resp.aread()
-                try:
-                    err_obj = json.loads(raw.decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    err_obj = {"detail": raw.decode("utf-8", errors="replace")[:2000]}
-                return json.dumps(
-                    {
-                        "ok": False,
-                        "status": resp.status_code,
-                        "thread_id": tid,
-                        "run_id": rid,
-                        "error": err_obj,
-                    },
-                    ensure_ascii=False,
-                )
-
-            if "text/event-stream" not in ct and "application/x-ndjson" not in ct:
-                raw = await resp.aread()
-                return json.dumps(
-                    {
-                        "ok": False,
-                        "status": resp.status_code,
-                        "thread_id": tid,
-                        "run_id": rid,
-                        "error": {
-                            "message": "Unexpected content-type",
-                            "content_type": ct,
-                            "body_preview": raw.decode("utf-8", errors="replace")[
-                                :2000
-                            ],
+        async with httpx.AsyncClient(timeout=_client_timeout()) as client:
+            async with client.stream("POST", url, json=body, headers=headers) as resp:
+                ct = (resp.headers.get("content-type") or "").lower()
+                if resp.status_code != 200:
+                    raw = await resp.aread()
+                    try:
+                        err_obj = json.loads(raw.decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        err_obj = {
+                            "detail": raw.decode("utf-8", errors="replace")[:2000]
+                        }
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "status": resp.status_code,
+                            "thread_id": tid,
+                            "run_id": rid,
+                            "error": err_obj,
                         },
-                    },
-                    ensure_ascii=False,
-                )
+                        ensure_ascii=False,
+                    )
 
-            assistant_text, run_error = await _parse_ag_ui_sse(resp)
+                if "text/event-stream" not in ct and "application/x-ndjson" not in ct:
+                    raw = await resp.aread()
+                    return json.dumps(
+                        {
+                            "ok": False,
+                            "status": resp.status_code,
+                            "thread_id": tid,
+                            "run_id": rid,
+                            "error": {
+                                "message": "Unexpected content-type",
+                                "content_type": ct,
+                                "body_preview": raw.decode("utf-8", errors="replace")[
+                                    :2000
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
 
-            out: dict[str, Any] = {
-                "ok": run_error is None,
-                "thread_id": tid,
-                "run_id": rid,
-                "response": assistant_text,
-            }
-            if run_error:
-                out["error"] = run_error
-            return json.dumps(out, ensure_ascii=False)
+                assistant_text, run_error = await _parse_ag_ui_sse(resp)
+
+                out: dict[str, Any] = {
+                    "ok": run_error is None,
+                    "thread_id": tid,
+                    "run_id": rid,
+                    "response": assistant_text,
+                }
+                if run_error:
+                    out["error"] = run_error
+                return json.dumps(out, ensure_ascii=False)
 
 
 @mcp.tool(

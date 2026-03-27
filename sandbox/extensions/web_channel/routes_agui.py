@@ -73,7 +73,8 @@ async def post_agent(request: Request) -> JSONResponse | StreamingResponse:
             ).model_dump(),
         )
 
-    if not await bridge.acquire():
+    timeout = config.get("request_timeout_seconds", 120)
+    if not await bridge.acquire_wait(float(timeout)):
         return JSONResponse(
             status_code=503,
             headers={"Retry-After": "5"},
@@ -88,7 +89,6 @@ async def post_agent(request: Request) -> JSONResponse | StreamingResponse:
 
     thread_id = request.headers.get("X-Thread-Id") or req.thread_id
     user_id = config.get("default_user_id", "web_user")
-    timeout = config.get("request_timeout_seconds", 120)
     accept_header = request.headers.get("accept", "text/event-stream")
     encoder = EventEncoder(accept=accept_header)
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
