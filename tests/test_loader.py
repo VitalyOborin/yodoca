@@ -824,6 +824,32 @@ class TestSetupProviders:
         assert "telegram_channel" in summary
         assert "request_secure_input" in summary
 
+    @pytest.mark.asyncio
+    async def test_wire_context_providers_injects_setup_instructions_into_prompt(
+        self,
+    ) -> None:
+        """The agent prompt should include setup_instructions for unconfigured extensions."""
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [
+            _manifest(
+                "telegram_channel",
+                setup_instructions=(
+                    'Use request_secure_input(secret_id="telegram_bot_token", ...).'
+                ),
+            ),
+        ]
+        loader._setup_providers = {"telegram_channel": False}
+
+        router = MessageRouter()
+        loader.wire_context_providers(router)
+
+        enriched = await router.enrich_prompt("настрой телеграм")
+
+        assert "Extensions needing setup" in enriched
+        assert "telegram_bot_token" in enriched
+
     def test_get_extensions_returns_extensions_dict(self) -> None:
         """get_extensions returns the extensions dict."""
         loader = Loader(

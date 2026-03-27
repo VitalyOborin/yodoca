@@ -1,4 +1,6 @@
-"""Built-in ContextProvider: inject current channel identity and channels."""
+"""Built-in ContextProvider: inject channel and runtime capability context."""
+
+from collections.abc import Callable
 
 from core.extensions.contract import TurnContext
 from core.extensions.routing.router import MessageRouter
@@ -65,3 +67,20 @@ class ActiveChannelContextProvider:
         if not parts:
             return None
         return "\n\n---\n\n".join(parts)
+
+
+class CapabilitiesSummaryContextProvider:
+    """Inject loader-generated setup/tool summary into the system prompt."""
+
+    def __init__(self, get_summary: Callable[[], str]) -> None:
+        self._get_summary = get_summary
+
+    @property
+    def context_priority(self) -> int:
+        return 1
+
+    async def get_context(self, prompt: str, turn_context: TurnContext) -> str | None:
+        summary = self._get_summary().strip()
+        if not summary or summary == "No extensions loaded.":
+            return None
+        return "[Runtime Capabilities]\n" + summary

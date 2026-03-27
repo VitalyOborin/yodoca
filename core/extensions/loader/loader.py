@@ -37,7 +37,10 @@ from core.extensions.loader.lifecycle import ExtensionStateMachine, TaskSupervis
 from core.extensions.loader.manifest_repository import ManifestRepository
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.manifest_utils import iter_active_manifests
-from core.extensions.routing.builtin_context import ActiveChannelContextProvider
+from core.extensions.routing.builtin_context import (
+    ActiveChannelContextProvider,
+    CapabilitiesSummaryContextProvider,
+)
 from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.project_context import ProjectInstructionsContextProvider
 from core.extensions.routing.router import MessageRouter
@@ -330,6 +333,7 @@ class Loader:
         """Collect active ContextProviders plus built-in providers."""
         providers: list[ContextProvider] = [
             ActiveChannelContextProvider(router),
+            CapabilitiesSummaryContextProvider(self.get_capabilities_summary),
         ]
         if router.project_service is not None:
             providers.append(ProjectInstructionsContextProvider(router.project_service))
