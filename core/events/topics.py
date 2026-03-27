@@ -22,3 +22,6 @@ class SystemTopics:
     # MCP tool approval: pause run, ask user, resume on approve/reject
     MCP_TOOL_APPROVAL_REQUEST = "system.mcp.tool_approval_request"
     MCP_TOOL_APPROVAL_RESPONSE = "system.mcp.tool_approval_response"
+
+    # Extension lifecycle/admission failure for diagnostics and observability
+    EXTENSION_ERROR = "system.extension.error"

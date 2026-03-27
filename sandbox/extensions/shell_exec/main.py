@@ -1,7 +1,6 @@
 """Shell Exec extension: ToolProvider for executing shell commands with CWD tracking."""
 
 import asyncio
-import importlib.util
 import logging
 import sys
 from pathlib import Path
@@ -10,21 +9,7 @@ from typing import Any, Protocol, cast
 from agents import function_tool
 from pydantic import BaseModel
 
-try:
-    from .executors import BaseExecutor, LocalUnsafeExecutor
-except ImportError:  # pragma: no cover - fallback for direct module loading
-    _executors_path = Path(__file__).resolve().parent / "executors.py"
-    _spec = importlib.util.spec_from_file_location(
-        "ext_shell_exec_executors", _executors_path
-    )
-    if _spec is None or _spec.loader is None:
-        raise ImportError(
-            f"Cannot load executors module from {_executors_path}"
-        ) from None
-    _mod = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-    BaseExecutor = _mod.BaseExecutor
-    LocalUnsafeExecutor = _mod.LocalUnsafeExecutor
+from .executors import BaseExecutor, LocalUnsafeExecutor
 
 logger = logging.getLogger(__name__)
 

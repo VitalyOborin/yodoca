@@ -20,11 +20,7 @@ from core.extensions.contract import (
     Extension,
     SetupProvider,
 )
-from core.extensions.loader import (
-    ExtensionConfigValidationError,
-    ExtensionState,
-    Loader,
-)
+from core.extensions.loader import ExtensionState, Loader
 from core.extensions.manifest import ExtensionManifest
 from core.extensions.routing.event_wiring import EventWiringManager
 from core.extensions.routing.router import MessageRouter
@@ -510,7 +506,7 @@ class TestInitializeAndLifecycle:
         assert ctx.get_config("missing_key", 10) == 10  # default wins
 
     @pytest.mark.asyncio
-    async def test_initialize_all_raises_when_configmodel_validation_fails(
+    async def test_initialize_all_marks_only_bad_extension_error_when_config_invalid(
         self,
     ) -> None:
         class StrictConfig(BaseModel):
@@ -535,17 +531,47 @@ class TestInitializeAndLifecycle:
             def health_check(self) -> bool:
                 return True
 
+        initialized: list[str] = []
+
+        class HealthyExt:
+            async def initialize(self, context: object) -> None:
+                initialized.append("healthy")
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            async def destroy(self) -> None:
+                pass
+
+            def health_check(self) -> bool:
+                return True
+
         loader = Loader(
             extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
         )
-        loader._manifests = [_manifest("x", config={"bad_key": 99})]
-        loader._extensions = {"x": MockExtWithSchema()}
-        loader._state = {"x": ExtensionState.INACTIVE}
+        loader._manifests = [
+            _manifest("x", config={"bad_key": 99}),
+            _manifest("healthy"),
+        ]
+        loader._extensions = {"x": MockExtWithSchema(), "healthy": HealthyExt()}
+        loader._state = {
+            "x": ExtensionState.INACTIVE,
+            "healthy": ExtensionState.INACTIVE,
+        }
         router = MessageRouter()
-        with pytest.raises(ExtensionConfigValidationError) as exc_info:
-            await loader.initialize_all(router)
-        assert "x" in exc_info.value.message
-        assert "bad_key" in exc_info.value.message
+        await loader.initialize_all(router)
+
+        assert loader._state["x"] == ExtensionState.ERROR
+        assert loader._state["healthy"] == ExtensionState.INACTIVE
+        assert initialized == ["healthy"]
+        latest = loader.get_extension_diagnostic("x")
+        assert isinstance(latest, dict)
+        assert latest["phase"] == "config_validate"
+        assert latest["reason"] == "config_invalid"
+        assert "bad_key" in latest["message"]
 
     @pytest.mark.asyncio
     async def test_start_all_calls_start_and_sets_active(self) -> None:
@@ -653,8 +679,17 @@ class TestDependencyCascadeAndFailFast:
 
         assert "b" not in loader._extensions
         assert loader._state.get("b") == ExtensionState.ERROR
+        b_diag = loader.get_extension_diagnostic("b")
+        assert isinstance(b_diag, dict)
+        assert b_diag["phase"] == "load"
+        assert b_diag["reason"] == "import_error"
         assert "a" not in loader._extensions
         assert loader._state.get("a") == ExtensionState.ERROR
+        a_diag = loader.get_extension_diagnostic("a")
+        assert isinstance(a_diag, dict)
+        assert a_diag["phase"] == "load"
+        assert a_diag["reason"] == "dependency_failed"
+        assert a_diag["dependency_chain"] == ["b"]
 
     @pytest.mark.asyncio
     async def test_initialize_cascades_dep_error(self) -> None:
@@ -692,6 +727,11 @@ class TestDependencyCascadeAndFailFast:
 
         assert "a" not in initialized
         assert loader._state.get("a") == ExtensionState.ERROR
+        latest = loader.get_extension_diagnostic("a")
+        assert isinstance(latest, dict)
+        assert latest["phase"] == "initialize"
+        assert latest["reason"] == "dependency_failed"
+        assert latest["dependency_chain"] == ["b"]
 
     @pytest.mark.asyncio
     async def test_start_cascades_dep_error(self) -> None:
@@ -723,14 +763,20 @@ class TestDependencyCascadeAndFailFast:
         )
         loader._manifests = [_manifest("a", ["b"]), _manifest("b")]
         loader._extensions = {"a": a, "b": b}
-        loader._state = {"a": ExtensionState.INACTIVE, "b": ExtensionState.ERROR}
+        loader._state = {"a": ExtensionState.INACTIVE, "b": ExtensionState.INACTIVE}
         router = MessageRouter()
         await loader.initialize_all(router)
+        loader._state["b"] = ExtensionState.ERROR
         loader.detect_and_wire_all(router)
         await loader.start_all()
 
         assert "a" not in started
         assert loader._state.get("a") == ExtensionState.ERROR
+        latest = loader.get_extension_diagnostic("a")
+        assert isinstance(latest, dict)
+        assert latest["phase"] == "start"
+        assert latest["reason"] == "dependency_failed"
+        assert latest["dependency_chain"] == ["b"]
 
     def test_get_extension_raises_on_missing_dep(self) -> None:
         """get_extension raises RuntimeError when dep is not loaded."""
@@ -861,3 +907,43 @@ class TestSetupProviders:
         assert ext is loader._extensions
         assert ext["a"] is ext_a
         assert ext["b"] is ext_b
+
+    def test_status_report_and_failed_extensions_include_latest_diagnostic(
+        self,
+    ) -> None:
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader._manifests = [_manifest("ok"), _manifest("broken")]
+        loader._state = {
+            "ok": ExtensionState.ACTIVE,
+            "broken": ExtensionState.ERROR,
+        }
+        loader._diagnostics = {
+            "broken": [
+                MagicMock(
+                    as_dict=MagicMock(
+                        return_value={
+                            "extension_id": "broken",
+                            "phase": "start",
+                            "reason": "start_error",
+                            "message": "boom",
+                            "dependency_chain": [],
+                            "traceback": "",
+                            "created_at": "2026-03-27T00:00:00+00:00",
+                            "exception_type": "RuntimeError",
+                        }
+                    )
+                )
+            ]
+        }
+
+        report = loader.get_extension_status_report()
+        assert report["counts"] == {"active": 1, "inactive": 0, "error": 1}
+        broken = next(
+            item for item in report["extensions"] if item["extension_id"] == "broken"
+        )
+        assert broken["status"] == "error/start_error"
+
+        failed = loader.get_failed_extensions()
+        assert failed["broken"]["reason"] == "start_error"

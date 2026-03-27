@@ -141,6 +141,7 @@ Guaranteed topics that always have a kernel-registered handler. Use these when y
 | `system.channel.secure_input_request` | `{secret_id, prompt, target_channel}` | Requests secure user input via channel without exposing secret to LLM |
 | `system.mcp.tool_approval_request` | `{request_id, tool_name, arguments, server_alias, channel_id?}` | Requests user approval for an MCP tool call |
 | `system.mcp.tool_approval_response` | `{request_id, approved, reason?}` | Resumes/denies paused MCP tool invocation |
+| `system.extension.error` | Extension diagnostic payload | Extension admission/runtime failure emitted by Loader for observability |
 
 Use via `ctx.notify_user()`, `ctx.request_agent_task()`, `ctx.request_agent_background()`, or emit directly with `ctx.emit(SystemTopics.USER_NOTIFY, {...})`. The Scheduler extension uses these topics when the agent schedules reminders.
 

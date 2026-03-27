@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import traceback
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from core.extensions.contract import ExtensionState
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _HEALTH_CHECK_INTERVAL = 30.0
+HealthFailureCallback = Callable[[str, str | None, str, str], Awaitable[None]]
 
 
 class HealthCheckManager:
@@ -22,11 +25,13 @@ class HealthCheckManager:
         self,
         extensions: dict[str, "Extension"],
         state: dict[str, ExtensionState],
+        on_failure: HealthFailureCallback | None = None,
     ) -> None:
         self._extensions = extensions
         self._state = state
         self._state_machine = ExtensionStateMachine(state)
         self._tasks = TaskSupervisor()
+        self._on_failure = on_failure
 
     def start(self) -> None:
         """Start the health check loop as an asyncio task."""
@@ -46,8 +51,22 @@ class HealthCheckManager:
                 try:
                     if not ext.health_check():
                         self._state_machine.mark_error(ext_id)
+                        if self._on_failure is not None:
+                            await self._on_failure(
+                                ext_id,
+                                None,
+                                "health_check returned False",
+                                "",
+                            )
                         await ext.stop()
                 except Exception as e:
                     logger.exception("health_check failed for %s: %s", ext_id, e)
                     self._state_machine.mark_error(ext_id)
+                    if self._on_failure is not None:
+                        await self._on_failure(
+                            ext_id,
+                            type(e).__name__,
+                            str(e),
+                            "".join(traceback.format_exception(e)),
+                        )
                     await ext.stop()

@@ -384,7 +384,7 @@ Extensions receive `ExtensionContext` in `initialize()`. All interaction with th
 | `list_threads()` / `get_thread()` / `create_thread()` / `update_thread()` / `archive_thread()` / `get_thread_history()` | Persistent thread metadata and history access |
 | `list_projects()` / `get_project()` / `create_project()` / `update_project()` / `delete_project()` | Persistent project management |
 
-**Extension class `ConfigModel` (optional):** On the extension entrypoint class, set `ConfigModel` to a Pydantic `BaseModel` matching the merged manifest + `settings.extensions.<id>` keys (e.g. `model_config = ConfigDict(extra="forbid")` for strict validation). The Loader validates before `initialize()`; failures abort startup with diagnostics. See [ADR 035](adr/035-pydantic-settings-models.md).
+**Extension class `ConfigModel` (optional):** On the extension entrypoint class, set `ConfigModel` to a Pydantic `BaseModel` matching the merged manifest + `settings.extensions.<id>` keys (e.g. `model_config = ConfigDict(extra="forbid")` for strict validation). The Loader validates before `initialize()`. Validation failures mark only that extension as `ERROR`; other extensions continue bootstrapping. The failure is recorded in the Loader diagnostics registry and exposed via the `extensions_doctor` tool. See [ADR 035](adr/035-pydantic-settings-models.md).
 
 ### Event Bus
 
@@ -523,6 +523,7 @@ Import rules:
 
 - Use package imports (for example `from sandbox.extensions.my_extension.tools import ...`).
 - Do not mutate `sys.path` in extension runtime code.
+- Do not use `spec_from_file_location()` or other file-based import fallbacks in extension runtime code.
 
 ### 2. Minimal manifest.yaml
 
@@ -644,7 +645,26 @@ async def _on_alert(self, event) -> None:
 
 ## Health Check
 
-Loader runs `health_check()` every 30 seconds. If it returns `False`, the extension is marked `ERROR` and `stop()` is called. Implement `health_check()` for extensions with background tasks or external connections.
+Loader runs `health_check()` every 30 seconds. If it returns `False` or raises, the extension is marked `ERROR` and `stop()` is called. The failure is also recorded in the Loader diagnostics registry and emitted on the Event Bus as `system.extension.error`. Implement `health_check()` for extensions with background tasks or external connections.
+
+---
+
+## Diagnostics
+
+Loader keeps a bounded in-memory diagnostic history for each extension. Diagnostics capture:
+
+- phase: `load`, `config_validate`, `initialize`, `start`, or `health_check`
+- reason: `import_error`, `config_invalid`, `init_error`, `start_error`, `dependency_failed`, or `health_check_failed`
+- message, traceback, and dependency chain where relevant
+
+Dependency cascades still transition dependents to `ExtensionState.ERROR`, but the diagnostic `reason` distinguishes a direct failure from a skipped dependency.
+
+Two diagnostic surfaces are available:
+
+- Loader report APIs such as `get_extension_status_report()` and `get_failed_extensions()`
+- the `extensions_doctor` core tool for the Orchestrator and other agents using `core_tools`
+
+Failed extensions do not appear in the normal capabilities summary by default; the agent must explicitly inspect diagnostics when needed.
 
 ---
 

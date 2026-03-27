@@ -1,5 +1,6 @@
 """ToolResolver: resolve tool IDs to concrete tool objects."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +16,12 @@ class ToolResolver:
         extensions: dict[str, Any],
         model_router: ModelRouterProtocol | None,
         restart_file_path: Path,
+        extension_report_getter: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._extensions = extensions
         self._model_router = model_router
         self._restart_file_path = restart_file_path
+        self._extension_report_getter = extension_report_getter
 
     def resolve_tools(
         self, tool_ids: list[str], agent_id: str | None = None
@@ -34,6 +37,7 @@ class ToolResolver:
                         model_router=self._model_router,
                         agent_id=agent_id,
                         restart_file_path=self._restart_file_path,
+                        extension_report_getter=self._extension_report_getter,
                     ).get_tools()
                 )
                 continue

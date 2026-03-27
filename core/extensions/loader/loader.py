@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 
 from core.events import EventBus
 from core.events.models import Event
+from core.events.topics import SystemTopics
 
 if TYPE_CHECKING:
     from core.agents.registry import AgentRegistry
@@ -31,6 +33,11 @@ from core.extensions.loader.context_builder import (
     merge_extension_config,
 )
 from core.extensions.loader.dependency_resolver import DependencyResolver
+from core.extensions.loader.diagnostics import (
+    DiagnosticPhase,
+    DiagnosticReason,
+    ExtensionDiagnostic,
+)
 from core.extensions.loader.extension_factory import ExtensionFactory
 from core.extensions.loader.health_check import HealthCheckManager
 from core.extensions.loader.lifecycle import ExtensionStateMachine, TaskSupervisor
@@ -51,14 +58,7 @@ from core.settings import format_validation_errors
 from core.settings_models import AppSettings
 
 logger = logging.getLogger(__name__)
-
-
-class ExtensionConfigValidationError(Exception):
-    """Raised when one or more extensions fail merged config validation (ConfigModel)."""
-
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
+_MAX_DIAGNOSTICS_PER_EXTENSION = 10
 
 
 class Loader:
@@ -81,12 +81,17 @@ class Loader:
         self._manifests: list[ExtensionManifest] = []
         self._extensions: dict[str, Extension] = {}
         self._state: dict[str, ExtensionState] = {}
+        self._diagnostics: dict[str, list[ExtensionDiagnostic]] = {}
         self._tool_providers: list[ToolProvider] = []
         self._agent_registry: AgentRegistry | None = None
         self._service_tasks: dict[str, asyncio.Task[Any]] = {}
         self._service_task_names: dict[str, str] = {}
         self._task_supervisor = TaskSupervisor()
-        self._health_manager = HealthCheckManager(self._extensions, self._state)
+        self._health_manager = HealthCheckManager(
+            self._extensions,
+            self._state,
+            on_failure=self._record_health_failure,
+        )
         self._scheduler_manager: SchedulerManager | None = None
         self._shutdown_event: asyncio.Event | None = None
         self._event_bus: EventBus | None = None
@@ -123,11 +128,74 @@ class Loader:
         """Topological sort by depends_on. Raises on cycle or missing dep."""
         return self._dependency_resolver.resolve(self._manifests)
 
+    def _append_diagnostic(self, diagnostic: ExtensionDiagnostic) -> None:
+        """Store bounded in-memory diagnostic history for one extension."""
+        history = self._diagnostics.setdefault(diagnostic.extension_id, [])
+        history.append(diagnostic)
+        if len(history) > _MAX_DIAGNOSTICS_PER_EXTENSION:
+            del history[:-_MAX_DIAGNOSTICS_PER_EXTENSION]
+
+    async def _publish_diagnostic(self, diagnostic: ExtensionDiagnostic) -> None:
+        """Emit diagnostic event for downstream observers when EventBus is ready."""
+        if self._event_bus is None:
+            return
+        await self._event_bus.publish(
+            SystemTopics.EXTENSION_ERROR,
+            "loader",
+            diagnostic.as_dict(),
+        )
+
+    async def _record_diagnostic(
+        self,
+        ext_id: str,
+        *,
+        phase: DiagnosticPhase,
+        reason: DiagnosticReason,
+        message: str,
+        exception: BaseException | None = None,
+        traceback_text: str = "",
+        dependency_chain: list[str] | None = None,
+    ) -> None:
+        """Persist and publish one diagnostic record."""
+        diagnostic = ExtensionDiagnostic(
+            extension_id=ext_id,
+            phase=phase,
+            reason=reason,
+            message=message,
+            exception_type=type(exception).__name__ if exception else None,
+            traceback=traceback_text
+            or (
+                "".join(traceback.format_exception(exception))
+                if exception is not None
+                else ""
+            ),
+            dependency_chain=list(dependency_chain or []),
+        )
+        self._append_diagnostic(diagnostic)
+        await self._publish_diagnostic(diagnostic)
+
+    async def _record_health_failure(
+        self,
+        ext_id: str,
+        _exception_type: str | None,
+        message: str,
+        traceback_text: str,
+    ) -> None:
+        """Record health check failure from the periodic health manager."""
+        await self._record_diagnostic(
+            ext_id,
+            phase="health_check",
+            reason="health_check_failed",
+            message=message,
+            traceback_text=traceback_text,
+        )
+
     async def load_all(self) -> None:
         """Load extensions in dependency order; cascade failure to dependents."""
         order = self._resolve_dependency_order()
         self._extensions.clear()
         self._state.clear()
+        self._diagnostics.clear()
         failed_ids: set[str] = set()
         for manifest in order:
             failed_deps = [d for d in manifest.depends_on if d in failed_ids]
@@ -138,6 +206,13 @@ class Loader:
                     failed_deps,
                 )
                 self._lifecycle().mark_error(manifest.id)
+                await self._record_diagnostic(
+                    manifest.id,
+                    phase="load",
+                    reason="dependency_failed",
+                    message=f"Skipped load: depends on failed {failed_deps}",
+                    dependency_chain=failed_deps,
+                )
                 failed_ids.add(manifest.id)
                 continue
             try:
@@ -147,6 +222,13 @@ class Loader:
             except Exception as e:
                 logger.exception("Failed to load extension %s: %s", manifest.id, e)
                 self._lifecycle().mark_error(manifest.id)
+                await self._record_diagnostic(
+                    manifest.id,
+                    phase="load",
+                    reason="import_error",
+                    message=str(e),
+                    exception=e,
+                )
                 failed_ids.add(manifest.id)
 
     def _load_one(self, manifest: ExtensionManifest) -> Extension:
@@ -211,27 +293,35 @@ class Loader:
             extensions=self._extensions,
             model_router=self._model_router,
             restart_file_path=self._get_restart_file_path(),
+            extension_report_getter=self.get_extension_status_report,
         ).resolve_tools(tool_ids, agent_id)
 
-    def _collect_extension_config_errors(self) -> list[str]:
-        """Validate merged config for extensions that declare ConfigModel."""
-        errors: list[str] = []
-        for ext_id, ext in self._extensions.items():
-            if self._state.get(ext_id) != ExtensionState.INACTIVE:
-                continue
-            manifest = self._get_manifest(ext_id)
-            if not manifest:
-                continue
-            model_cls = getattr(type(ext), "ConfigModel", None)
-            if model_cls is None:
-                continue
-            merged = merge_extension_config(self._settings, ext_id, manifest)
-            try:
-                model_cls.model_validate(merged)
-            except ValidationError as e:
-                details = format_validation_errors(e, prefix=f"extensions.{ext_id}.")
-                errors.append(f"Extension {ext_id!r} config invalid:\n{details}")
-        return errors
+    async def _validate_extension_config(
+        self,
+        ext_id: str,
+        ext: Extension,
+        manifest: ExtensionManifest,
+    ) -> bool:
+        """Validate merged config for one extension, recording per-extension failures."""
+        model_cls = getattr(type(ext), "ConfigModel", None)
+        if model_cls is None:
+            return True
+        merged = merge_extension_config(self._settings, ext_id, manifest)
+        try:
+            model_cls.model_validate(merged)
+        except ValidationError as e:
+            details = format_validation_errors(e, prefix=f"extensions.{ext_id}.")
+            logger.error("Config validation failed for %s:\n%s", ext_id, details)
+            self._lifecycle().mark_error(ext_id)
+            await self._record_diagnostic(
+                ext_id,
+                phase="config_validate",
+                reason="config_invalid",
+                message=details,
+                exception=e,
+            )
+            return False
+        return True
 
     def _register_agent_config_from_manifests(self) -> None:
         """Register agent configs from manifests with model_router."""
@@ -280,11 +370,13 @@ class Loader:
         """Create context per extension, call initialize(ctx). Cascade dep failure."""
         self._router = router
         self._register_agent_config_from_manifests()
-        ext_cfg_errors = self._collect_extension_config_errors()
-        if ext_cfg_errors:
-            raise ExtensionConfigValidationError("\n\n".join(ext_cfg_errors))
         for ext_id, ext in list(self._extensions.items()):
             if self._state.get(ext_id) != ExtensionState.INACTIVE:
+                continue
+            manifest = self._get_manifest(ext_id)
+            if not manifest:
+                continue
+            if not await self._validate_extension_config(ext_id, ext, manifest):
                 continue
             failed_deps = self._check_deps_healthy(ext_id)
             if failed_deps:
@@ -294,9 +386,13 @@ class Loader:
                     failed_deps,
                 )
                 self._lifecycle().mark_error(ext_id)
-                continue
-            manifest = self._get_manifest(ext_id)
-            if not manifest:
+                await self._record_diagnostic(
+                    ext_id,
+                    phase="initialize",
+                    reason="dependency_failed",
+                    message=f"Skipped initialize: depends on failed {failed_deps}",
+                    dependency_chain=failed_deps,
+                )
                 continue
             ctx = self._build_extension_context(ext_id, manifest, router)
             try:
@@ -304,6 +400,13 @@ class Loader:
             except Exception as e:
                 logger.exception("initialize failed for %s: %s", ext_id, e)
                 self._lifecycle().mark_error(ext_id)
+                await self._record_diagnostic(
+                    ext_id,
+                    phase="initialize",
+                    reason="init_error",
+                    message=str(e),
+                    exception=e,
+                )
 
     def _make_event_wiring_manager(self) -> EventWiringManager:
         """Construct an EventWiringManager from current Loader state."""
@@ -451,6 +554,13 @@ class Loader:
                     failed_deps,
                 )
                 self._lifecycle().mark_error(ext_id)
+                await self._record_diagnostic(
+                    ext_id,
+                    phase="start",
+                    reason="dependency_failed",
+                    message=f"Skipped start: depends on failed {failed_deps}",
+                    dependency_chain=failed_deps,
+                )
                 continue
             try:
                 await ext.start()
@@ -471,6 +581,13 @@ class Loader:
                             exc,
                         )
                         self._lifecycle().mark_error(_ext_id)
+                        await self._record_diagnostic(
+                            _ext_id,
+                            phase="start",
+                            reason="start_error",
+                            message=str(exc),
+                            exception=exc,
+                        )
                         try:
                             await _ext.stop()
                         except Exception as stop_error:
@@ -490,6 +607,13 @@ class Loader:
             except Exception as e:
                 logger.exception("start failed for %s: %s", ext_id, e)
                 self._lifecycle().mark_error(ext_id)
+                await self._record_diagnostic(
+                    ext_id,
+                    phase="start",
+                    reason="start_error",
+                    message=str(e),
+                    exception=e,
+                )
         if self._scheduler_manager:
             self._scheduler_manager.start()
         self._health_manager.start()
@@ -513,6 +637,54 @@ class Loader:
     def get_extensions(self) -> dict[str, Any]:
         """Return extensions dict for tools that need to resolve SetupProvider."""
         return self._extensions
+
+    def get_extension_diagnostic(
+        self, ext_id: str, latest_only: bool = True
+    ) -> dict[str, Any] | list[dict[str, Any]] | None:
+        """Return latest or full diagnostic history for one extension."""
+        history = self._diagnostics.get(ext_id, [])
+        if not history:
+            return None
+        if latest_only:
+            return history[-1].as_dict()
+        return [entry.as_dict() for entry in history]
+
+    def get_failed_extensions(self) -> dict[str, dict[str, Any]]:
+        """Return latest diagnostic for extensions currently in ERROR state."""
+        failed: dict[str, dict[str, Any]] = {}
+        for ext_id, state in self._state.items():
+            if state != ExtensionState.ERROR:
+                continue
+            latest = self.get_extension_diagnostic(ext_id)
+            if isinstance(latest, dict):
+                failed[ext_id] = latest
+        return failed
+
+    def get_extension_status_report(self) -> dict[str, Any]:
+        """Return machine-readable status and diagnostics for all discovered extensions."""
+        counts = {"active": 0, "inactive": 0, "error": 0}
+        extensions: list[dict[str, Any]] = []
+        for manifest in self._manifests:
+            state = self._state.get(manifest.id, ExtensionState.INACTIVE)
+            counts[state.value] = counts.get(state.value, 0) + 1
+            latest = self.get_extension_diagnostic(manifest.id)
+            reason = latest.get("reason") if isinstance(latest, dict) else None
+            extensions.append(
+                {
+                    "extension_id": manifest.id,
+                    "name": manifest.name,
+                    "state": state.value,
+                    "status": (
+                        f"error/{reason}"
+                        if state == ExtensionState.ERROR and reason
+                        else state.value
+                    ),
+                    "entrypoint": manifest.entrypoint,
+                    "depends_on": list(manifest.depends_on),
+                    "latest_diagnostic": latest,
+                }
+            )
+        return {"counts": counts, "extensions": extensions}
 
     def get_available_tool_ids(self) -> list[str]:
         """Return tool IDs usable in agent uses_tools or create_agent.

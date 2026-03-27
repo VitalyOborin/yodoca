@@ -1,7 +1,7 @@
 """Entry point for the AI agent process: bootstrap Loader, Router, Agent; extensions run the UI."""
 
 import asyncio
-import sys
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,6 @@ from core.agents.registry import AgentRegistry
 from core.events import EventBus
 from core.extensions import Loader, MessageRouter
 from core.extensions.contract import AgentProvider
-from core.extensions.loader import ExtensionConfigValidationError
 from core.llm import ModelRouter
 from core.llm.catalog import ModelCatalog
 from core.logging_config import setup_logging
@@ -24,9 +23,11 @@ from core.settings_models import AppSettings
 from core.terminal import reset_terminal_for_input
 from core.tools.channel import make_channel_tools
 from core.tools.configure_extension import make_configure_extension_tool
+from core.tools.extensions_doctor import make_extensions_doctor_tool
 from core.tools.secure_input import make_secure_input_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+logger = logging.getLogger(__name__)
 
 
 def _build_event_bus(settings: AppSettings) -> EventBus:
@@ -60,11 +61,7 @@ async def _wire_extensions(
 ) -> None:
     await loader.discover()
     await loader.load_all()
-    try:
-        await loader.initialize_all(router)
-    except ExtensionConfigValidationError as e:
-        print(e.message, file=sys.stderr)
-        sys.exit(1)
+    await loader.initialize_all(router)
     await loader._update_setup_providers_state()
     loader.detect_and_wire_all(router)
     loader.wire_event_subscriptions(event_bus)
@@ -110,6 +107,7 @@ def _resolve_default_agent(
             loader.get_extensions(),
             secret_resolver=secrets.get_secret_async,
         ),
+        make_extensions_doctor_tool(loader.get_extension_status_report),
     ]
     delegation_tools = make_delegation_tools(
         registry=registry,
@@ -176,6 +174,20 @@ async def main_async() -> None:
     _configure_agent_mcp_and_context(loader, router, agent)
     await event_bus.start()
     await loader.start_all()
+    report = loader.get_extension_status_report()
+    counts = report.get("counts", {})
+    errors = [
+        f"{item['extension_id']}={item['latest_diagnostic']['reason']}"
+        for item in report.get("extensions", [])
+        if item.get("state") == "error" and item.get("latest_diagnostic")
+    ]
+    logger.info(
+        "Extensions: %s active, %s inactive, %s error%s",
+        counts.get("active", 0),
+        counts.get("inactive", 0),
+        counts.get("error", 0),
+        f" ({', '.join(errors[:5])})" if errors else "",
+    )
     lifecycle_task = start_lifecycle_loop(registry, interval_seconds=60.0)
     try:
         await shutdown_event.wait()

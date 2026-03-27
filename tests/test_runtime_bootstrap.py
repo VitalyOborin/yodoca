@@ -88,6 +88,10 @@ def test_resolve_default_agent_merges_tools(
         lambda _ext, **_kw: "configure-extension-tool",
     )
     monkeypatch.setattr(
+        "core.runner.make_extensions_doctor_tool",
+        lambda _getter: "extensions-doctor-tool",
+    )
+    monkeypatch.setattr(
         "core.runner.make_delegation_tools",
         lambda *_a, **_k: delegation_tools,
     )
@@ -107,6 +111,7 @@ def test_resolve_default_agent_merges_tools(
         "channel-tool",
         "secure-tool",
         "configure-extension-tool",
+        "extensions-doctor-tool",
     ]
     agent_factory_cls.assert_called_once()
     assert inner.model_settings is sentinel_model_settings
