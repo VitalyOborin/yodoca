@@ -4,7 +4,9 @@ import asyncio
 from pathlib import Path
 from typing import cast
 
+import questionary
 from dotenv import dotenv_values
+from questionary import Choice
 
 from core.config_check import get_current_env
 from onboarding.provider_probe import probe_all
@@ -46,21 +48,16 @@ def run_verify_step(
 
 
 def _ask_retry_or_skip() -> bool:
-    """Ask user: retry (True) or skip and write anyway (False)."""
-    try:
-        from questionary import Choice, select
-
-        choice = cast(
-            str | None,
-            select(
-                "What would you like to do?",
-                choices=[
-                    Choice("Retry (re-enter credentials)", "retry"),
-                    Choice("Skip verification and write config anyway", "skip"),
-                ],
-                style=STYLE,
-            ).ask(),
-        )
-        return choice == "retry"
-    except Exception:
-        return False
+    """True if the user chose to retry from the provider step."""
+    choice = cast(
+        str | None,
+        questionary.select(
+            "What would you like to do?",
+            choices=[
+                Choice("Retry (re-enter credentials)", "retry"),
+                Choice("Skip verification and write config anyway", "skip"),
+            ],
+            style=STYLE,
+        ).ask(),
+    )
+    return choice == "retry"

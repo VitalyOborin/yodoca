@@ -460,7 +460,6 @@ class Loader:
             return
 
         async def _middleware(prompt: str, turn_context: TurnContext) -> str:
-            """Return context to inject into the system role."""
             parts: list[str] = []
             for provider in providers:
                 ctx = await provider.get_context(prompt, turn_context)

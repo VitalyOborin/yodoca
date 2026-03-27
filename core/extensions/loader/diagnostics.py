@@ -23,8 +23,6 @@ DiagnosticReason = Literal[
 
 @dataclass(frozen=True)
 class ExtensionDiagnostic:
-    """One structured diagnostic record for an extension."""
-
     extension_id: str
     phase: DiagnosticPhase
     reason: DiagnosticReason
@@ -35,5 +33,4 @@ class ExtensionDiagnostic:
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def as_dict(self) -> dict[str, Any]:
-        """Return JSON-serializable payload."""
         return asdict(self)

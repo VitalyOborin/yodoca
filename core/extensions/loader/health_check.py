@@ -34,15 +34,12 @@ class HealthCheckManager:
         self._on_failure = on_failure
 
     def start(self) -> None:
-        """Start the health check loop as an asyncio task."""
         self._tasks.start("health-check", self._loop)
 
     async def stop(self) -> None:
-        """Cancel and await the health check task."""
         await self._tasks.stop("health-check")
 
     async def _loop(self) -> None:
-        """Every 30s call health_check(); on False set ERROR and stop()."""
         while True:
             await asyncio.sleep(_HEALTH_CHECK_INTERVAL)
             for ext_id, ext in list(self._extensions.items()):

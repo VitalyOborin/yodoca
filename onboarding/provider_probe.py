@@ -93,7 +93,7 @@ async def probe_all(
     }
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     out: dict[str, tuple[bool, str]] = {}
-    for pid, res in zip(tasks, results, strict=False):
+    for pid, res in zip(tasks, results, strict=True):
         if isinstance(res, Exception):
             out[pid] = (False, str(res))
         else:

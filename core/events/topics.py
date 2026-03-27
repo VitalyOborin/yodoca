@@ -23,5 +23,5 @@ class SystemTopics:
     MCP_TOOL_APPROVAL_REQUEST = "system.mcp.tool_approval_request"
     MCP_TOOL_APPROVAL_RESPONSE = "system.mcp.tool_approval_response"
 
-    # Extension lifecycle/admission failure for diagnostics and observability
+    # Extension failure from Loader (load, config, init, start, health)
     EXTENSION_ERROR = "system.extension.error"

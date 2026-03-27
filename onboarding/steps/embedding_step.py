@@ -43,7 +43,6 @@ def run_embedding_step(state: WizardState) -> bool:
     embedding_capable = [p for p in state.providers if p in _EMBEDDING_MODELS]
 
     if not embedding_capable:
-        # Default provider (e.g. Anthropic) may not support embeddings; offer to add one
         print(
             "The default provider does not support embeddings. "
             "Add a provider for embeddings (OpenAI, OpenRouter, or local).\n"
@@ -94,7 +93,6 @@ def _choose_or_add_embedding_provider(
     """Let user pick an existing embedding-capable provider or add a new one. Returns provider_id or None."""
     choices: list[Choice] = [Choice(_label(p), p) for p in embedding_capable]
     remaining = get_provider_choices()
-    # Only show "Add new provider" for types that support embeddings
     remaining_embedding = [
         (lbl, pid) for lbl, pid in remaining if pid in _EMBEDDING_MODELS
     ]

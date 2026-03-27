@@ -15,15 +15,15 @@ class WizardResult:
     """Result of running the wizard."""
 
     success: bool
-    retry: bool  # True if verification failed and user chose retry
+    retry: bool
 
 
 def run_wizard(project_root: Path | None = None) -> WizardResult:
     """Run the full onboarding wizard.
 
-    Returns WizardResult(success=True) when config was written.
-    Returns WizardResult(success=False, retry=True) when user chose to retry after failed verification.
-    Returns WizardResult(success=False, retry=False) when user cancelled.
+    Returns success=True after config is written. Returns success=False when
+    the user cancels a step. Failed verification is handled inside the loop
+    (retry from provider or skip and write).
     """
     root = project_root or Path.cwd()
     settings_path = root / "config" / "settings.yaml"
