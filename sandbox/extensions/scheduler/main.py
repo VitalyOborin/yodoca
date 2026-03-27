@@ -18,9 +18,16 @@ logger = logging.getLogger(__name__)
 TOPIC_FIELD = Field(
     ...,
     description=(
-        "Event topic. Use 'system.user.notify' to send a message to the user, "
-        "'system.agent.task' to delegate reasoning to an agent at fire time, "
-        "'system.agent.background' for maintenance tasks without user response."
+        "Event topic.\n"
+        "• 'system.user.notify' — sends `message` text verbatim to the user "
+        "with NO further processing. The message must be fully composed at "
+        "schedule time. Use ONLY when you already have the final text.\n"
+        "• 'system.agent.task' — runs an agent at fire time with `message` as "
+        "the prompt. The agent can call tools, fetch data, and send the result "
+        "to the user. Use when content must be gathered or computed at fire "
+        "time (e.g. weather, news, prices, any dynamic data).\n"
+        "• 'system.agent.background' — like agent.task but without sending "
+        "the result to the user."
     ),
 )
 PAYLOAD_EXTRA_FIELD = Field(
@@ -555,8 +562,11 @@ class SchedulerExtension:
             message: str = Field(
                 ...,
                 description=(
-                    "Text message (for system.user.notify) or prompt instruction "
-                    "(for system.agent.task / system.agent.background)."
+                    "For system.user.notify: the exact final text that will be "
+                    "delivered to the user as-is (no templates, no processing). "
+                    "For system.agent.task / system.agent.background: a prompt "
+                    "instruction for the agent that will run at fire time "
+                    "(e.g. 'Look up tomorrow weather in Moscow and send it')."
                 ),
             ),
             channel_id: str | None = None,
@@ -623,8 +633,11 @@ class SchedulerExtension:
             message: str = Field(
                 ...,
                 description=(
-                    "Text message (for system.user.notify) or prompt instruction "
-                    "(for system.agent.task / system.agent.background)."
+                    "For system.user.notify: the exact final text that will be "
+                    "delivered to the user as-is (no templates, no processing). "
+                    "For system.agent.task / system.agent.background: a prompt "
+                    "instruction for the agent that will run at fire time "
+                    "(e.g. 'Look up tomorrow weather in Moscow and send it')."
                 ),
             ),
             channel_id: str | None = None,
