@@ -1,5 +1,6 @@
 """Tests for CLI channel secure input interceptor."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,6 +40,7 @@ class TestSecureInputRequestHandler:
         )
         await ext._on_secure_input_request(event)
         assert not ext._intercept_queue.empty()
+        assert ext._intercept_pending.is_set()
         req = ext._intercept_queue.get_nowait()
         assert req["secret_id"] == "telegram_token"
         assert req["prompt"] == "Enter token"
@@ -136,3 +138,36 @@ class TestResponseComplete:
             to_thread.return_value = "secret-val"
             await ext._handle_secure_input(req)
         assert not ext._response_complete.is_set()
+
+
+class TestInterceptGraceWindow:
+    """Input loop waits briefly so intercepts can preempt plain input()."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_pending_intercept_returns_true_when_event_arrives(
+        self,
+    ) -> None:
+        ext, _ = _make_ext()
+
+        async def publish_intercept() -> None:
+            await asyncio.sleep(0)
+            ext._intercept_queue.put_nowait({"_type": "secure_input"})
+            ext._intercept_pending.set()
+
+        task = asyncio.create_task(publish_intercept())
+        assert await ext._wait_for_pending_intercept() is True
+        await task
+
+    @pytest.mark.asyncio
+    async def test_process_one_intercept_clears_pending_flag_when_queue_empty(
+        self,
+    ) -> None:
+        ext, _ = _make_ext()
+        ext._intercept_queue.put_nowait(
+            {"_type": "secure_input", "secret_id": "x", "prompt": "p"}
+        )
+        ext._intercept_pending.set()
+
+        ext._handle_secure_input = AsyncMock()
+        assert await ext._process_one_intercept() is True
+        assert not ext._intercept_pending.is_set()

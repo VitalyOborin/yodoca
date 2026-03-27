@@ -56,11 +56,10 @@ def make_secure_input_tool(event_bus: "EventBus") -> Any:
         prompt_message: str,
         channel_id: str = "cli_channel",
     ) -> SecureInputResult:
-        """Request secure input from user. The secret is saved directly to encrypted storage.
+        """Request secure input from user (wait for input from user). The secret is saved directly to encrypted storage.
 
         secret_id is auto-sanitized: dots, dashes, @ etc. are replaced with underscores.
         channel_id: where the user is chatting (e.g. 'cli_channel'). Default: 'cli_channel'.
-        **IMPORTANT**: Must be called sequentially; parallel calls alongside other functions are prohibited!
         """
         secret_id = _sanitize_secret_id(secret_id)
         err = _validate_secret_id(secret_id)

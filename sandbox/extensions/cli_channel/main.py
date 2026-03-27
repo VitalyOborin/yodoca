@@ -17,6 +17,7 @@ class CliChannelExtension:
     """Extension + ChannelProvider: REPL loop; user input is emitted as user.message events."""
 
     _RESPONSE_TIMEOUT_SEC = 120
+    _INTERCEPT_GRACE_SEC = 0.25
 
     def __init__(self) -> None:
         self.context: ExtensionContext | None = None
@@ -24,6 +25,7 @@ class CliChannelExtension:
         self._streaming_enabled = True
         self._stream_buffer = ""
         self._intercept_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._intercept_pending = asyncio.Event()
         self._response_complete = asyncio.Event()
         self._response_complete.set()
 
@@ -45,6 +47,7 @@ class CliChannelExtension:
         target = payload.get("target_channel", "")
         if target == self.context.extension_id:
             self._intercept_queue.put_nowait({**payload, "_type": "secure_input"})
+            self._intercept_pending.set()
 
     async def _on_mcp_approval_request(self, event: Any) -> None:
         """Enqueue MCP tool approval requests targeting this channel."""
@@ -52,6 +55,7 @@ class CliChannelExtension:
         target = payload.get("channel_id", "")
         if target is None or target == self.context.extension_id:
             self._intercept_queue.put_nowait({**payload, "_type": "mcp_approval"})
+            self._intercept_pending.set()
 
     async def on_stream_start(self, _user_id: str) -> None:
         self._stream_buffer = ""
@@ -114,11 +118,27 @@ class CliChannelExtension:
         try:
             req = self._intercept_queue.get_nowait()
         except asyncio.QueueEmpty:
+            self._intercept_pending.clear()
             return False
         if req.get("_type") == "mcp_approval":
             await self._handle_mcp_approval(req)
         else:
             await self._handle_secure_input(req)
+        if self._intercept_queue.empty():
+            self._intercept_pending.clear()
+        return True
+
+    async def _wait_for_pending_intercept(self) -> bool:
+        """Give freshly-published intercept events a brief chance to preempt plain input()."""
+        if not self._intercept_queue.empty():
+            return True
+        try:
+            await asyncio.wait_for(
+                self._intercept_pending.wait(),
+                timeout=self._INTERCEPT_GRACE_SEC,
+            )
+        except TimeoutError:
+            return not self._intercept_queue.empty()
         return True
 
     async def _input_loop(self) -> None:
@@ -128,6 +148,8 @@ class CliChannelExtension:
                 continue
             if not self._response_complete.is_set():
                 await asyncio.sleep(0.05)
+                continue
+            if await self._wait_for_pending_intercept():
                 continue
             try:
                 line = await asyncio.to_thread(input, "> ")
