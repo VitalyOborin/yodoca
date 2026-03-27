@@ -708,7 +708,7 @@ async def test_wire_extensions_calls_loader_pipeline() -> None:
     loader.discover = AsyncMock()
     loader.load_all = AsyncMock()
     loader.initialize_all = AsyncMock()
-    loader._update_setup_providers_state = AsyncMock()
+    loader.update_setup_providers_state = AsyncMock()
     loader.detect_and_wire_all = MagicMock()
     loader.wire_event_subscriptions = MagicMock()
     router = MagicMock()
@@ -719,7 +719,7 @@ async def test_wire_extensions_calls_loader_pipeline() -> None:
     loader.discover.assert_awaited_once()
     loader.load_all.assert_awaited_once()
     loader.initialize_all.assert_awaited_once_with(router)
-    loader._update_setup_providers_state.assert_awaited_once()
+    loader.update_setup_providers_state.assert_awaited_once()
     loader.detect_and_wire_all.assert_called_once_with(router)
     loader.wire_event_subscriptions.assert_called_once_with(event_bus)
 

@@ -62,7 +62,7 @@ async def _wire_extensions(
     await loader.discover()
     await loader.load_all()
     await loader.initialize_all(router)
-    await loader._update_setup_providers_state()
+    await loader.update_setup_providers_state()
     loader.detect_and_wire_all(router)
     loader.wire_event_subscriptions(event_bus)
 

@@ -50,18 +50,19 @@ The Event Bus provides:
 ### `event_journal`
 
 
-| Column         | Type | Description                                       |
-| -------------- | ---- | ------------------------------------------------- |
-| id             | int  | Primary key (AUTOINCREMENT)                       |
-| correlation_id | text | Optional correlation for tracing                  |
-| topic          | text | Event topic (e.g. `reminder.due`, `user.message`) |
-| source         | text | Extension ID that published                       |
-| payload        | text | JSON-serialized payload                           |
-| status         | text | `pending` → `processing` → `done` \| `failed` \| `dead_letter` |
-| retry_count    | int  | Number of retries (incremented on retry and stale recovery)    |
-| created_at     | real | Unix timestamp                                    |
-| processed_at   | real | Set when done/failed/dead_letter                  |
-| error          | text | Error message if failed                           |
+| Column           | Type | Description                                       |
+| ---------------- | ---- | ------------------------------------------------- |
+| id               | int  | Primary key (AUTOINCREMENT)                       |
+| correlation_id   | text | Optional correlation for tracing                  |
+| topic            | text | Event topic (e.g. `reminder.due`, `user.message`) |
+| source           | text | Extension ID that published                       |
+| payload          | text | JSON-serialized payload                           |
+| status           | text | `pending` → `processing` → `done` \| `dead_letter` |
+| retry_count      | int  | Number of retries (incremented on retry and stale recovery)    |
+| created_at       | real | Unix timestamp                                    |
+| processed_at     | real | Set when done/dead_letter                         |
+| error            | text | Error message if dead_letter                      |
+| processing_since | real | Timestamp when event was claimed for processing; used by watchdog for stale detection |
 
 **Indexes:** `(topic, status)`, `(status, created_at)`, `(correlation_id)`.
 
@@ -108,6 +109,10 @@ Ask the Orchestrator to handle a task. Response goes to user. Emits `system.agen
 ### `request_agent_background(prompt, correlation_id=None)`
 
 Trigger the Orchestrator silently; no user response. Emits `system.agent.background`.
+
+### `purge_scheduled_events(schedule_id, schedule_type)`
+
+Delete pending/processing events from the journal that are bound to a cancelled schedule (matched via `payload.__schedule.id` and `payload.__schedule.type`). Used by the scheduler extension when a schedule is cancelled.
 
 ### `subscribe_event(topic, handler)`
 
@@ -195,10 +200,11 @@ class Event:
     id: int           # Journal row id
     topic: str
     source: str       # Extension ID that published
-    payload: dict
+    payload: dict[str, Any]
     created_at: float # Unix timestamp
     correlation_id: str | None = None
     status: str = "pending"  # handlers always receive "processing"
+    retry_count: int = 0     # how many times this event has been retried
 ```
 
 ---
@@ -208,10 +214,12 @@ class Event:
 The Event Bus runs a single `_dispatch_loop`:
 
 1. **Wait** for `_wake` or `poll_interval` timeout (default 5s)
-2. **Fetch** pending events from journal (limit 3 per iteration)
-3. **Deliver** to all subscribers; mark `processing` → `done`, `failed`, or retry
+2. **Fetch** pending events from journal via atomic `UPDATE ... RETURNING` (limit `batch_size` per iteration)
+3. **Deliver** to all subscribers; mark `processing` → `done` or retry/dead_letter
 
-Handlers run sequentially per event. If any handler raises:
+Each handler is wrapped with `asyncio.wait_for(handler, timeout=handler_timeout)` (default 300s). A timeout is treated as a handler error.
+
+Handlers run sequentially per event. If **no subscribers** exist for the topic, the event is immediately marked `done`. If any handler raises or times out:
 - If `retry_count < max_retries`: event is reset to `pending`, `retry_count` incremented; it will be redelivered.
 - Otherwise: event is marked `dead_letter` with the error message.
 
@@ -223,10 +231,10 @@ Only events left in `processing` (crash during delivery) are recovered to `pendi
 
 `recover()` is called once at startup (before `start()`):
 
-1. Reset `processing` → `pending` (events interrupted by crash)
+1. Reset `processing` → `pending` (events interrupted by crash); clear `processing_since`
 2. Log total recovered count
 
-A **watchdog** runs periodically and recovers events stuck in `processing` longer than `stale_timeout`: those with `retry_count < max_retries` are reset to `pending`; others are moved to `dead_letter`.
+A **watchdog** runs every 30 seconds and recovers events stuck in `processing` longer than `stale_timeout` (based on `processing_since`): those with `retry_count < max_retries` are reset to `pending` (with `retry_count` incremented); others are moved to `dead_letter`.
 
 ---
 
@@ -258,7 +266,7 @@ Important: a channel can keep working while a ToolProvider extension is unavaila
 
 | Topic             | Source            | Payload                         | Purpose                   |
 | ----------------- | ----------------- | ------------------------------- | ------------------------- |
-| `user.message`    | channels          | `text`, `user_id`, `channel_id` | User input → agent (kernel-handled) |
+| `user.message`    | channels          | `text`, `user_id`, `channel_id`, optional `thread_id` | User input → agent (kernel-handled) |
 | `reminder.due`    | scheduler / extensions | `text`, optional `channel_id`   | Deferred reminders        |
 | `checkin.started` | extensions        | `step`, `total`                 | Multi-step workflows      |
 | `task.received`   | extensions        | `text`                          | Proactive task processing |
@@ -306,14 +314,15 @@ For reminders, recurring tasks, or delayed events, use the **Scheduler extension
 Event Bus parameters are defined in `config/settings.yaml` under `event_bus:`:
 
 
-| Key             | Default                         | Description                                                                       |
-| --------------- | ------------------------------- | --------------------------------------------------------------------------------- |
-| `db_path`       | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root)                                      |
-| `poll_interval` | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce event latency |
-| `batch_size`    | `3`                             | Max pending events fetched per loop iteration                                     |
-| `max_retries`   | `3`                             | Max retries before dead-lettering failed events                                   |
-| `stale_timeout` | `300`                           | Seconds after which stuck `processing` events are recovered by watchdog           |
-| `busy_timeout`  | `5000`                          | SQLite busy timeout in milliseconds                                               |
+| Key               | Default                         | Description                                                                       |
+| ----------------- | ------------------------------- | --------------------------------------------------------------------------------- |
+| `db_path`         | `sandbox/data/event_journal.db` | Path to SQLite DB (relative to project root)                                      |
+| `poll_interval`   | `5.0`                           | Dispatch loop wait timeout in seconds; lower values reduce event latency |
+| `batch_size`      | `3`                             | Max pending events fetched per loop iteration                                     |
+| `max_retries`     | `3`                             | Max retries before dead-lettering failed events                                   |
+| `stale_timeout`   | `300`                           | Seconds after which stuck `processing` events are recovered by watchdog           |
+| `busy_timeout`    | `5000`                          | SQLite busy timeout in milliseconds                                               |
+| `handler_timeout` | `300.0`                         | Per-handler execution timeout in seconds; handler is cancelled on exceed          |
 
 
 ---

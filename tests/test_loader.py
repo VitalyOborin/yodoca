@@ -222,6 +222,43 @@ class TestLoadAllAndProtocolDetection:
         assert "web_search" in catalog
         assert catalog["web_search"]["description"] == "Search and read web pages"
 
+    def test_capabilities_summary_uses_current_manifests_after_discover_order(
+        self,
+    ) -> None:
+        """Summary should use the latest manifest list even if registry was set earlier."""
+
+        class _ToolExt:
+            pass
+
+        class _Registry:
+            def get(self, _ext_id: str) -> None:
+                return None
+
+            def list_agents(self) -> list:
+                return []
+
+        loader = Loader(
+            extensions_dir=Path("."), data_dir=Path("."), settings=_EMPTY_SETTINGS
+        )
+        loader.set_agent_registry(_Registry())  # type: ignore[arg-type]
+        loader._manifests = [
+            ExtensionManifest.model_validate(
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "entrypoint": "main:Cls",
+                    "description": "Search and read web pages",
+                }
+            )
+        ]
+        loader._extensions["web_search"] = _ToolExt()
+        loader._state["web_search"] = ExtensionState.ACTIVE
+
+        summary = loader.get_capabilities_summary()
+
+        assert "Available tools" in summary
+        assert "web_search" in summary
+
 
 class TestProactiveLoop:
     """invoke_agent subscriptions: _collect_proactive_subscriptions and wire_event_subscriptions."""
@@ -810,7 +847,7 @@ class TestSetupProviders:
 
     @pytest.mark.asyncio
     async def test_update_setup_providers_populates_configured_state(self) -> None:
-        """_update_setup_providers_state calls on_setup_complete and stores result."""
+        """update_setup_providers_state calls on_setup_complete and stores result."""
         mock_ext = MagicMock(spec=SetupProvider)
         mock_ext.on_setup_complete = AsyncMock(return_value=(True, "OK"))
 
@@ -820,7 +857,7 @@ class TestSetupProviders:
         loader._extensions = {"setup_ext": mock_ext}
         loader._state = {"setup_ext": ExtensionState.INACTIVE}
 
-        await loader._update_setup_providers_state()
+        await loader.update_setup_providers_state()
 
         assert loader._setup_providers == {"setup_ext": True}
         mock_ext.on_setup_complete.assert_called_once()
@@ -829,7 +866,7 @@ class TestSetupProviders:
     async def test_update_setup_providers_stores_false_when_not_configured(
         self,
     ) -> None:
-        """_update_setup_providers_state stores False when on_setup_complete returns (False, msg)."""
+        """update_setup_providers_state stores False when on_setup_complete returns (False, msg)."""
         mock_ext = MagicMock(spec=SetupProvider)
         mock_ext.on_setup_complete = AsyncMock(return_value=(False, "token required"))
 
@@ -839,7 +876,7 @@ class TestSetupProviders:
         loader._extensions = {"setup_ext": mock_ext}
         loader._state = {"setup_ext": ExtensionState.INACTIVE}
 
-        await loader._update_setup_providers_state()
+        await loader.update_setup_providers_state()
 
         assert loader._setup_providers == {"setup_ext": False}
 
@@ -863,7 +900,7 @@ class TestSetupProviders:
         loader._extensions = {"telegram_channel": mock_ext}
         loader._state = {"telegram_channel": ExtensionState.INACTIVE}
 
-        await loader._update_setup_providers_state()
+        await loader.update_setup_providers_state()
         summary = loader.get_capabilities_summary()
 
         assert "Extensions needing setup" in summary
@@ -919,24 +956,22 @@ class TestSetupProviders:
             "ok": ExtensionState.ACTIVE,
             "broken": ExtensionState.ERROR,
         }
-        loader._diagnostics = {
-            "broken": [
-                MagicMock(
-                    as_dict=MagicMock(
-                        return_value={
-                            "extension_id": "broken",
-                            "phase": "start",
-                            "reason": "start_error",
-                            "message": "boom",
-                            "dependency_chain": [],
-                            "traceback": "",
-                            "created_at": "2026-03-27T00:00:00+00:00",
-                            "exception_type": "RuntimeError",
-                        }
-                    )
+        loader._diagnostics_manager._diagnostics["broken"] = [
+            MagicMock(
+                as_dict=MagicMock(
+                    return_value={
+                        "extension_id": "broken",
+                        "phase": "start",
+                        "reason": "start_error",
+                        "message": "boom",
+                        "dependency_chain": [],
+                        "traceback": "",
+                        "created_at": "2026-03-27T00:00:00+00:00",
+                        "exception_type": "RuntimeError",
+                    }
                 )
-            ]
-        }
+            )
+        ]
 
         report = loader.get_extension_status_report()
         assert report["counts"] == {"active": 1, "inactive": 0, "error": 1}

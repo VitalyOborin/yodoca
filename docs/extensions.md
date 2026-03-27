@@ -54,7 +54,7 @@ The startup sequence in `core/runner.py`:
 1. **discover** — Scan `sandbox/extensions/` for `manifest.yaml`; load manifests, filter `enabled: true`
 2. **load_all** — Topological sort by `depends_on`; dynamic import or `DeclarativeAgentAdapter`; instantiate
 3. **initialize_all** — Create `ExtensionContext` per extension; call `initialize(ctx)`
-4. **_update_setup_providers_state** — For each SetupProvider, call `on_setup_complete()`; store configured vs unconfigured
+4. **update_setup_providers_state** — For each SetupProvider, call `on_setup_complete()`; store configured vs unconfigured
 5. **detect_and_wire_all** — `isinstance(ext, Protocol)`; wire ToolProvider, ChannelProvider, AgentProvider, SchedulerProvider
 6. **wire_event_subscriptions** — Wire manifest-driven `notify_user` / `invoke_agent`; kernel `user.message` handler
 7. **create_orchestrator_agent** — Merge core tools + `get_all_tools()` + delegation tools + capabilities summary
