@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from agents import function_tool
 
 from core.events.topics import SystemTopics
+from sandbox.extensions.soul.boundary import BoundaryDecision, check_outreach
 from sandbox.extensions.soul.drives import (
     resolve_phase,
     tick_homeostasis,
@@ -171,6 +172,7 @@ class SoulExtension:
 
         now = now or datetime.now(UTC)
         await self._resolve_pending_outreach_timeout(now)
+        await self._maybe_attempt_outreach(now)
         phase_before = self._state.homeostasis.current_phase
         presence_before = self._state.presence
         dt = max(
@@ -386,6 +388,21 @@ class SoulExtension:
         )
         await self._persist_state(now)
 
+    async def _maybe_attempt_outreach(self, now: datetime) -> None:
+        if self._state is None:
+            return
+        if self._state.homeostasis.social_hunger < self._state.initiative.adaptive_threshold:
+            return
+
+        outcome = check_outreach(self._state, now=now)
+        if outcome.decision is not BoundaryDecision.ALLOW:
+            return
+
+        await self._send_outreach(
+            self._build_outreach_text(),
+            now=now,
+        )
+
     async def _resolve_pending_outreach_response(self, now: datetime) -> None:
         if self._state is None or self._storage is None or self._ctx is None:
             return
@@ -538,6 +555,21 @@ class SoulExtension:
         if phase is Phase.CURIOUS:
             return "Light curiosity is natural right now."
         return "Be present before being useful."
+
+    def _build_outreach_text(self) -> str:
+        if self._state is None:
+            return "I was thinking about one thing."
+
+        phase = self._state.homeostasis.current_phase
+        if phase is Phase.REFLECTIVE:
+            return "I was sitting with one thought from our recent conversations."
+        if phase is Phase.CURIOUS:
+            return "I got curious about one thing we keep circling around."
+        if phase is Phase.SOCIAL:
+            return "You came to mind, so I wanted to reach out gently."
+        if phase is Phase.CARE:
+            return "I wanted to check in softly."
+        return "I was thinking about one small thing."
 
     def _build_state_snapshot(self) -> SoulStateResult:
         if self._state is None:

@@ -255,3 +255,41 @@ async def test_tick_resolves_pending_outreach_as_timing_miss_when_unavailable(
     assert ext._state.initiative.last_outreach_result is not None
     assert ext._state.initiative.last_outreach_result.value == "timing_miss"
     assert ext._state.initiative.cooldown_until is None
+
+
+async def test_tick_triggers_one_shot_outreach_when_threshold_and_governor_allow(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.user_presence.estimated_availability = 0.8
+    ext._state.homeostasis.social_hunger = 0.9
+    ext._state.homeostasis.current_phase = Phase.CURIOUS
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    ext._state.homeostasis.last_tick_at = now - timedelta(minutes=30)
+
+    await ext._run_one_tick(now=now)
+
+    assert len(context.notifications) == 1
+    assert "curious" in context.notifications[0][0].lower()
+    assert ext._state.initiative.budget.used_today == 1
+
+
+async def test_tick_does_not_trigger_outreach_when_budget_spent(tmp_path: Path) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.user_presence.estimated_availability = 0.8
+    ext._state.homeostasis.social_hunger = 0.9
+    ext._state.initiative.budget.used_today = 1
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    ext._state.homeostasis.last_tick_at = now - timedelta(minutes=30)
+
+    await ext._run_one_tick(now=now)
+
+    assert context.notifications == []
