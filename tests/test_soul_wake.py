@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sandbox.extensions.soul.models import CompanionState, Phase
+from sandbox.extensions.soul.models import CompanionState, PerceptionSignals, Phase
 from sandbox.extensions.soul.wake import WakeMode, restore_after_gap
 
 
@@ -44,6 +44,7 @@ def test_long_absence_resets_to_baseline() -> None:
     state = CompanionState()
     state.mood = 0.8
     state.tick_count = 77
+    state.perception = PerceptionSignals(stress_signal=0.9, fatigue_signal=0.8)
     state.homeostasis.last_tick_at = now - timedelta(days=2)
     state.homeostasis.current_phase = Phase.SOCIAL
 
@@ -54,3 +55,5 @@ def test_long_absence_resets_to_baseline() -> None:
     assert result.state.homeostasis.last_tick_at == now
     assert result.state.tick_count == 77
     assert result.state.mood == 0.4
+    assert result.state.perception.stress_signal == 0.0
+    assert result.state.perception.fatigue_signal == 0.0

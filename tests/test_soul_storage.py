@@ -32,7 +32,7 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     await storage.upsert_daily_metrics(
         date.today(),
         outreach_attempts=1,
-        inference_count=2,
+        message_count=2,
     )
     deleted = await storage.cleanup_traces_older_than(
         datetime.now(UTC) - timedelta(days=1)

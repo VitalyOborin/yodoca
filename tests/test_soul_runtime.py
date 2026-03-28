@@ -1,38 +1,14 @@
 import asyncio
-import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
+from conftest import FakeSoulContext
 from sandbox.extensions.soul.main import SoulExtension
 from sandbox.extensions.soul.models import Phase, PresenceState
 
 
-class FakeContext:
-    def __init__(self, tmp_path: Path, config: dict[str, Any] | None = None) -> None:
-        self._config = config or {}
-        self.data_dir = tmp_path / "soul-data"
-        self.extension_dir = Path("sandbox/extensions/soul")
-        self.logger = logging.getLogger("test.soul")
-        self.events: list[tuple[str, dict[str, Any]]] = []
-        self.router_subscriptions: dict[str, Any] = {}
-        self.bus_subscriptions: dict[str, Any] = {}
-
-    def get_config(self, key: str, default: Any = None) -> Any:
-        return self._config.get(key, default)
-
-    async def emit(self, topic: str, payload: dict[str, Any]) -> None:
-        self.events.append((topic, payload))
-
-    def subscribe(self, event: str, handler: Any) -> None:
-        self.router_subscriptions[event] = handler
-
-    def subscribe_event(self, topic: str, handler: Any) -> None:
-        self.bus_subscriptions[topic] = handler
-
-
 async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> None:
-    context = FakeContext(
+    context = FakeSoulContext(
         tmp_path,
         {
             "tick_interval_seconds": 30,
@@ -68,7 +44,7 @@ async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> Non
 async def test_initialize_wires_router_and_event_bus_subscriptions(
     tmp_path: Path,
 ) -> None:
-    context = FakeContext(tmp_path)
+    context = FakeSoulContext(tmp_path)
     ext = SoulExtension()
 
     await ext.initialize(context)
@@ -79,7 +55,7 @@ async def test_initialize_wires_router_and_event_bus_subscriptions(
 
 
 async def test_run_background_advances_ticks_until_stopped(tmp_path: Path) -> None:
-    context = FakeContext(
+    context = FakeSoulContext(
         tmp_path,
         {
             "tick_interval_seconds": 0.01,
@@ -102,7 +78,7 @@ async def test_run_background_advances_ticks_until_stopped(tmp_path: Path) -> No
 
 
 async def test_health_check_fails_for_stale_heartbeat(tmp_path: Path) -> None:
-    context = FakeContext(
+    context = FakeSoulContext(
         tmp_path,
         {
             "tick_interval_seconds": 10,
@@ -122,7 +98,7 @@ async def test_health_check_fails_for_stale_heartbeat(tmp_path: Path) -> None:
 async def test_health_check_uses_recent_state_tick_when_loop_idle(
     tmp_path: Path,
 ) -> None:
-    context = FakeContext(
+    context = FakeSoulContext(
         tmp_path,
         {
             "tick_interval_seconds": 10,
@@ -142,7 +118,7 @@ async def test_health_check_uses_recent_state_tick_when_loop_idle(
 async def test_user_message_updates_perception_and_social_hunger(
     tmp_path: Path,
 ) -> None:
-    context = FakeContext(tmp_path)
+    context = FakeSoulContext(tmp_path)
     ext = SoulExtension()
     await ext.initialize(context)
 
@@ -158,7 +134,7 @@ async def test_user_message_updates_perception_and_social_hunger(
 
 
 async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
-    context = FakeContext(tmp_path)
+    context = FakeSoulContext(tmp_path)
     ext = SoulExtension()
     await ext.initialize(context)
 
@@ -178,7 +154,7 @@ async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
 
 
 async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
-    context = FakeContext(tmp_path)
+    context = FakeSoulContext(tmp_path)
     ext = SoulExtension()
     await ext.initialize(context)
 

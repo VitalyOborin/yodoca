@@ -63,6 +63,7 @@ class SoulExtension:
         self._initialized_at: datetime | None = None
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
+        self._context_token_budget = 200
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
@@ -78,6 +79,9 @@ class SoulExtension:
         )
         self._persist_interval_seconds = float(
             context.get_config("persist_interval_seconds", 60)
+        )
+        self._context_token_budget = int(
+            context.get_config("context_token_budget", 200)
         )
         self._storage = SoulStorage(
             context.data_dir / "soul.db",
@@ -295,7 +299,7 @@ class SoulExtension:
             else None,
             created_at=now,
         )
-        await self._storage.upsert_daily_metrics(now.date(), inference_count=1)
+        await self._storage.upsert_daily_metrics(now.date(), message_count=1)
         await self._persist_state(now)
         self._last_user_message_at = now
 
@@ -335,6 +339,7 @@ class SoulExtension:
 
         mood_label = self._mood_label(self._state.mood)
         note = self._context_note()
+        max_words = int(self._context_token_budget * 0.75)
         context = (
             "Soul state:\n"
             f"- phase: {self._state.homeostasis.current_phase.value.lower()}\n"
@@ -342,7 +347,7 @@ class SoulExtension:
             f"- mood: {mood_label}\n"
             f"- note: {note}"
         )
-        if len(context.split()) > 80:
+        if len(context.split()) > max_words:
             return "\n".join(context.splitlines()[:4])
         return context
 

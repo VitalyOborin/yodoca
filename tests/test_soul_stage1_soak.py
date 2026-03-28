@@ -1,33 +1,9 @@
-import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
+from conftest import FakeSoulContext
 from sandbox.extensions.soul.main import SoulExtension
-
-
-class FakeContext:
-    def __init__(self, tmp_path: Path, config: dict[str, Any] | None = None) -> None:
-        self._config = config or {}
-        self.data_dir = tmp_path / "soul-soak-data"
-        self.extension_dir = Path("sandbox/extensions/soul")
-        self.logger = logging.getLogger("test.soul.soak")
-        self.events: list[tuple[str, dict[str, Any]]] = []
-        self.router_subscriptions: dict[str, Any] = {}
-        self.bus_subscriptions: dict[str, Any] = {}
-
-    def get_config(self, key: str, default: Any = None) -> Any:
-        return self._config.get(key, default)
-
-    async def emit(self, topic: str, payload: dict[str, Any]) -> None:
-        self.events.append((topic, payload))
-
-    def subscribe(self, event: str, handler: Any) -> None:
-        self.router_subscriptions[event] = handler
-
-    def subscribe_event(self, topic: str, handler: Any) -> None:
-        self.bus_subscriptions[topic] = handler
 
 
 async def test_stage1_accelerated_soak_proves_life_cycle(tmp_path: Path) -> None:
@@ -35,7 +11,7 @@ async def test_stage1_accelerated_soak_proves_life_cycle(tmp_path: Path) -> None
         "tick_interval_seconds": 30,
         "persist_interval_seconds": 60,
     }
-    context = FakeContext(tmp_path, config)
+    context = FakeSoulContext(tmp_path, config, data_subdir="soul-soak-data")
     ext = SoulExtension()
     await ext.initialize(context)
     await ext.start()
@@ -77,7 +53,7 @@ async def test_stage1_accelerated_soak_proves_life_cycle(tmp_path: Path) -> None
 
     assert phase_transitions >= 1
 
-    restarted_context = FakeContext(tmp_path, config)
+    restarted_context = FakeSoulContext(tmp_path, config, data_subdir="soul-soak-data")
     restarted = SoulExtension()
     await restarted.initialize(restarted_context)
 

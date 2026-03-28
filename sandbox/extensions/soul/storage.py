@@ -10,6 +10,24 @@ from typing import Any
 
 from sandbox.extensions.soul.models import CompanionState
 
+_INCREMENTABLE_METRICS = {
+    "outreach_attempts",
+    "outreach_responses",
+    "outreach_ignored",
+    "outreach_timing_miss",
+    "outreach_rejected",
+    "message_count",
+    "inference_count",
+    "perception_corrections",
+}
+
+_REPLACEABLE_METRICS = {
+    "phase_distribution_json",
+    "openness_avg",
+}
+
+_ALLOWED_METRICS = _INCREMENTABLE_METRICS | _REPLACEABLE_METRICS
+
 
 class SoulStorage:
     """Thin async wrapper around soul.db."""
@@ -18,34 +36,36 @@ class SoulStorage:
         self._db_path = db_path
         self._schema_path = schema_path
         self._lock = asyncio.Lock()
+        self._conn: sqlite3.Connection | None = None
 
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         schema = self._schema_path.read_text(encoding="utf-8")
-        await asyncio.to_thread(self._apply_schema, schema)
+        await asyncio.to_thread(self._init_connection, schema)
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError("SoulStorage is not initialized")
+        return self._conn
 
-    def _apply_schema(self, schema: str) -> None:
-        with self._connect() as conn:
-            conn.executescript(schema)
-            conn.commit()
+    def _init_connection(self, schema: str) -> None:
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.executescript(schema)
+        self._conn.commit()
 
     async def load_state(self) -> CompanionState | None:
         async with self._lock:
             return await asyncio.to_thread(self._load_state_sync)
 
     def _load_state_sync(self) -> CompanionState | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT state_json FROM soul_state WHERE id = 1"
-            ).fetchone()
-            if row is None:
-                return None
-            return CompanionState.from_json(str(row["state_json"]))
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT state_json FROM soul_state WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return CompanionState.from_json(str(row["state_json"]))
 
     async def save_state(
         self,
@@ -63,18 +83,18 @@ class SoulStorage:
     ) -> None:
         ts = (updated_at or datetime.now(UTC)).isoformat()
         payload = state.to_json()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO soul_state (id, state_json, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    state_json = excluded.state_json,
-                    updated_at = excluded.updated_at
-                """,
-                (payload, ts),
-            )
-            conn.commit()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO soul_state (id, state_json, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at
+            """,
+            (payload, ts),
+        )
+        conn.commit()
 
     async def append_trace(
         self,
@@ -104,15 +124,15 @@ class SoulStorage:
         created_at: datetime | None,
     ) -> None:
         ts = (created_at or datetime.now(UTC)).isoformat()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO traces (trace_type, phase, content, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (trace_type, phase, content, payload_json, ts),
-            )
-            conn.commit()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO traces (trace_type, phase, content, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (trace_type, phase, content, payload_json, ts),
+        )
+        conn.commit()
 
     async def upsert_daily_metrics(
         self,
@@ -131,45 +151,34 @@ class SoulStorage:
     ) -> None:
         metric_key = metric_date.isoformat()
         updated_at = datetime.now(UTC).isoformat()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO soul_metrics (date, updated_at)
-                VALUES (?, ?)
-                ON CONFLICT(date) DO NOTHING
-                """,
-                (metric_key, updated_at),
-            )
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO soul_metrics (date, updated_at)
+            VALUES (?, ?)
+            ON CONFLICT(date) DO NOTHING
+            """,
+            (metric_key, updated_at),
+        )
 
-            allowed = {
-                "outreach_attempts",
-                "outreach_responses",
-                "outreach_ignored",
-                "outreach_timing_miss",
-                "outreach_rejected",
-                "inference_count",
-                "perception_corrections",
-                "phase_distribution_json",
-                "openness_avg",
-            }
-            for key, value in increments.items():
-                if key not in allowed:
-                    raise ValueError(f"Unsupported metrics field: {key}")
-                if key in {"phase_distribution_json", "openness_avg"}:
-                    conn.execute(
-                        f"UPDATE soul_metrics SET {key} = ?, updated_at = ? WHERE date = ?",
-                        (value, updated_at, metric_key),
-                    )
-                else:
-                    conn.execute(
-                        f"""
-                        UPDATE soul_metrics
-                        SET {key} = {key} + ?, updated_at = ?
-                        WHERE date = ?
-                        """,
-                        (int(value), updated_at, metric_key),
-                    )
-            conn.commit()
+        for key, value in increments.items():
+            if key not in _ALLOWED_METRICS:
+                raise ValueError(f"Unsupported metrics field: {key}")
+            if key in _REPLACEABLE_METRICS:
+                conn.execute(
+                    f"UPDATE soul_metrics SET {key} = ?, updated_at = ? WHERE date = ?",
+                    (value, updated_at, metric_key),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE soul_metrics
+                    SET {key} = {key} + ?, updated_at = ?
+                    WHERE date = ?
+                    """,
+                    (int(value), updated_at, metric_key),
+                )
+        conn.commit()
 
     async def append_interaction(
         self,
@@ -201,41 +210,41 @@ class SoulStorage:
         ts = created_at or datetime.now(UTC)
         if direction not in {"inbound", "outbound"}:
             raise ValueError(f"Unsupported interaction direction: {direction}")
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO interaction_log (
-                    direction,
-                    channel_id,
-                    hour,
-                    day_of_week,
-                    outreach_result,
-                    response_delay_s,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    direction,
-                    channel_id,
-                    ts.hour,
-                    ts.weekday(),
-                    outreach_result,
-                    response_delay_s,
-                    ts.isoformat(),
-                ),
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO interaction_log (
+                direction,
+                channel_id,
+                hour,
+                day_of_week,
+                outreach_result,
+                response_delay_s,
+                created_at
             )
-            conn.commit()
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                direction,
+                channel_id,
+                ts.hour,
+                ts.weekday(),
+                outreach_result,
+                response_delay_s,
+                ts.isoformat(),
+            ),
+        )
+        conn.commit()
 
     async def cleanup_traces_older_than(self, cutoff: datetime) -> int:
         async with self._lock:
             return await asyncio.to_thread(self._cleanup_traces_sync, cutoff)
 
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM traces WHERE created_at < ?",
-                (cutoff.astimezone(UTC).isoformat(),),
-            )
-            conn.commit()
-            return int(cursor.rowcount or 0)
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM traces WHERE created_at < ?",
+            (cutoff.astimezone(UTC).isoformat(),),
+        )
+        conn.commit()
+        return int(cursor.rowcount or 0)

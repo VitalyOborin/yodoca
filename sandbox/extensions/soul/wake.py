@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from sandbox.extensions.soul.drives import tick_homeostasis, transition_phase
-from sandbox.extensions.soul.models import CompanionState, HomeostasisState, Phase
+from sandbox.extensions.soul.models import (
+    CompanionState,
+    HomeostasisState,
+    PerceptionSignals,
+    Phase,
+)
 
 
 class WakeMode(str, Enum):
@@ -94,7 +99,7 @@ def _long_absence_wake(
     return CompanionState(
         version=state.version,
         homeostasis=baseline,
-        presence=state.presence,
+        perception=PerceptionSignals(),
         mood=state.mood * 0.5,
         tick_count=state.tick_count,
         temperament=state.temperament,
