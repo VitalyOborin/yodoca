@@ -7,6 +7,7 @@ def test_companion_state_json_round_trip() -> None:
     state.presence = PresenceState.WARM
     state.mood = 0.25
     state.tick_count = 42
+    state.perception.openness_signal = 0.6
     state.temperament.playfulness = 0.7
 
     restored = CompanionState.from_json(state.to_json())
@@ -16,4 +17,5 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.presence is PresenceState.WARM
     assert restored.mood == 0.25
     assert restored.tick_count == 42
+    assert restored.perception.openness_signal == 0.6
     assert restored.temperament.playfulness == 0.7

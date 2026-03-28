@@ -45,6 +45,34 @@ class PresenceState(StrEnum):
 
 
 @dataclass(slots=True)
+class PerceptionSignals:
+    stress_signal: float = 0.0
+    withdrawal_signal: float = 0.0
+    openness_signal: float = 0.0
+    fatigue_signal: float = 0.0
+    joy_signal: float = 0.0
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "stress_signal": self.stress_signal,
+            "withdrawal_signal": self.withdrawal_signal,
+            "openness_signal": self.openness_signal,
+            "fatigue_signal": self.fatigue_signal,
+            "joy_signal": self.joy_signal,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PerceptionSignals:
+        return cls(
+            stress_signal=float(data.get("stress_signal", 0.0)),
+            withdrawal_signal=float(data.get("withdrawal_signal", 0.0)),
+            openness_signal=float(data.get("openness_signal", 0.0)),
+            fatigue_signal=float(data.get("fatigue_signal", 0.0)),
+            joy_signal=float(data.get("joy_signal", 0.0)),
+        )
+
+
+@dataclass(slots=True)
 class TemperamentProfile:
     sociability: float = 0.5
     depth: float = 0.5
@@ -101,6 +129,7 @@ class CompanionState:
     presence: PresenceState = PresenceState.SILENT
     mood: float = 0.0
     tick_count: int = 0
+    perception: PerceptionSignals = field(default_factory=PerceptionSignals)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
 
     def to_dict(self) -> dict[str, Any]:
@@ -110,6 +139,7 @@ class CompanionState:
             "presence": self.presence.value,
             "mood": self.mood,
             "tick_count": self.tick_count,
+            "perception": self.perception.to_dict(),
             "temperament": asdict(self.temperament),
         }
 
@@ -124,6 +154,7 @@ class CompanionState:
             presence=PresenceState(data["presence"]),
             mood=float(data["mood"]),
             tick_count=int(data["tick_count"]),
+            perception=PerceptionSignals.from_dict(data.get("perception", {})),
             temperament=TemperamentProfile(**data["temperament"]),
         )
 
