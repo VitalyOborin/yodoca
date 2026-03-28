@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +61,7 @@ class SoulStorage:
         state: CompanionState,
         updated_at: datetime | None,
     ) -> None:
-        ts = (updated_at or datetime.now(timezone.utc)).isoformat()
+        ts = (updated_at or datetime.now(UTC)).isoformat()
         payload = state.to_json()
         with self._connect() as conn:
             conn.execute(
@@ -103,7 +103,7 @@ class SoulStorage:
         payload_json: str | None,
         created_at: datetime | None,
     ) -> None:
-        ts = (created_at or datetime.now(timezone.utc)).isoformat()
+        ts = (created_at or datetime.now(UTC)).isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -120,7 +120,9 @@ class SoulStorage:
         **increments: Any,
     ) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._upsert_daily_metrics_sync, metric_date, increments)
+            await asyncio.to_thread(
+                self._upsert_daily_metrics_sync, metric_date, increments
+            )
 
     def _upsert_daily_metrics_sync(
         self,
@@ -128,7 +130,7 @@ class SoulStorage:
         increments: dict[str, Any],
     ) -> None:
         metric_key = metric_date.isoformat()
-        updated_at = datetime.now(timezone.utc).isoformat()
+        updated_at = datetime.now(UTC).isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -169,6 +171,62 @@ class SoulStorage:
                     )
             conn.commit()
 
+    async def append_interaction(
+        self,
+        *,
+        direction: str,
+        channel_id: str | None = None,
+        outreach_result: str | None = None,
+        response_delay_s: int | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._append_interaction_sync,
+                direction,
+                channel_id,
+                outreach_result,
+                response_delay_s,
+                created_at,
+            )
+
+    def _append_interaction_sync(
+        self,
+        direction: str,
+        channel_id: str | None,
+        outreach_result: str | None,
+        response_delay_s: int | None,
+        created_at: datetime | None,
+    ) -> None:
+        ts = created_at or datetime.now(UTC)
+        if direction not in {"inbound", "outbound"}:
+            raise ValueError(f"Unsupported interaction direction: {direction}")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO interaction_log (
+                    direction,
+                    channel_id,
+                    hour,
+                    day_of_week,
+                    outreach_result,
+                    response_delay_s,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    direction,
+                    channel_id,
+                    ts.hour,
+                    ts.weekday(),
+                    outreach_result,
+                    response_delay_s,
+                    ts.isoformat(),
+                ),
+            )
+            conn.commit()
+
     async def cleanup_traces_older_than(self, cutoff: datetime) -> int:
         async with self._lock:
             return await asyncio.to_thread(self._cleanup_traces_sync, cutoff)
@@ -177,7 +235,7 @@ class SoulStorage:
         with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM traces WHERE created_at < ?",
-                (cutoff.astimezone(timezone.utc).isoformat(),),
+                (cutoff.astimezone(UTC).isoformat(),),
             )
             conn.commit()
             return int(cursor.rowcount or 0)

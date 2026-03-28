@@ -15,12 +15,20 @@ class FakeContext:
         self.extension_dir = Path("sandbox/extensions/soul")
         self.logger = logging.getLogger("test.soul")
         self.events: list[tuple[str, dict[str, Any]]] = []
+        self.router_subscriptions: dict[str, Any] = {}
+        self.bus_subscriptions: dict[str, Any] = {}
 
     def get_config(self, key: str, default: Any = None) -> Any:
         return self._config.get(key, default)
 
     async def emit(self, topic: str, payload: dict[str, Any]) -> None:
         self.events.append((topic, payload))
+
+    def subscribe(self, event: str, handler: Any) -> None:
+        self.router_subscriptions[event] = handler
+
+    def subscribe_event(self, topic: str, handler: Any) -> None:
+        self.bus_subscriptions[topic] = handler
 
 
 async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> None:
@@ -55,6 +63,19 @@ async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> Non
     assert restored is not None
     assert restored.homeostasis.current_phase is Phase.CURIOUS
     assert restored.tick_count == 1
+
+
+async def test_initialize_wires_router_and_event_bus_subscriptions(
+    tmp_path: Path,
+) -> None:
+    context = FakeContext(tmp_path)
+    ext = SoulExtension()
+
+    await ext.initialize(context)
+
+    assert "user_message" in context.router_subscriptions
+    assert "agent_response" in context.router_subscriptions
+    assert "thread.completed" in context.bus_subscriptions
 
 
 async def test_run_background_advances_ticks_until_stopped(tmp_path: Path) -> None:
@@ -98,7 +119,9 @@ async def test_health_check_fails_for_stale_heartbeat(tmp_path: Path) -> None:
     assert ext.health_check() is False
 
 
-async def test_health_check_uses_recent_state_tick_when_loop_idle(tmp_path: Path) -> None:
+async def test_health_check_uses_recent_state_tick_when_loop_idle(
+    tmp_path: Path,
+) -> None:
     context = FakeContext(
         tmp_path,
         {
@@ -114,3 +137,21 @@ async def test_health_check_uses_recent_state_tick_when_loop_idle(tmp_path: Path
     ext._state.homeostasis.last_tick_at = datetime.now(UTC) - timedelta(seconds=5)
 
     assert ext.health_check() is True
+
+
+async def test_user_message_updates_perception_and_social_hunger(
+    tmp_path: Path,
+) -> None:
+    context = FakeContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.homeostasis.social_hunger = 0.6
+    ext._last_agent_response_at = datetime.now(UTC) - timedelta(minutes=20)
+
+    await ext._on_user_message({"text": "ok...", "channel": object()})
+
+    assert ext._state.homeostasis.social_hunger < 0.6
+    assert ext._state.perception.withdrawal_signal > 0.1
+    assert ext._last_user_message_at is not None

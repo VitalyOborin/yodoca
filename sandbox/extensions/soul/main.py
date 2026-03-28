@@ -6,16 +6,23 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from core.events.topics import SystemTopics
 from sandbox.extensions.soul.drives import (
     resolve_phase,
     tick_homeostasis,
     transition_phase,
 )
 from sandbox.extensions.soul.models import CompanionState, Phase, PresenceState
+from sandbox.extensions.soul.perception import (
+    HeuristicPerceptionInput,
+    infer_signals,
+    smooth_signals,
+)
 from sandbox.extensions.soul.storage import SoulStorage
 from sandbox.extensions.soul.wake import restore_after_gap
 
 if TYPE_CHECKING:
+    from core.events.models import Event
     from core.extensions.context import ExtensionContext
 
 
@@ -51,6 +58,8 @@ class SoulExtension:
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
+        self._last_user_message_at: datetime | None = None
+        self._last_agent_response_at: datetime | None = None
         self._last_error: str | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
@@ -75,6 +84,11 @@ class SoulExtension:
             self._state.homeostasis.current_phase
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
+        context.subscribe("user_message", self._on_user_message)
+        context.subscribe("agent_response", self._on_agent_response)
+        context.subscribe_event(
+            SystemTopics.THREAD_COMPLETED, self._on_thread_completed
+        )
         await self._persist_state(self._state.homeostasis.last_tick_at)
 
     async def start(self) -> None:
@@ -230,6 +244,88 @@ class SoulExtension:
                 else None,
                 "occurred_at": now.isoformat(),
             },
+        )
+
+    async def _on_user_message(self, payload: dict[str, object]) -> None:
+        if self._ctx is None or self._storage is None or self._state is None:
+            return
+
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return
+
+        now = datetime.now(UTC)
+        gap_since_user = (
+            (now - self._last_user_message_at).total_seconds()
+            if self._last_user_message_at is not None
+            else None
+        )
+        response_delay = (
+            (now - self._last_agent_response_at).total_seconds()
+            if self._last_agent_response_at is not None
+            else None
+        )
+        inferred = infer_signals(
+            HeuristicPerceptionInput(
+                text=text,
+                seconds_since_last_user_message=gap_since_user,
+                response_delay_seconds=response_delay,
+            )
+        )
+        self._state.perception = smooth_signals(self._state.perception, inferred)
+        self._state.homeostasis.social_hunger = max(
+            0.05,
+            self._state.homeostasis.social_hunger - 0.20,
+        )
+        await self._storage.append_interaction(
+            direction="inbound",
+            channel_id=self._extract_channel_id(payload),
+            response_delay_s=int(response_delay)
+            if response_delay is not None
+            else None,
+            created_at=now,
+        )
+        await self._storage.upsert_daily_metrics(now.date(), inference_count=1)
+        await self._persist_state(now)
+        self._last_user_message_at = now
+
+    async def _on_agent_response(self, payload: dict[str, object]) -> None:
+        if self._storage is None:
+            return
+
+        now = datetime.now(UTC)
+        await self._storage.append_interaction(
+            direction="outbound",
+            channel_id=self._extract_channel_id(payload),
+            created_at=now,
+        )
+        self._last_agent_response_at = now
+
+    async def _on_thread_completed(self, event: Event) -> None:
+        if self._storage is None or self._state is None:
+            return
+
+        payload = getattr(event, "payload", {}) or {}
+        thread_id = str(payload.get("thread_id") or "").strip()
+        if not thread_id:
+            return
+
+        now = datetime.now(UTC)
+        await self._storage.append_trace(
+            trace_type="thread_completed",
+            phase=self._state.homeostasis.current_phase.value,
+            content=f"Thread {thread_id} completed",
+            created_at=now,
+        )
+
+    def _extract_channel_id(self, payload: dict[str, object]) -> str | None:
+        channel = payload.get("channel")
+        if channel is None:
+            return None
+        return (
+            getattr(channel, "channel_id", None)
+            or getattr(channel, "extension_id", None)
+            or type(channel).__name__
         )
 
     def _presence_for_phase(self, phase: Phase) -> PresenceState:

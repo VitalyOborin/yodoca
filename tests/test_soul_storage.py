@@ -1,4 +1,5 @@
-from datetime import date, datetime, timedelta, timezone
+import sqlite3
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from sandbox.extensions.soul.models import CompanionState, Phase
@@ -26,7 +27,7 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
         trace_type="phase_transition",
         phase="CURIOUS",
         content="Entered curious phase",
-        created_at=datetime.now(timezone.utc) - timedelta(days=2),
+        created_at=datetime.now(UTC) - timedelta(days=2),
     )
     await storage.upsert_daily_metrics(
         date.today(),
@@ -34,7 +35,19 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
         inference_count=2,
     )
     deleted = await storage.cleanup_traces_older_than(
-        datetime.now(timezone.utc) - timedelta(days=1)
+        datetime.now(UTC) - timedelta(days=1)
+    )
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="cli_channel",
+        response_delay_s=42,
     )
 
     assert deleted == 1
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT direction, channel_id, response_delay_s FROM interaction_log"
+        ).fetchone()
+
+    assert row == ("inbound", "cli_channel", 42)
