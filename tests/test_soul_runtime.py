@@ -175,3 +175,24 @@ async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
     assert "mood: warm" in result
     assert "User seems tired; be brief and present." in result
     assert len(result.split()) < 80
+
+
+async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
+    context = FakeContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.homeostasis.current_phase = Phase.REFLECTIVE
+    ext._state.homeostasis.phase_entered_at = datetime.now(UTC) - timedelta(minutes=7)
+    ext._state.tick_count = 5
+    ext._state.mood = 0.2
+
+    snapshot = ext._build_state_snapshot()
+
+    assert snapshot.success is True
+    assert snapshot.phase == "REFLECTIVE"
+    assert snapshot.tick_count == 5
+    assert snapshot.time_in_phase_seconds >= 420
+    assert "curiosity" in snapshot.drives
+    assert len(ext.get_tools()) == 1

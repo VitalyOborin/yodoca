@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from agents import function_tool
 
 from core.events.topics import SystemTopics
 from sandbox.extensions.soul.drives import (
@@ -19,6 +21,7 @@ from sandbox.extensions.soul.perception import (
     smooth_signals,
 )
 from sandbox.extensions.soul.storage import SoulStorage
+from sandbox.extensions.soul.tools import SoulStateResult
 from sandbox.extensions.soul.wake import restore_after_gap
 
 if TYPE_CHECKING:
@@ -57,6 +60,7 @@ class SoulExtension:
         self._storage: SoulStorage | None = None
         self._state: CompanionState | None = None
         self._started = False
+        self._initialized_at: datetime | None = None
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
         self._last_persist_at: datetime | None = None
@@ -68,6 +72,7 @@ class SoulExtension:
 
     async def initialize(self, context: ExtensionContext) -> None:
         self._ctx = context
+        self._initialized_at = datetime.now(UTC)
         self._tick_interval_seconds = float(
             context.get_config("tick_interval_seconds", 30)
         )
@@ -108,6 +113,7 @@ class SoulExtension:
         self._storage = None
         self._state = None
         self._started = False
+        self._initialized_at = None
         self._last_error = None
 
     def health_check(self) -> bool:
@@ -340,6 +346,14 @@ class SoulExtension:
             return "\n".join(context.splitlines()[:4])
         return context
 
+    def get_tools(self) -> list[Any]:
+        @function_tool(name_override="get_soul_state")
+        async def get_soul_state() -> SoulStateResult:
+            """Return the current soul runtime state for debugging."""
+            return self._build_state_snapshot()
+
+        return [get_soul_state]
+
     def _extract_channel_id(self, payload: dict[str, object]) -> str | None:
         channel = payload.get("channel")
         if channel is None:
@@ -384,3 +398,49 @@ class SoulExtension:
         if phase is Phase.CURIOUS:
             return "Light curiosity is natural right now."
         return "Be present before being useful."
+
+    def _build_state_snapshot(self) -> SoulStateResult:
+        if self._state is None:
+            return SoulStateResult(
+                success=False,
+                status="error",
+                health=False,
+                phase="unknown",
+                presence="unknown",
+                mood=0.0,
+                tick_count=0,
+                uptime_seconds=0,
+                time_in_phase_seconds=0,
+                error="Soul runtime is not initialized.",
+            )
+
+        now = datetime.now(UTC)
+        phase = self._state.homeostasis.current_phase
+        uptime = (
+            int((now - self._initialized_at).total_seconds())
+            if self._initialized_at is not None
+            else 0
+        )
+        time_in_phase = int(
+            (now - self._state.homeostasis.phase_entered_at).total_seconds()
+        )
+        return SoulStateResult(
+            success=True,
+            health=self.health_check(),
+            phase=phase.value,
+            presence=self._state.presence.value,
+            mood=self._state.mood,
+            tick_count=self._state.tick_count,
+            uptime_seconds=max(uptime, 0),
+            time_in_phase_seconds=max(time_in_phase, 0),
+            last_tick_at=self._state.homeostasis.last_tick_at.isoformat(),
+            drives={
+                "curiosity": self._state.homeostasis.curiosity,
+                "social_hunger": self._state.homeostasis.social_hunger,
+                "rest_need": self._state.homeostasis.rest_need,
+                "reflection_need": self._state.homeostasis.reflection_need,
+                "care_impulse": self._state.homeostasis.care_impulse,
+                "overstimulation": self._state.homeostasis.overstimulation,
+            },
+            perception=self._state.perception.to_dict(),
+        )
