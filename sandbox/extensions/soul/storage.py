@@ -1,0 +1,183 @@
+"""SQLite storage for the soul runtime."""
+
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from sandbox.extensions.soul.models import CompanionState
+
+
+class SoulStorage:
+    """Thin async wrapper around soul.db."""
+
+    def __init__(self, db_path: Path, schema_path: Path) -> None:
+        self._db_path = db_path
+        self._schema_path = schema_path
+        self._lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        schema = self._schema_path.read_text(encoding="utf-8")
+        await asyncio.to_thread(self._apply_schema, schema)
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _apply_schema(self, schema: str) -> None:
+        with self._connect() as conn:
+            conn.executescript(schema)
+            conn.commit()
+
+    async def load_state(self) -> CompanionState | None:
+        async with self._lock:
+            return await asyncio.to_thread(self._load_state_sync)
+
+    def _load_state_sync(self) -> CompanionState | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state_json FROM soul_state WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                return None
+            return CompanionState.from_json(str(row["state_json"]))
+
+    async def save_state(
+        self,
+        state: CompanionState,
+        *,
+        updated_at: datetime | None = None,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._save_state_sync, state, updated_at)
+
+    def _save_state_sync(
+        self,
+        state: CompanionState,
+        updated_at: datetime | None,
+    ) -> None:
+        ts = (updated_at or datetime.now(timezone.utc)).isoformat()
+        payload = state.to_json()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO soul_state (id, state_json, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (payload, ts),
+            )
+            conn.commit()
+
+    async def append_trace(
+        self,
+        *,
+        trace_type: str,
+        phase: str,
+        content: str,
+        payload_json: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._append_trace_sync,
+                trace_type,
+                phase,
+                content,
+                payload_json,
+                created_at,
+            )
+
+    def _append_trace_sync(
+        self,
+        trace_type: str,
+        phase: str,
+        content: str,
+        payload_json: str | None,
+        created_at: datetime | None,
+    ) -> None:
+        ts = (created_at or datetime.now(timezone.utc)).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO traces (trace_type, phase, content, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (trace_type, phase, content, payload_json, ts),
+            )
+            conn.commit()
+
+    async def upsert_daily_metrics(
+        self,
+        metric_date: date,
+        **increments: Any,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._upsert_daily_metrics_sync, metric_date, increments)
+
+    def _upsert_daily_metrics_sync(
+        self,
+        metric_date: date,
+        increments: dict[str, Any],
+    ) -> None:
+        metric_key = metric_date.isoformat()
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO soul_metrics (date, updated_at)
+                VALUES (?, ?)
+                ON CONFLICT(date) DO NOTHING
+                """,
+                (metric_key, updated_at),
+            )
+
+            allowed = {
+                "outreach_attempts",
+                "outreach_responses",
+                "outreach_ignored",
+                "outreach_timing_miss",
+                "outreach_rejected",
+                "inference_count",
+                "perception_corrections",
+                "phase_distribution_json",
+                "openness_avg",
+            }
+            for key, value in increments.items():
+                if key not in allowed:
+                    raise ValueError(f"Unsupported metrics field: {key}")
+                if key in {"phase_distribution_json", "openness_avg"}:
+                    conn.execute(
+                        f"UPDATE soul_metrics SET {key} = ?, updated_at = ? WHERE date = ?",
+                        (value, updated_at, metric_key),
+                    )
+                else:
+                    conn.execute(
+                        f"""
+                        UPDATE soul_metrics
+                        SET {key} = {key} + ?, updated_at = ?
+                        WHERE date = ?
+                        """,
+                        (int(value), updated_at, metric_key),
+                    )
+            conn.commit()
+
+    async def cleanup_traces_older_than(self, cutoff: datetime) -> int:
+        async with self._lock:
+            return await asyncio.to_thread(self._cleanup_traces_sync, cutoff)
+
+    def _cleanup_traces_sync(self, cutoff: datetime) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM traces WHERE created_at < ?",
+                (cutoff.astimezone(timezone.utc).isoformat(),),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
