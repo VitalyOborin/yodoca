@@ -163,3 +163,4 @@ operational outputs.
 - `docs/research/soul_dev_plan.md`
 - `docs/research/soul_anti_patterns.md`
 - `docs/research/soul_event_namespace.md`
+- `docs/research/soul_outreach_correlation.md`

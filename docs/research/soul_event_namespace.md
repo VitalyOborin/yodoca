@@ -123,6 +123,9 @@ Emission rules:
 
 - Emit once when the result is finalized
 - Never emit duplicate outcomes for the same outreach window
+- `response` means first inbound user message within the 60-minute response window
+- `timing_miss` means no reply and low confidence that the user was available
+- `ignored` means no reply despite sufficiently high estimated availability
 
 Primary consumers:
 
