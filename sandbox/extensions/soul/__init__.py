@@ -1,0 +1,1 @@
+"""Soul extension foundation package."""
