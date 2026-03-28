@@ -23,5 +23,9 @@ events:
       description: "Companion behavioral phase changed."
     - topic: companion.presence.updated
       description: "Companion visible presence changed."
+    - topic: companion.outreach.attempted
+      description: "Companion initiated proactive outreach."
+    - topic: companion.outreach.result
+      description: "Companion outreach was resolved."
 
 enabled: true

@@ -14,7 +14,16 @@ from sandbox.extensions.soul.drives import (
     tick_homeostasis,
     transition_phase,
 )
-from sandbox.extensions.soul.models import CompanionState, Phase, PresenceState
+from sandbox.extensions.soul.initiative import (
+    register_outreach_attempt,
+    resolve_outreach,
+)
+from sandbox.extensions.soul.models import (
+    CompanionState,
+    OutreachResult,
+    Phase,
+    PresenceState,
+)
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
     infer_signals,
@@ -161,6 +170,7 @@ class SoulExtension:
             raise RuntimeError("Soul extension is not initialized")
 
         now = now or datetime.now(UTC)
+        await self._resolve_pending_outreach_timeout(now)
         phase_before = self._state.homeostasis.current_phase
         presence_before = self._state.presence
         dt = max(
@@ -295,6 +305,7 @@ class SoulExtension:
             0.05,
             self._state.homeostasis.social_hunger - 0.20,
         )
+        await self._resolve_pending_outreach_response(now)
         await self._storage.append_interaction(
             direction="inbound",
             channel_id=self._extract_channel_id(payload),
@@ -336,6 +347,101 @@ class SoulExtension:
             phase=self._state.homeostasis.current_phase.value,
             content=f"Thread {thread_id} completed",
             created_at=now,
+        )
+
+    async def _send_outreach(
+        self,
+        text: str,
+        *,
+        channel_id: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        if self._ctx is None or self._storage is None or self._state is None:
+            raise RuntimeError("Soul extension is not initialized")
+
+        now = now or datetime.now(UTC)
+        outreach_id = f"outreach-{int(now.timestamp())}"
+        self._state.initiative = register_outreach_attempt(
+            self._state.initiative,
+            outreach_id=outreach_id,
+            channel_id=channel_id,
+            availability_at_send=self._state.user_presence.estimated_availability,
+            now=now,
+        )
+        await self._ctx.notify_user(text, channel_id=channel_id)
+        await self._storage.append_interaction(
+            direction="outbound",
+            channel_id=channel_id,
+            created_at=now,
+        )
+        await self._storage.upsert_daily_metrics(now.date(), outreach_attempts=1)
+        await self._ctx.emit(
+            "companion.outreach.attempted",
+            {
+                "channel": channel_id,
+                "social_hunger": self._state.homeostasis.social_hunger,
+                "text_preview": text[:80],
+                "attempted_at": now.isoformat(),
+            },
+        )
+        await self._persist_state(now)
+
+    async def _resolve_pending_outreach_response(self, now: datetime) -> None:
+        if self._state is None or self._storage is None or self._ctx is None:
+            return
+        pending = self._state.initiative.pending_outreach
+        if pending is None or now > pending.window_deadline_at:
+            return
+
+        self._state.initiative = resolve_outreach(
+            self._state.initiative,
+            result=OutreachResult.RESPONSE,
+            now=now,
+        )
+        delay_seconds = int((now - pending.attempted_at).total_seconds())
+        await self._storage.upsert_daily_metrics(now.date(), outreach_responses=1)
+        await self._ctx.emit(
+            "companion.outreach.result",
+            {
+                "channel": pending.channel_id,
+                "result": OutreachResult.RESPONSE.value,
+                "delay_seconds": delay_seconds,
+                "resolved_at": now.isoformat(),
+            },
+        )
+
+    async def _resolve_pending_outreach_timeout(self, now: datetime) -> None:
+        if self._state is None or self._storage is None or self._ctx is None:
+            return
+        pending = self._state.initiative.pending_outreach
+        if pending is None or now <= pending.window_deadline_at:
+            return
+
+        result = (
+            OutreachResult.IGNORED
+            if pending.availability_at_send >= 0.5
+            else OutreachResult.TIMING_MISS
+        )
+        self._state.initiative = resolve_outreach(
+            self._state.initiative,
+            result=result,
+            now=now,
+            apply_cooldown=result is OutreachResult.IGNORED,
+        )
+        metric_key = (
+            "outreach_ignored"
+            if result is OutreachResult.IGNORED
+            else "outreach_timing_miss"
+        )
+        await self._storage.upsert_daily_metrics(now.date(), **{metric_key: 1})
+        await self._ctx.emit(
+            "companion.outreach.result",
+            {
+                "channel": pending.channel_id,
+                "result": result.value,
+                "delay_seconds": None,
+                "resolved_at": now.isoformat(),
+            },
         )
 
     async def _refresh_user_presence(self, now: datetime) -> None:

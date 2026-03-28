@@ -28,6 +28,7 @@ class FakeSoulContext:
         self.extension_dir = Path("sandbox/extensions/soul")
         self.logger = logging.getLogger(logger_name)
         self.events: list[tuple[str, dict[str, Any]]] = []
+        self.notifications: list[tuple[str, str | None]] = []
         self.router_subscriptions: dict[str, Any] = {}
         self.bus_subscriptions: dict[str, Any] = {}
 
@@ -36,6 +37,9 @@ class FakeSoulContext:
 
     async def emit(self, topic: str, payload: dict[str, Any]) -> None:
         self.events.append((topic, payload))
+
+    async def notify_user(self, text: str, channel_id: str | None = None) -> None:
+        self.notifications.append((text, channel_id))
 
     def subscribe(self, event: str, handler: Any) -> None:
         self.router_subscriptions[event] = handler
