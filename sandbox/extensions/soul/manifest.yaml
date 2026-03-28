@@ -1,0 +1,27 @@
+id: soul
+name: Soul Companion Runtime
+version: "0.1.0"
+
+entrypoint: main:SoulExtension
+
+description: |
+  Behavioral runtime for the Soul companion subsystem. Owns internal state,
+  phase/presence dynamics, initiative policy, relationship metrics, and
+  observability for the living companion model.
+
+depends_on:
+  - kv
+
+config:
+  tick_interval_seconds: 30
+  persist_interval_seconds: 60
+  context_token_budget: 200
+
+events:
+  publishes:
+    - topic: companion.phase.changed
+      description: "Companion behavioral phase changed."
+    - topic: companion.presence.updated
+      description: "Companion visible presence changed."
+
+enabled: true
