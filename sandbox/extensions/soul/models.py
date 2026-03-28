@@ -44,6 +44,13 @@ class PresenceState(StrEnum):
     REFLECTIVE = "REFLECTIVE"
 
 
+class OutreachResult(StrEnum):
+    RESPONSE = "response"
+    IGNORED = "ignored"
+    TIMING_MISS = "timing_miss"
+    REJECTED = "rejected"
+
+
 @dataclass(slots=True)
 class PerceptionSignals:
     stress_signal: float = 0.0
@@ -80,6 +87,130 @@ class TemperamentProfile:
     caution: float = 0.5
     sensitivity: float = 0.5
     persistence: float = 0.5
+
+
+@dataclass(slots=True)
+class PendingOutreach:
+    outreach_id: str
+    channel_id: str | None
+    attempted_at: datetime
+    availability_at_send: float
+    window_deadline_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "outreach_id": self.outreach_id,
+            "channel_id": self.channel_id,
+            "attempted_at": _serialize_datetime(self.attempted_at),
+            "availability_at_send": self.availability_at_send,
+            "window_deadline_at": _serialize_datetime(self.window_deadline_at),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PendingOutreach:
+        return cls(
+            outreach_id=str(data["outreach_id"]),
+            channel_id=data.get("channel_id"),
+            attempted_at=_deserialize_datetime(data["attempted_at"]),
+            availability_at_send=float(data["availability_at_send"]),
+            window_deadline_at=_deserialize_datetime(data["window_deadline_at"]),
+        )
+
+
+@dataclass(slots=True)
+class InitiativeBudget:
+    daily_budget: int = 1
+    used_today: int = 0
+    last_reset_at: datetime = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "daily_budget": self.daily_budget,
+            "used_today": self.used_today,
+            "last_reset_at": _serialize_datetime(self.last_reset_at),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> InitiativeBudget:
+        return cls(
+            daily_budget=int(data.get("daily_budget", 1)),
+            used_today=int(data.get("used_today", 0)),
+            last_reset_at=_deserialize_datetime(data["last_reset_at"])
+            if data.get("last_reset_at")
+            else utc_now(),
+        )
+
+
+@dataclass(slots=True)
+class InitiativeState:
+    budget: InitiativeBudget = field(default_factory=InitiativeBudget)
+    pending_outreach: PendingOutreach | None = None
+    cooldown_until: datetime | None = None
+    adaptive_threshold: float = 0.75
+    last_outreach_at: datetime | None = None
+    last_outreach_result: OutreachResult | None = None
+    last_result_at: datetime | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "budget": self.budget.to_dict(),
+            "pending_outreach": (
+                self.pending_outreach.to_dict() if self.pending_outreach else None
+            ),
+            "cooldown_until": (
+                _serialize_datetime(self.cooldown_until)
+                if self.cooldown_until is not None
+                else None
+            ),
+            "adaptive_threshold": self.adaptive_threshold,
+            "last_outreach_at": (
+                _serialize_datetime(self.last_outreach_at)
+                if self.last_outreach_at is not None
+                else None
+            ),
+            "last_outreach_result": (
+                self.last_outreach_result.value
+                if self.last_outreach_result is not None
+                else None
+            ),
+            "last_result_at": (
+                _serialize_datetime(self.last_result_at)
+                if self.last_result_at is not None
+                else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> InitiativeState:
+        return cls(
+            budget=InitiativeBudget.from_dict(data.get("budget", {})),
+            pending_outreach=(
+                PendingOutreach.from_dict(data["pending_outreach"])
+                if data.get("pending_outreach")
+                else None
+            ),
+            cooldown_until=(
+                _deserialize_datetime(data["cooldown_until"])
+                if data.get("cooldown_until")
+                else None
+            ),
+            adaptive_threshold=float(data.get("adaptive_threshold", 0.75)),
+            last_outreach_at=(
+                _deserialize_datetime(data["last_outreach_at"])
+                if data.get("last_outreach_at")
+                else None
+            ),
+            last_outreach_result=(
+                OutreachResult(data["last_outreach_result"])
+                if data.get("last_outreach_result")
+                else None
+            ),
+            last_result_at=(
+                _deserialize_datetime(data["last_result_at"])
+                if data.get("last_result_at")
+                else None
+            ),
+        )
 
 
 @dataclass(slots=True)
@@ -130,6 +261,7 @@ class CompanionState:
     mood: float = 0.0
     tick_count: int = 0
     perception: PerceptionSignals = field(default_factory=PerceptionSignals)
+    initiative: InitiativeState = field(default_factory=InitiativeState)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,6 +272,7 @@ class CompanionState:
             "mood": self.mood,
             "tick_count": self.tick_count,
             "perception": self.perception.to_dict(),
+            "initiative": self.initiative.to_dict(),
             "temperament": asdict(self.temperament),
         }
 
@@ -155,6 +288,7 @@ class CompanionState:
             mood=float(data["mood"]),
             tick_count=int(data["tick_count"]),
             perception=PerceptionSignals.from_dict(data.get("perception", {})),
+            initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),
         )
 

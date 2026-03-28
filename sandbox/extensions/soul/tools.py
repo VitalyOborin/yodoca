@@ -20,4 +20,5 @@ class SoulStateResult(BaseModel):
     last_tick_at: str | None = None
     drives: dict[str, float] = Field(default_factory=dict)
     perception: dict[str, float] = Field(default_factory=dict)
+    initiative: dict[str, str | int | float | None] = Field(default_factory=dict)
     error: str | None = None

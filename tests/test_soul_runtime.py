@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conftest import FakeSoulContext
+
 from sandbox.extensions.soul.main import SoulExtension
 from sandbox.extensions.soul.models import Phase, PresenceState
 
@@ -171,4 +172,5 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert snapshot.tick_count == 5
     assert snapshot.time_in_phase_seconds >= 420
     assert "curiosity" in snapshot.drives
+    assert "daily_budget" in snapshot.initiative
     assert len(ext.get_tools()) == 1

@@ -448,4 +448,24 @@ class SoulExtension:
                 "overstimulation": self._state.homeostasis.overstimulation,
             },
             perception=self._state.perception.to_dict(),
+            initiative={
+                "daily_budget": self._state.initiative.budget.daily_budget,
+                "used_today": self._state.initiative.budget.used_today,
+                "adaptive_threshold": self._state.initiative.adaptive_threshold,
+                "pending_outreach_id": (
+                    self._state.initiative.pending_outreach.outreach_id
+                    if self._state.initiative.pending_outreach is not None
+                    else None
+                ),
+                "cooldown_until": (
+                    self._state.initiative.cooldown_until.isoformat()
+                    if self._state.initiative.cooldown_until is not None
+                    else None
+                ),
+                "last_outreach_result": (
+                    self._state.initiative.last_outreach_result.value
+                    if self._state.initiative.last_outreach_result is not None
+                    else None
+                ),
+            },
         )
