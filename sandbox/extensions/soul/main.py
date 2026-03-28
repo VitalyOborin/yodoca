@@ -383,11 +383,11 @@ class SoulExtension:
         if self._state is None:
             return "Stay grounded."
         perception = self._state.perception
-        if perception.fatigue_signal >= 0.55:
+        if perception.fatigue_signal >= 0.45:
             return "User seems tired; be brief and present."
-        if perception.withdrawal_signal >= 0.55:
+        if perception.withdrawal_signal >= 0.45:
             return "User seems closed off; avoid pushing."
-        if perception.openness_signal >= 0.55:
+        if perception.openness_signal >= 0.45:
             return "User seems open; gentle depth is okay."
 
         phase = self._state.homeostasis.current_phase
