@@ -53,6 +53,15 @@ COUPLING_MATRIX: dict[Phase, dict[str, float]] = {
     Phase.AMBIENT: {},
 }
 
+PHASE_SATIATION: dict[Phase, dict[str, float]] = {
+    Phase.CURIOUS: {"curiosity": 0.010},
+    Phase.SOCIAL: {"social_hunger": 0.014},
+    Phase.REFLECTIVE: {"reflection_need": 0.012},
+    Phase.RESTING: {"rest_need": 0.020, "overstimulation": 0.025},
+    Phase.CARE: {"care_impulse": 0.012},
+    Phase.AMBIENT: {"overstimulation": 0.003},
+}
+
 
 def circadian_modifier(hour: int) -> dict[str, float]:
     if 6 <= hour < 10:
@@ -137,13 +146,24 @@ def tick_homeostasis(
         modifier *= 1.0 + coupling.get(name, 0.0)
         return clamp_drive(current + (DRIVE_GROWTH_RATE * modifier * minutes))
 
+    values = {
+        "curiosity": grow("curiosity", state.curiosity),
+        "social_hunger": grow("social_hunger", state.social_hunger),
+        "rest_need": grow("rest_need", state.rest_need),
+        "reflection_need": grow("reflection_need", state.reflection_need),
+        "care_impulse": grow("care_impulse", state.care_impulse),
+        "overstimulation": grow("overstimulation", state.overstimulation),
+    }
+    for drive_name, satiation_rate in PHASE_SATIATION.get(state.current_phase, {}).items():
+        values[drive_name] = clamp_drive(values[drive_name] - (satiation_rate * minutes))
+
     return HomeostasisState(
-        curiosity=grow("curiosity", state.curiosity),
-        social_hunger=grow("social_hunger", state.social_hunger),
-        rest_need=grow("rest_need", state.rest_need),
-        reflection_need=grow("reflection_need", state.reflection_need),
-        care_impulse=grow("care_impulse", state.care_impulse),
-        overstimulation=grow("overstimulation", state.overstimulation),
+        curiosity=values["curiosity"],
+        social_hunger=values["social_hunger"],
+        rest_need=values["rest_need"],
+        reflection_need=values["reflection_need"],
+        care_impulse=values["care_impulse"],
+        overstimulation=values["overstimulation"],
         current_phase=state.current_phase,
         phase_entered_at=state.phase_entered_at,
         last_tick_at=now,
