@@ -20,6 +20,10 @@ from sandbox.extensions.soul.perception import (
     infer_signals,
     smooth_signals,
 )
+from sandbox.extensions.soul.presence import (
+    estimate_availability,
+    normalize_presence_now,
+)
 from sandbox.extensions.soul.storage import SoulStorage
 from sandbox.extensions.soul.tools import SoulStateResult
 from sandbox.extensions.soul.wake import restore_after_gap
@@ -268,7 +272,7 @@ class SoulExtension:
         if not text:
             return
 
-        now = datetime.now(UTC)
+        now = normalize_presence_now()
         gap_since_user = (
             (now - self._last_user_message_at).total_seconds()
             if self._last_user_message_at is not None
@@ -300,6 +304,7 @@ class SoulExtension:
             created_at=now,
         )
         await self._storage.upsert_daily_metrics(now.date(), message_count=1)
+        await self._refresh_user_presence(now)
         await self._persist_state(now)
         self._last_user_message_at = now
 
@@ -307,12 +312,13 @@ class SoulExtension:
         if self._storage is None:
             return
 
-        now = datetime.now(UTC)
+        now = normalize_presence_now()
         await self._storage.append_interaction(
             direction="outbound",
             channel_id=self._extract_channel_id(payload),
             created_at=now,
         )
+        await self._refresh_user_presence(now)
         self._last_agent_response_at = now
 
     async def _on_thread_completed(self, event: Event) -> None:
@@ -330,6 +336,29 @@ class SoulExtension:
             phase=self._state.homeostasis.current_phase.value,
             content=f"Thread {thread_id} completed",
             created_at=now,
+        )
+
+    async def _refresh_user_presence(self, now: datetime) -> None:
+        if self._storage is None or self._state is None:
+            return
+
+        summary = await self._storage.get_presence_summary(
+            hour=now.hour,
+            day_of_week=now.weekday(),
+            since=now - timedelta(days=14),
+        )
+        last_interaction_raw = summary.get("last_interaction_at")
+        last_interaction_at = (
+            datetime.fromisoformat(str(last_interaction_raw))
+            if last_interaction_raw
+            else now
+        )
+        self._state.user_presence.last_interaction_at = last_interaction_at
+        self._state.user_presence.estimated_availability = estimate_availability(
+            now=now,
+            last_interaction_at=last_interaction_at,
+            slot_interactions=int(summary["slot_interactions"]),
+            total_interactions=int(summary["total_interactions"]),
         )
 
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
@@ -465,6 +494,16 @@ class SoulExtension:
                 "last_outreach_result": (
                     self._state.initiative.last_outreach_result.value
                     if self._state.initiative.last_outreach_result is not None
+                    else None
+                ),
+            },
+            user_presence={
+                "estimated_availability": (
+                    self._state.user_presence.estimated_availability
+                ),
+                "last_interaction_at": (
+                    self._state.user_presence.last_interaction_at.isoformat()
+                    if self._state.user_presence.last_interaction_at is not None
                     else None
                 ),
             },

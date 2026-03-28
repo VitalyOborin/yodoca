@@ -240,6 +240,50 @@ class SoulStorage:
         async with self._lock:
             return await asyncio.to_thread(self._cleanup_traces_sync, cutoff)
 
+    async def get_presence_summary(
+        self,
+        *,
+        hour: int,
+        day_of_week: int,
+        since: datetime,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_presence_summary_sync,
+                hour,
+                day_of_week,
+                since,
+            )
+
+    def _get_presence_summary_sync(
+        self,
+        hour: int,
+        day_of_week: int,
+        since: datetime,
+    ) -> dict[str, Any]:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_interactions,
+                SUM(
+                    CASE
+                        WHEN hour = ? AND day_of_week = ? THEN 1
+                        ELSE 0
+                    END
+                ) AS slot_interactions,
+                MAX(created_at) AS last_interaction_at
+            FROM interaction_log
+            WHERE created_at >= ?
+            """,
+            (hour, day_of_week, since.astimezone(UTC).isoformat()),
+        ).fetchone()
+        return {
+            "total_interactions": int(row["total_interactions"] or 0),
+            "slot_interactions": int(row["slot_interactions"] or 0),
+            "last_interaction_at": row["last_interaction_at"],
+        }
+
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
         conn = self._get_conn()
         cursor = conn.execute(

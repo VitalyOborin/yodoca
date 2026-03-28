@@ -42,8 +42,15 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
         channel_id="cli_channel",
         response_delay_s=42,
     )
+    summary = await storage.get_presence_summary(
+        hour=datetime.now(UTC).hour,
+        day_of_week=datetime.now(UTC).weekday(),
+        since=datetime.now(UTC) - timedelta(days=14),
+    )
 
     assert deleted == 1
+    assert summary["total_interactions"] >= 1
+    assert summary["last_interaction_at"] is not None
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(

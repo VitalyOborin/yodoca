@@ -52,6 +52,33 @@ class OutreachResult(StrEnum):
 
 
 @dataclass(slots=True)
+class UserPresenceState:
+    last_interaction_at: datetime | None = None
+    estimated_availability: float = 0.3
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "last_interaction_at": (
+                _serialize_datetime(self.last_interaction_at)
+                if self.last_interaction_at is not None
+                else None
+            ),
+            "estimated_availability": self.estimated_availability,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> UserPresenceState:
+        return cls(
+            last_interaction_at=(
+                _deserialize_datetime(data["last_interaction_at"])
+                if data.get("last_interaction_at")
+                else None
+            ),
+            estimated_availability=float(data.get("estimated_availability", 0.3)),
+        )
+
+
+@dataclass(slots=True)
 class PerceptionSignals:
     stress_signal: float = 0.0
     withdrawal_signal: float = 0.0
@@ -261,6 +288,7 @@ class CompanionState:
     mood: float = 0.0
     tick_count: int = 0
     perception: PerceptionSignals = field(default_factory=PerceptionSignals)
+    user_presence: UserPresenceState = field(default_factory=UserPresenceState)
     initiative: InitiativeState = field(default_factory=InitiativeState)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
 
@@ -272,6 +300,7 @@ class CompanionState:
             "mood": self.mood,
             "tick_count": self.tick_count,
             "perception": self.perception.to_dict(),
+            "user_presence": self.user_presence.to_dict(),
             "initiative": self.initiative.to_dict(),
             "temperament": asdict(self.temperament),
         }
@@ -288,6 +317,7 @@ class CompanionState:
             mood=float(data["mood"]),
             tick_count=int(data["tick_count"]),
             perception=PerceptionSignals.from_dict(data.get("perception", {})),
+            user_presence=UserPresenceState.from_dict(data.get("user_presence", {})),
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),
         )

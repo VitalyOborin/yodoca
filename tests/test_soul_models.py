@@ -13,6 +13,7 @@ def test_companion_state_json_round_trip() -> None:
     state.mood = 0.25
     state.tick_count = 42
     state.perception.openness_signal = 0.6
+    state.user_presence.estimated_availability = 0.55
     state.initiative.budget.used_today = 1
     state.initiative.last_outreach_result = OutreachResult.RESPONSE
     state.temperament.playfulness = 0.7
@@ -25,6 +26,7 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.mood == 0.25
     assert restored.tick_count == 42
     assert restored.perception.openness_signal == 0.6
+    assert restored.user_presence.estimated_availability == 0.55
     assert restored.initiative.budget.used_today == 1
     assert restored.initiative.last_outreach_result is OutreachResult.RESPONSE
     assert restored.temperament.playfulness == 0.7

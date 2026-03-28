@@ -132,6 +132,7 @@ async def test_user_message_updates_perception_and_social_hunger(
     assert ext._state.homeostasis.social_hunger < 0.6
     assert ext._state.perception.withdrawal_signal > 0.1
     assert ext._last_user_message_at is not None
+    assert ext._state.user_presence.estimated_availability >= 0.3
 
 
 async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
@@ -173,4 +174,5 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert snapshot.time_in_phase_seconds >= 420
     assert "curiosity" in snapshot.drives
     assert "daily_budget" in snapshot.initiative
+    assert "estimated_availability" in snapshot.user_presence
     assert len(ext.get_tools()) == 1
