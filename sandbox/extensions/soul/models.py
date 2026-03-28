@@ -8,24 +8,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _serialize_datetime(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def _deserialize_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     AMBIENT = "AMBIENT"
     CURIOUS = "CURIOUS"
     SOCIAL = "SOCIAL"
@@ -34,7 +34,7 @@ class Phase(str, Enum):
     CARE = "CARE"
 
 
-class PresenceState(str, Enum):
+class PresenceState(StrEnum):
     SILENT = "SILENT"
     AMBIENT = "AMBIENT"
     ATTENTIVE = "ATTENTIVE"
@@ -80,7 +80,7 @@ class HomeostasisState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "HomeostasisState":
+    def from_dict(cls, data: dict[str, Any]) -> HomeostasisState:
         return cls(
             curiosity=float(data["curiosity"]),
             social_hunger=float(data["social_hunger"]),
@@ -117,7 +117,7 @@ class CompanionState:
         return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CompanionState":
+    def from_dict(cls, data: dict[str, Any]) -> CompanionState:
         return cls(
             version=int(data["version"]),
             homeostasis=HomeostasisState.from_dict(data["homeostasis"]),
@@ -128,5 +128,5 @@ class CompanionState:
         )
 
     @classmethod
-    def from_json(cls, payload: str) -> "CompanionState":
+    def from_json(cls, payload: str) -> CompanionState:
         return cls.from_dict(json.loads(payload))

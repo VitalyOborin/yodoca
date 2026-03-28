@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sandbox.extensions.soul.drives import (
     HYSTERESIS_MARGIN,
@@ -24,7 +24,7 @@ def test_tick_homeostasis_clamps_values() -> None:
     updated = tick_homeostasis(
         state,
         dt=timedelta(hours=5),
-        now=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
     )
 
     assert updated.curiosity <= 0.95
@@ -36,7 +36,7 @@ def test_tick_homeostasis_clamps_values() -> None:
 
 
 def test_social_phase_biases_reflection_over_curiosity() -> None:
-    entered = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    entered = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = HomeostasisState(
         curiosity=0.30,
         social_hunger=0.40,
@@ -63,7 +63,7 @@ def test_social_phase_biases_reflection_over_curiosity() -> None:
 
 
 def test_resolve_phase_respects_min_dwell_time() -> None:
-    now = datetime(2026, 3, 29, 12, 3, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 12, 3, tzinfo=UTC)
     state = HomeostasisState(
         curiosity=0.20,
         social_hunger=0.80,
@@ -80,7 +80,7 @@ def test_resolve_phase_respects_min_dwell_time() -> None:
 
 
 def test_transition_phase_updates_phase_and_timestamp() -> None:
-    now = datetime(2026, 3, 29, 20, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 20, 0, tzinfo=UTC)
     state = HomeostasisState()
 
     transitioned = transition_phase(state, Phase.REFLECTIVE, now=now)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sandbox.extensions.soul.models import HomeostasisState, Phase
 
@@ -94,7 +94,7 @@ def resolve_phase(
     hysteresis_margin: float = HYSTERESIS_MARGIN,
     min_dwell_time: timedelta = MIN_DWELL_TIME,
 ) -> Phase:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     if state.overstimulation >= OVERSTIMULATION_REST_THRESHOLD:
         return Phase.RESTING
@@ -109,9 +109,7 @@ def resolve_phase(
         return Phase.AMBIENT
 
     current_score = (
-        scores[state.current_phase]
-        if state.current_phase in scores
-        else 0.0
+        scores[state.current_phase] if state.current_phase in scores else 0.0
     )
     if state.current_phase is not Phase.AMBIENT:
         if top_phase is state.current_phase:
@@ -133,7 +131,7 @@ def tick_homeostasis(
     dt: timedelta,
     now: datetime | None = None,
 ) -> HomeostasisState:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     minutes = max(dt.total_seconds() / 60.0, 0.0)
     if minutes == 0:
         return replace(state, last_tick_at=now)
@@ -154,8 +152,12 @@ def tick_homeostasis(
         "care_impulse": grow("care_impulse", state.care_impulse),
         "overstimulation": grow("overstimulation", state.overstimulation),
     }
-    for drive_name, satiation_rate in PHASE_SATIATION.get(state.current_phase, {}).items():
-        values[drive_name] = clamp_drive(values[drive_name] - (satiation_rate * minutes))
+    for drive_name, satiation_rate in PHASE_SATIATION.get(
+        state.current_phase, {}
+    ).items():
+        values[drive_name] = clamp_drive(
+            values[drive_name] - (satiation_rate * minutes)
+        )
 
     return HomeostasisState(
         curiosity=values["curiosity"],
@@ -176,7 +178,7 @@ def transition_phase(
     *,
     now: datetime | None = None,
 ) -> HomeostasisState:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if new_phase is state.current_phase:
         return replace(state, last_tick_at=now)
     return replace(
