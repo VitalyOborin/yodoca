@@ -48,6 +48,10 @@ PHASE_TO_MOOD: dict[Phase, float] = {
 class SoulExtension:
     """ServiceProvider + ContextProvider runtime for the soul extension."""
 
+    @property
+    def context_priority(self) -> int:
+        return 60
+
     def __init__(self) -> None:
         self._ctx: ExtensionContext | None = None
         self._storage: SoulStorage | None = None
@@ -318,6 +322,24 @@ class SoulExtension:
             created_at=now,
         )
 
+    async def get_context(self, prompt: str, turn_context: object) -> str | None:
+        del prompt, turn_context
+        if self._state is None:
+            return None
+
+        mood_label = self._mood_label(self._state.mood)
+        note = self._context_note()
+        context = (
+            "Soul state:\n"
+            f"- phase: {self._state.homeostasis.current_phase.value.lower()}\n"
+            f"- presence: {self._state.presence.value.lower()}\n"
+            f"- mood: {mood_label}\n"
+            f"- note: {note}"
+        )
+        if len(context.split()) > 80:
+            return "\n".join(context.splitlines()[:4])
+        return context
+
     def _extract_channel_id(self, payload: dict[str, object]) -> str | None:
         channel = payload.get("channel")
         if channel is None:
@@ -333,3 +355,32 @@ class SoulExtension:
 
     def _derive_mood(self, phase: Phase) -> float:
         return PHASE_TO_MOOD[phase]
+
+    def _mood_label(self, mood: float) -> str:
+        if mood >= 0.35:
+            return "warm"
+        if mood >= 0.15:
+            return "steady"
+        if mood <= -0.15:
+            return "quiet"
+        return "neutral"
+
+    def _context_note(self) -> str:
+        if self._state is None:
+            return "Stay grounded."
+        perception = self._state.perception
+        if perception.fatigue_signal >= 0.55:
+            return "User seems tired; be brief and present."
+        if perception.withdrawal_signal >= 0.55:
+            return "User seems closed off; avoid pushing."
+        if perception.openness_signal >= 0.55:
+            return "User seems open; gentle depth is okay."
+
+        phase = self._state.homeostasis.current_phase
+        if phase is Phase.REFLECTIVE:
+            return "Lean thoughtful, not solution-heavy."
+        if phase is Phase.RESTING:
+            return "Keep the tone calm and low-pressure."
+        if phase is Phase.CURIOUS:
+            return "Light curiosity is natural right now."
+        return "Be present before being useful."

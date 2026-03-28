@@ -155,3 +155,23 @@ async def test_user_message_updates_perception_and_social_hunger(
     assert ext._state.homeostasis.social_hunger < 0.6
     assert ext._state.perception.withdrawal_signal > 0.1
     assert ext._last_user_message_at is not None
+
+
+async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
+    context = FakeContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.perception.fatigue_signal = 0.7
+    ext._state.presence = PresenceState.WARM
+    ext._state.mood = 0.4
+
+    result = await ext.get_context("hello", object())
+
+    assert result is not None
+    assert "phase:" in result
+    assert "presence:" in result
+    assert "mood: warm" in result
+    assert "User seems tired; be brief and present." in result
+    assert len(result.split()) < 80
