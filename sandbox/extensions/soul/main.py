@@ -93,12 +93,20 @@ class SoulExtension:
         self._last_error = None
 
     def health_check(self) -> bool:
-        return (
-            self._ctx is not None
-            and self._storage is not None
-            and self._state is not None
-            and self._last_error is None
-        )
+        if (
+            self._ctx is None
+            or self._storage is None
+            or self._state is None
+            or self._last_error is not None
+        ):
+            return False
+        if not self._started:
+            return True
+
+        heartbeat = self._last_tick_started_at or self._state.homeostasis.last_tick_at
+        stale_after = self._tick_interval_seconds * 2
+        age_seconds = (datetime.now(UTC) - heartbeat).total_seconds()
+        return age_seconds <= stale_after
 
     async def run_background(self) -> None:
         while self._started:

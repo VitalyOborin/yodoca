@@ -78,3 +78,39 @@ async def test_run_background_advances_ticks_until_stopped(tmp_path: Path) -> No
     assert ext._state.tick_count > 0
     assert ext._last_tick_finished_at is not None
     assert ext.health_check() is True
+
+
+async def test_health_check_fails_for_stale_heartbeat(tmp_path: Path) -> None:
+    context = FakeContext(
+        tmp_path,
+        {
+            "tick_interval_seconds": 10,
+            "persist_interval_seconds": 60,
+        },
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._started = True
+    ext._last_tick_started_at = datetime.now(UTC) - timedelta(seconds=25)
+
+    assert ext.health_check() is False
+
+
+async def test_health_check_uses_recent_state_tick_when_loop_idle(tmp_path: Path) -> None:
+    context = FakeContext(
+        tmp_path,
+        {
+            "tick_interval_seconds": 10,
+            "persist_interval_seconds": 60,
+        },
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._last_tick_started_at = None
+    ext._state.homeostasis.last_tick_at = datetime.now(UTC) - timedelta(seconds=5)
+
+    assert ext.health_check() is True
