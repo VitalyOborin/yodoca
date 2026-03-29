@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
-from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any
-
-from agents import Agent, ModelSettings, Runner
 
 from sandbox.extensions.soul.models import (
     CompanionState,
     DiscoveryState,
     DiscoveryTopicCoverage,
-    Phase,
     SoulLifecyclePhase,
 )
 from sandbox.extensions.soul.storage import SoulStorage
@@ -91,43 +85,10 @@ _DISCOVERY_TARGETS = {
         "social_floor": 0.20,
     },
 }
-_FALLBACK_QUESTIONS = {
-    "identity": "I still barely know you. What should I call you?",
-    "work": "I keep wondering what kind of work fills your days lately.",
-    "rhythm": "What does a normal day usually feel like for you right now?",
-    "communication": "What kind of pace feels natural to you when we talk?",
-    "interests": "Outside of work, what tends to pull your attention lately?",
-}
 
 
 class DiscoveryRuntime:
     """Explicit lifecycle FSM plus discovery note/question generation."""
-
-    def __init__(self) -> None:
-        self._agent: Agent | None = None
-
-    @property
-    def available(self) -> bool:
-        return self._agent is not None
-
-    def try_create_agent(self, model_router: Any, *, logger: logging.Logger) -> None:
-        try:
-            self._agent = Agent(
-                name="SoulDiscoveryGuide",
-                instructions=(
-                    "Write one short discovery-oriented companion message. "
-                    "It should feel gentle, curious, optional, and natural. "
-                    "Ask at most one question. Keep it under 28 words. "
-                    "No markdown, no quotes, no theatrical language."
-                ),
-                model=model_router.get_model("soul"),
-                model_settings=ModelSettings(parallel_tool_calls=False),
-            )
-        except Exception as exc:
-            logger.warning("soul: discovery model unavailable: %s", exc)
-
-    def destroy(self) -> None:
-        self._agent = None
 
     def apply_lifecycle_biases(self, state: CompanionState) -> None:
         targets = _DISCOVERY_TARGETS[state.discovery.lifecycle_phase]
@@ -196,42 +157,6 @@ class DiscoveryRuntime:
             created_at=now,
         )
 
-    async def maybe_build_outreach(
-        self,
-        *,
-        state: CompanionState,
-        storage: SoulStorage,
-        now: datetime,
-        logger: logging.Logger,
-        can_use_llm_fn: Callable[[], bool] | None = None,
-        note_llm_call_fn: Callable[[], Awaitable[None]] | None = None,
-    ) -> str | None:
-        if state.discovery.lifecycle_phase is SoulLifecyclePhase.MATURE:
-            return None
-        if state.homeostasis.current_phase not in {Phase.CURIOUS, Phase.SOCIAL}:
-            return None
-
-        topic = _lowest_topic(state.discovery.topics)
-        if topic is None:
-            return None
-
-        prompt = await self._build_prompt(storage, state, topic)
-        text = _FALLBACK_QUESTIONS[topic]
-        if self._agent is not None and (can_use_llm_fn is None or can_use_llm_fn()):
-            try:
-                result = await Runner.run(self._agent, prompt, max_turns=1)
-                if note_llm_call_fn is not None:
-                    await note_llm_call_fn()
-                candidate = (result.final_output or "").strip().splitlines()[0][:220]
-                if candidate:
-                    text = candidate
-            except Exception as exc:
-                logger.debug("soul: discovery outreach generation failed: %s", exc)
-
-        state.discovery.last_question_at = now
-        state.discovery.last_question_topic = topic
-        return text
-
     def context_note(self, state: CompanionState) -> str | None:
         phase = state.discovery.lifecycle_phase
         if phase is SoulLifecyclePhase.MATURE:
@@ -242,22 +167,6 @@ class DiscoveryRuntime:
                 return f"Still getting to know the user: {', '.join(missing[:2])}."
             return "Still in early discovery; keep curiosity gentle."
         return "Personality is still forming; favor consistency over intensity."
-
-    async def _build_prompt(
-        self,
-        storage: SoulStorage,
-        state: CompanionState,
-        topic: str,
-    ) -> str:
-        nodes = await storage.list_discovery_nodes(limit=4)
-        snippets = [f"- {item['topic']}: {item['content']}" for item in nodes[:3]]
-        return (
-            f"Lifecycle: {state.discovery.lifecycle_phase.value.lower()}\n"
-            f"Next topic: {topic}\n"
-            f"Interaction count: {state.discovery.interaction_count}\n"
-            f"Known discovery notes:\n{chr(10).join(snippets) if snippets else '- none yet'}\n"
-            "Write one gentle companion message that invites but does not pressure."
-        )
 
     def _next_phase(
         self,

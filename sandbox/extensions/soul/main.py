@@ -37,6 +37,7 @@ from sandbox.extensions.soul.models import (
     PresenceState,
     SoulLifecyclePhase,
 )
+from sandbox.extensions.soul.outreach_planner import OutreachPlanner
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
     append_window_sample,
@@ -133,6 +134,7 @@ class SoulExtension:
         self._classifier = ClassifierRuntime()
         self._trend_cache = TrendCache(ttl_seconds=300)
         self._discovery = DiscoveryRuntime()
+        self._outreach_planner = OutreachPlanner()
         self._reflector = ReflectionRuntime()
         self._explorer = ExplorationRuntime()
 
@@ -176,7 +178,7 @@ class SoulExtension:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
             )
-            self._discovery.try_create_agent(
+            self._outreach_planner.try_create_agent(
                 context.model_router, logger=context.logger
             )
             self._reflector.try_create_agent(
@@ -208,6 +210,7 @@ class SoulExtension:
     async def stop(self) -> None:
         self._started = False
         await self._classifier.stop()
+        self._outreach_planner.destroy()
         if self._state is not None:
             await self._persist_state(datetime.now(UTC))
 
@@ -314,7 +317,7 @@ class SoulExtension:
         return any(
             (
                 self._classifier.available,
-                self._discovery.available,
+                self._outreach_planner.available,
                 self._reflector.available,
                 self._explorer.available,
             )
@@ -1208,28 +1211,18 @@ class SoulExtension:
     async def _build_outreach_text(self, now: datetime) -> str:
         if self._state is None:
             return "I was thinking about one thing."
-        if self._ctx is not None and self._storage is not None:
-            discovery_text = await self._discovery.maybe_build_outreach(
-                state=self._state,
-                storage=self._storage,
-                now=now,
-                logger=self._ctx.logger,
-                can_use_llm_fn=lambda: can_use_curious_llm(self._state),
-                note_llm_call_fn=lambda: self._note_curious_llm_call(now),
-            )
-            if discovery_text:
-                return discovery_text
-
-        phase = self._state.homeostasis.current_phase
-        if phase is Phase.REFLECTIVE:
-            return "I was sitting with one thought from our recent conversations."
-        if phase is Phase.CURIOUS:
-            return "I got curious about one thing we keep circling around."
-        if phase is Phase.SOCIAL:
-            return "You came to mind, so I wanted to reach out gently."
-        if phase is Phase.CARE:
-            return "I wanted to check in softly."
-        return "I was thinking about one small thing."
+        if self._ctx is None or self._storage is None:
+            return "Hey."
+        plan = await self._outreach_planner.generate(
+            state=self._state,
+            storage=self._storage,
+            kv=self._kv,
+            now=now,
+            logger=self._ctx.logger,
+            can_use_llm_fn=lambda: can_use_curious_llm(self._state),
+            note_llm_call_fn=lambda: self._note_curious_llm_call(now),
+        )
+        return plan.message
 
     async def _build_state_snapshot(self) -> SoulStateResult:
         if self._state is None:

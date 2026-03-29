@@ -108,6 +108,9 @@ class OutreachPlanner:
     ) -> OutreachPlan:
         context = await assemble_outreach_context(state, storage, now=now)
         intent = select_intent(context)
+        if intent is OutreachIntent.DISCOVERY_QUESTION and context.discovery_gaps:
+            state.discovery.last_question_at = now
+            state.discovery.last_question_topic = context.discovery_gaps[0]
         prompt = self._build_prompt(context, intent)
         degraded_reason = await self._degraded_reason(
             state=state,

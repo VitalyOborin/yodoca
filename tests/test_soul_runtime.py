@@ -665,7 +665,7 @@ async def test_discovery_outreach_prefers_question_about_unknown_topic(
     now = datetime.now(UTC)
 
     with patch(
-        "sandbox.extensions.soul.discovery_runtime.Runner.run",
+        "sandbox.extensions.soul.outreach_planner.Runner.run",
         new=AsyncMock(
             return_value=SimpleNamespace(
                 final_output="What does a normal day usually feel like for you right now?"
