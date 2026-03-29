@@ -7,7 +7,7 @@ code so they can be reused by the simulator and later by the real extension.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -162,6 +162,31 @@ class TemperamentProfile:
     persistence: float = 0.5
     drift_events: int = 0
     seed_source: str = "default"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sociability": self.sociability,
+            "depth": self.depth,
+            "playfulness": self.playfulness,
+            "caution": self.caution,
+            "sensitivity": self.sensitivity,
+            "persistence": self.persistence,
+            "drift_events": self.drift_events,
+            "seed_source": self.seed_source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TemperamentProfile:
+        return cls(
+            sociability=float(data.get("sociability", 0.5)),
+            depth=float(data.get("depth", 0.5)),
+            playfulness=float(data.get("playfulness", 0.5)),
+            caution=float(data.get("caution", 0.5)),
+            sensitivity=float(data.get("sensitivity", 0.5)),
+            persistence=float(data.get("persistence", 0.5)),
+            drift_events=int(data.get("drift_events", 0)),
+            seed_source=str(data.get("seed_source", "default")),
+        )
 
 
 @dataclass(slots=True)
@@ -484,7 +509,7 @@ class CompanionState:
             "perception_window": self.perception_window.to_dict(),
             "user_presence": self.user_presence.to_dict(),
             "initiative": self.initiative.to_dict(),
-            "temperament": asdict(self.temperament),
+            "temperament": self.temperament.to_dict(),
             "discovery": self.discovery.to_dict(),
             "recovery": self.recovery.to_dict(),
         }
@@ -506,7 +531,7 @@ class CompanionState:
             ),
             user_presence=UserPresenceState.from_dict(data.get("user_presence", {})),
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
-            temperament=TemperamentProfile(**data["temperament"]),
+            temperament=TemperamentProfile.from_dict(data["temperament"]),
             discovery=DiscoveryState.from_dict(data.get("discovery", {})),
             recovery=RecoveryState.from_dict(data.get("recovery", {})),
         )

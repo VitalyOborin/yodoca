@@ -37,10 +37,10 @@ def test_mood_mean_reversion_applies_long_low_mood_floor() -> None:
     state.mood = -0.7
     state.recovery.low_mood_since = now - timedelta(hours=73)
 
-    apply_mood_mean_reversion(state, now=now, dt=timedelta(hours=1))
+    updated = apply_mood_mean_reversion(state, now=now, dt=timedelta(hours=1))
 
-    assert state.mood >= -0.3
-    assert state.recovery.last_recovery_reason == "mood_floor"
+    assert updated.mood >= -0.3
+    assert updated.recovery.last_recovery_reason == "mood_floor"
 
 
 async def test_no_llm_mode_keeps_runtime_alive_and_marks_degraded(

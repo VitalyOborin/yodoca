@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sandbox.extensions.soul.models import CompanionState
+from sandbox.extensions.soul.models import CompanionState, Phase
 
 _DRIVE_NAMES = (
     "curiosity",
@@ -67,3 +67,20 @@ def detect_drive_boundary_crossings(
             }
         )
     return crossings
+
+
+def detect_phase_transition(
+    *,
+    previous_phase: Phase,
+    current_phase: Phase,
+) -> dict[str, Any] | None:
+    if previous_phase is current_phase:
+        return None
+    return {
+        "trace_type": "phase_transition",
+        "content": f"Phase changed from {previous_phase.value} to {current_phase.value}.",
+        "payload": {
+            "from_phase": previous_phase.value,
+            "to_phase": current_phase.value,
+        },
+    }

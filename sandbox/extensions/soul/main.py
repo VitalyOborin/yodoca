@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents import function_tool
 
@@ -71,6 +72,7 @@ from sandbox.extensions.soul.tools import (
 from sandbox.extensions.soul.trace_policy import (
     detect_drive_boundary_crossings,
     detect_perception_shift,
+    detect_phase_transition,
 )
 from sandbox.extensions.soul.trends import (
     RelationshipTrend,
@@ -121,6 +123,7 @@ class SoulExtension:
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
         self._context_token_budget = 200
+        self._user_timezone: tzinfo = UTC
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
@@ -144,6 +147,9 @@ class SoulExtension:
         )
         self._context_token_budget = int(
             context.get_config("context_token_budget", 200)
+        )
+        self._user_timezone = self._load_user_timezone(
+            str(context.get_config("user_timezone", "UTC"))
         )
         self._reflector = ReflectionRuntime(
             max_per_day=int(context.get_config("max_reflections_per_day", 5)),
@@ -319,6 +325,23 @@ class SoulExtension:
             return
         set_llm_degraded(self._state, degraded=not self._llm_available())
 
+    def _load_user_timezone(self, value: str) -> tzinfo:
+        timezone_name = (value or "UTC").strip() or "UTC"
+        if timezone_name.upper() == "UTC":
+            return UTC
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            if self._ctx is not None:
+                self._ctx.logger.warning(
+                    "soul: unknown user_timezone '%s', falling back to UTC",
+                    timezone_name,
+                )
+            return UTC
+
+    def _localize_user_time(self, now: datetime) -> datetime:
+        return now.astimezone(self._user_timezone)
+
     async def _note_curious_llm_call(self, now: datetime) -> None:
         if self._state is None:
             return
@@ -331,6 +354,11 @@ class SoulExtension:
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
         await self._emit_phase_changed(
+            from_phase=previous_phase,
+            to_phase=self._state.homeostasis.current_phase,
+            now=now,
+        )
+        await self._maybe_trace_phase_transition(
             from_phase=previous_phase,
             to_phase=self._state.homeostasis.current_phase,
             now=now,
@@ -381,6 +409,11 @@ class SoulExtension:
                 to_phase=self._state.homeostasis.current_phase,
                 now=now,
             )
+            await self._maybe_trace_phase_transition(
+                from_phase=previous_phase,
+                to_phase=self._state.homeostasis.current_phase,
+                now=now,
+            )
             await self._emit_presence_updated(
                 from_presence=self._presence_for_phase(previous_phase),
                 to_presence=self._state.presence,
@@ -423,7 +456,7 @@ class SoulExtension:
             self._state.homeostasis.current_phase
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
-        apply_mood_mean_reversion(self._state, now=now, dt=dt)
+        self._state = apply_mood_mean_reversion(self._state, now=now, dt=dt)
         self._state.tick_count += 1
         await self._reconcile_discovery_lifecycle(
             now, permanent_patterns=permanent_patterns
@@ -438,13 +471,9 @@ class SoulExtension:
                 to_phase=self._state.homeostasis.current_phase,
                 now=now,
             )
-            await self._trace_event(
-                trace_type="phase_transition",
-                content=f"Phase changed from {phase_before.value} to {self._state.homeostasis.current_phase.value}",
-                payload={
-                    "from_phase": phase_before.value,
-                    "to_phase": self._state.homeostasis.current_phase.value,
-                },
+            await self._maybe_trace_phase_transition(
+                from_phase=phase_before,
+                to_phase=self._state.homeostasis.current_phase,
                 now=now,
             )
 
@@ -513,6 +542,20 @@ class SoulExtension:
             return
         for crossing in detect_drive_boundary_crossings(self._state, previous):
             await self._trace_event(**crossing, now=now)
+
+    async def _maybe_trace_phase_transition(
+        self,
+        *,
+        from_phase: Phase,
+        to_phase: Phase,
+        now: datetime,
+    ) -> None:
+        transition = detect_phase_transition(
+            previous_phase=from_phase,
+            current_phase=to_phase,
+        )
+        if transition is not None:
+            await self._trace_event(**transition, now=now)
 
     async def _trace_interaction(
         self,
@@ -816,7 +859,11 @@ class SoulExtension:
         ):
             return
 
-        outcome = check_outreach(self._state, now=now)
+        outcome = check_outreach(
+            self._state,
+            now=now,
+            local_hour=self._localize_user_time(now).hour,
+        )
         if outcome.decision is BoundaryDecision.BLOCK:
             return
         if outcome.decision is BoundaryDecision.DEFER:

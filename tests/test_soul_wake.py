@@ -1,6 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
-from sandbox.extensions.soul.models import CompanionState, PerceptionSignals, Phase
+from sandbox.extensions.soul.models import (
+    CompanionState,
+    PendingOutreach,
+    PerceptionSignals,
+    Phase,
+)
 from sandbox.extensions.soul.wake import WakeMode, restore_after_gap
 
 
@@ -57,3 +62,25 @@ def test_long_absence_resets_to_baseline() -> None:
     assert result.state.mood == 0.4
     assert result.state.perception.stress_signal == 0.0
     assert result.state.perception.fatigue_signal == 0.0
+
+
+def test_long_absence_clears_pending_outreach_but_preserves_future_cooldown() -> None:
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    state = CompanionState()
+    state.homeostasis.last_tick_at = now - timedelta(days=2)
+    state.initiative.pending_outreach = PendingOutreach(
+        outreach_id="outreach-1",
+        channel_id="telegram_channel",
+        attempted_at=now - timedelta(days=1),
+        availability_at_send=0.8,
+        window_deadline_at=now - timedelta(hours=20),
+    )
+    state.initiative.cooldown_until = now + timedelta(hours=8)
+    state.initiative.adaptive_threshold = 0.91
+
+    result = restore_after_gap(state, now=now)
+
+    assert result.mode is WakeMode.LONG_ABSENCE
+    assert result.state.initiative.pending_outreach is None
+    assert result.state.initiative.cooldown_until == now + timedelta(hours=8)
+    assert result.state.initiative.adaptive_threshold == 0.91

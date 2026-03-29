@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from sandbox.extensions.soul.drives import transition_phase
@@ -33,28 +34,32 @@ def apply_mood_mean_reversion(
     *,
     now: datetime,
     dt: timedelta,
-) -> None:
+) -> CompanionState:
     days = max(dt.total_seconds() / 86400.0, 0.0)
     baseline = mood_baseline(state.temperament)
+    recovery = replace(state.recovery)
+    mood = state.mood
 
-    if state.mood < -0.5:
-        if state.recovery.low_mood_since is None:
-            state.recovery.low_mood_since = now
+    if mood < -0.5:
+        if recovery.low_mood_since is None:
+            recovery.low_mood_since = now
     else:
-        state.recovery.low_mood_since = None
+        recovery.low_mood_since = None
 
-    if state.mood < baseline:
-        state.mood = min(state.mood + (0.02 * days), baseline)
-    elif state.mood > baseline:
-        state.mood = max(state.mood - (0.01 * days), baseline)
+    if mood < baseline:
+        mood = min(mood + (0.02 * days), baseline)
+    elif mood > baseline:
+        mood = max(mood - (0.01 * days), baseline)
 
     if (
-        state.recovery.low_mood_since is not None
-        and now - state.recovery.low_mood_since >= timedelta(hours=72)
+        recovery.low_mood_since is not None
+        and now - recovery.low_mood_since >= timedelta(hours=72)
     ):
-        state.mood = max(state.mood, LOW_MOOD_FLOOR)
-        state.recovery.last_recovery_at = now
-        state.recovery.last_recovery_reason = "mood_floor"
+        mood = max(mood, LOW_MOOD_FLOOR)
+        recovery.last_recovery_at = now
+        recovery.last_recovery_reason = "mood_floor"
+
+    return replace(state, mood=mood, recovery=recovery)
 
 
 def should_reset_stuck_phase(state: CompanionState, *, now: datetime) -> bool:
@@ -98,7 +103,10 @@ def reset_curious_cycle_budget(
     *,
     previous_phase: Phase | None,
 ) -> None:
-    if previous_phase is Phase.CURIOUS and state.homeostasis.current_phase is not Phase.CURIOUS:
+    if (
+        previous_phase is Phase.CURIOUS
+        and state.homeostasis.current_phase is not Phase.CURIOUS
+    ):
         state.recovery.curious_cycle_llm_calls = 0
 
 

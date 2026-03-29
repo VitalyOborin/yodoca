@@ -14,6 +14,20 @@ def test_boundary_blocks_at_night() -> None:
     assert outcome.reason == "night_window"
 
 
+def test_boundary_uses_local_hour_override_for_night_window() -> None:
+    state = CompanionState()
+    state.user_presence.estimated_availability = 0.9
+
+    outcome = check_outreach(
+        state,
+        now=datetime(2026, 3, 29, 20, 0, tzinfo=UTC),
+        local_hour=23,
+    )
+
+    assert outcome.decision is BoundaryDecision.BLOCK
+    assert outcome.reason == "night_window"
+
+
 def test_boundary_blocks_in_resting_phase() -> None:
     state = CompanionState()
     state.homeostasis.current_phase = Phase.RESTING

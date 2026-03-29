@@ -25,8 +25,10 @@ def check_outreach(
     state: CompanionState,
     *,
     now: datetime | None = None,
+    local_hour: int | None = None,
 ) -> BoundaryOutcome:
     now = (now or datetime.now(UTC)).astimezone(UTC)
+    hour = now.hour if local_hour is None else max(0, min(int(local_hour), 23))
     initiative = state.initiative
     budget = initiative.budget
     availability = state.user_presence.estimated_availability
@@ -39,7 +41,7 @@ def check_outreach(
         return BoundaryOutcome(BoundaryDecision.BLOCK, "cooldown_active")
     if state.homeostasis.current_phase is Phase.RESTING:
         return BoundaryOutcome(BoundaryDecision.BLOCK, "resting_phase")
-    if now.hour >= 22 or now.hour < 7:
+    if hour >= 22 or hour < 7:
         return BoundaryOutcome(BoundaryDecision.BLOCK, "night_window")
     if availability < 0.3:
         return BoundaryOutcome(BoundaryDecision.BLOCK, "low_availability")

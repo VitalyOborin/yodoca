@@ -11,6 +11,7 @@ from sandbox.extensions.soul.models import (
     CompanionState,
     HomeostasisState,
     PerceptionSignals,
+    PerceptionWindowState,
     Phase,
 )
 
@@ -96,11 +97,25 @@ def _long_absence_wake(
         phase_entered_at=now,
         last_tick_at=now,
     )
-    return CompanionState(
-        version=state.version,
+    return replace(
+        state,
         homeostasis=baseline,
         perception=PerceptionSignals(),
+        perception_window=PerceptionWindowState(),
         mood=state.mood * 0.5,
-        tick_count=state.tick_count,
-        temperament=state.temperament,
+        initiative=replace(
+            state.initiative,
+            pending_outreach=None,
+            cooldown_until=(
+                state.initiative.cooldown_until
+                if state.initiative.cooldown_until is not None
+                and state.initiative.cooldown_until > now
+                else None
+            ),
+        ),
+        recovery=replace(
+            state.recovery,
+            curious_cycle_llm_calls=0,
+            low_mood_since=None,
+        ),
     )

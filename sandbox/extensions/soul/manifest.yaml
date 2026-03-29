@@ -11,12 +11,12 @@ description: |
 
 depends_on:
   - kv
-  - memory
 
 config:
   tick_interval_seconds: 30
   persist_interval_seconds: 60
   context_token_budget: 200
+  user_timezone: "UTC"
   mood_classifier_daily_budget: 3
   mood_classifier_min_chars: 180
   mood_classifier_signal_threshold: 0.45
