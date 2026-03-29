@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from agents import function_tool
+from agents import Agent, ModelSettings, Runner, function_tool
 
 from core.events.topics import SystemTopics
 from sandbox.extensions.soul.boundary import BoundaryDecision, check_outreach
@@ -99,6 +99,8 @@ class SoulExtension:
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
         self._context_token_budget = 200
+        self._max_reflections_per_day = 5
+        self._reflection_cooldown_minutes = 90
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
@@ -107,6 +109,7 @@ class SoulExtension:
         self._last_error: str | None = None
         self._classifier = ClassifierRuntime()
         self._trend_cache = TrendCache(ttl_seconds=300)
+        self._reflection_agent: Agent | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
         self._ctx = context
@@ -119,6 +122,12 @@ class SoulExtension:
         )
         self._context_token_budget = int(
             context.get_config("context_token_budget", 200)
+        )
+        self._max_reflections_per_day = int(
+            context.get_config("max_reflections_per_day", 5)
+        )
+        self._reflection_cooldown_minutes = int(
+            context.get_config("reflection_cooldown_minutes", 90)
         )
         self._classifier = ClassifierRuntime(
             daily_budget=int(context.get_config("mood_classifier_daily_budget", 3)),
@@ -138,6 +147,19 @@ class SoulExtension:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
             )
+            try:
+                self._reflection_agent = Agent(
+                    name="SoulReflectionGenerator",
+                    instructions=(
+                        "Write one short internal reflection for a companion agent. "
+                        "Keep it functional, grounded, and under 18 words. "
+                        "No theatrical language, no markdown, no quotes."
+                    ),
+                    model=context.model_router.get_model("soul"),
+                    model_settings=ModelSettings(parallel_tool_calls=False),
+                )
+            except Exception as exc:
+                context.logger.warning("soul: reflection model unavailable: %s", exc)
         loaded_state = await self._storage.load_state()
         if loaded_state is None:
             self._state = CompanionState()
@@ -243,6 +265,7 @@ class SoulExtension:
         self._initialized_at = None
         self._last_error = None
         self._classifier.destroy()
+        self._reflection_agent = None
 
     def health_check(self) -> bool:
         if (
@@ -334,6 +357,7 @@ class SoulExtension:
                 now=now,
             )
 
+        await self._maybe_generate_reflection(now)
         if phase_changed or presence_changed or self._persist_due(now):
             await self._persist_state(now)
         await self._maybe_trace_drive_boundaries(previous=previous_state, now=now)
@@ -880,6 +904,76 @@ class SoulExtension:
             return datetime.fromisoformat(str(raw))
         except ValueError:
             return None
+
+    async def _maybe_generate_reflection(self, now: datetime) -> None:
+        if (
+            self._state is None
+            or self._storage is None
+            or self._reflection_agent is None
+            or self._state.homeostasis.current_phase is not Phase.REFLECTIVE
+        ):
+            return
+        metrics = await self._storage.get_daily_metrics(now.date())
+        used_today = int((metrics or {}).get("reflection_count") or 0)
+        if used_today >= self._max_reflections_per_day:
+            return
+        last_reflection_at = await self._get_last_reflection_at()
+        if (
+            last_reflection_at is not None
+            and (now - last_reflection_at).total_seconds()
+            < self._reflection_cooldown_minutes * 60
+        ):
+            return
+
+        trend = await self._get_or_refresh_trend()
+        patterns = await self._storage.list_relationship_patterns(permanent_only=True)
+        prompt = self._build_reflection_prompt(trend, patterns)
+        try:
+            result = await Runner.run(self._reflection_agent, prompt, max_turns=1)
+        except Exception:
+            return
+
+        reflection = (result.final_output or "").strip().splitlines()[0][:160].strip()
+        if not reflection:
+            return
+        await self._trace_event(
+            trace_type="reflection",
+            content=reflection,
+            payload={"trend": trend.context_note()},
+            now=now,
+        )
+        await self._storage.upsert_daily_metrics(now.date(), reflection_count=1)
+        if self._kv is not None:
+            await self._kv.set("soul.reflection.last_at", now.isoformat())
+
+    async def _get_last_reflection_at(self) -> datetime | None:
+        if self._kv is None:
+            return None
+        raw = await self._kv.get("soul.reflection.last_at")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+
+    def _build_reflection_prompt(
+        self,
+        trend: RelationshipTrend,
+        patterns: list[dict[str, Any]],
+    ) -> str:
+        temperament = self._state.temperament if self._state is not None else None
+        top_patterns = [item["content"] for item in patterns[:2]]
+        return (
+            "Current phase: reflective\n"
+            f"Trend note: {trend.context_note() or 'No strong trend.'}\n"
+            f"Patterns: {top_patterns or ['None']}\n"
+            "Temperament:"
+            f" sociability={temperament.sociability if temperament else 0.5:.2f},"
+            f" depth={temperament.depth if temperament else 0.5:.2f},"
+            f" playfulness={temperament.playfulness if temperament else 0.5:.2f}\n"
+            "Write one internal reflection."
+        )
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="get_soul_state")

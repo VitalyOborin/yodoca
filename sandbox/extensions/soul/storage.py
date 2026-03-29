@@ -18,6 +18,7 @@ _INCREMENTABLE_METRICS = {
     "outreach_rejected",
     "message_count",
     "inference_count",
+    "reflection_count",
     "perception_corrections",
 }
 

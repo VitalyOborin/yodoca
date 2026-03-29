@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS soul_metrics (
     outreach_rejected         INTEGER NOT NULL DEFAULT 0,
     message_count             INTEGER NOT NULL DEFAULT 0,
     inference_count           INTEGER NOT NULL DEFAULT 0,
+    reflection_count          INTEGER NOT NULL DEFAULT 0,
     perception_corrections    INTEGER NOT NULL DEFAULT 0,
     phase_distribution_json   TEXT,
     openness_avg              REAL,

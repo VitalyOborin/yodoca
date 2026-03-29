@@ -21,6 +21,8 @@ config:
   mood_classifier_min_chars: 180
   mood_classifier_signal_threshold: 0.45
   mood_classifier_weight: 0.25
+  max_reflections_per_day: 5
+  reflection_cooldown_minutes: 90
 
 schedules:
   - name: weekly_consolidation

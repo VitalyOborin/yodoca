@@ -2,6 +2,8 @@ import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from conftest import FakeSoulContext
 
@@ -273,6 +275,36 @@ async def test_metrics_snapshot_reports_context_and_relationship_trends(
     assert snapshot.context_words_avg_7d > 0
     assert snapshot.perception_corrections_7d == 7
     assert "attempts" in snapshot.outreach_quality_7d
+
+
+async def test_reflection_generator_writes_budgeted_reflection_trace(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(
+        tmp_path,
+        model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.homeostasis.current_phase = Phase.REFLECTIVE
+    with patch(
+        "sandbox.extensions.soul.main.Runner.run",
+        new=AsyncMock(return_value=SimpleNamespace(final_output="User keeps circling purpose; stay gentle.")),
+    ) as run_mock:
+        await ext._maybe_generate_reflection(datetime.now(UTC))
+
+    metrics = await ext._storage.get_daily_metrics(datetime.now(UTC).date())
+    with sqlite3.connect(context.data_dir / "soul.db") as conn:
+        rows = conn.execute(
+            "SELECT trace_type, content FROM traces WHERE trace_type = 'reflection'"
+        ).fetchall()
+
+    assert run_mock.await_count == 1
+    assert metrics is not None
+    assert metrics["reflection_count"] == 1
+    assert rows
 
 
 async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) -> None:
