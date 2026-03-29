@@ -155,6 +155,37 @@ async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
     assert len(result.split()) < 80
 
 
+async def test_context_provider_adds_relationship_note_when_trend_is_clear(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._storage is not None
+    start = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+    for day in range(8):
+        now = start + timedelta(days=day)
+        await ext._storage.append_interaction(
+            direction="inbound",
+            channel_id="cli_channel",
+            message_length=40 + (day * 12),
+            openness_signal=0.2 + (day * 0.08),
+            created_at=now,
+        )
+        await ext._storage.append_interaction(
+            direction="outbound",
+            channel_id="cli_channel",
+            message_length=20,
+            created_at=now + timedelta(minutes=5),
+        )
+
+    result = await ext.get_context("hello", object())
+
+    assert result is not None
+    assert "relationship:" in result
+
+
 async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     context = FakeSoulContext(tmp_path)
     ext = SoulExtension()

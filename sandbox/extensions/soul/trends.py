@@ -22,6 +22,19 @@ class RelationshipTrend:
             "initiative_ratio_trend": "How often the user starts conversations compared with the longer baseline.",
         }
 
+    def context_note(self) -> str | None:
+        if self.openness_trend >= 0.12:
+            return "User has been opening up more lately; gentle depth is welcome."
+        if self.openness_trend <= -0.12:
+            return "User has been less open lately; keep questions light."
+        if self.initiative_ratio_trend <= -0.18:
+            return "The companion has initiated more lately; avoid pushing."
+        if self.message_depth_trend <= -18:
+            return "Recent messages have been shorter than usual; stay concise."
+        if self.message_depth_trend >= 18:
+            return "Recent messages have been deeper than usual; reflective follow-through is okay."
+        return None
+
 
 @dataclass(slots=True)
 class DailyRelationshipSummary:

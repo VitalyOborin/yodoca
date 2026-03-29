@@ -71,3 +71,27 @@ def test_user_started_ratio_drops_when_agent_starts_recent_conversations() -> No
     trend = compute_relationship_trend(summaries, recent_days=3)
 
     assert trend.initiative_ratio_trend < 0
+
+
+def test_context_note_prefers_clear_relationship_signal() -> None:
+    start = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+    interactions = []
+    for day in range(8):
+        day_start = start + timedelta(days=day)
+        interactions.append(
+            {
+                "direction": "inbound",
+                "created_at": day_start.isoformat(),
+                "message_length": 30 + (day * 10),
+                "openness_signal": 0.2 + (day * 0.08),
+                "channel_id": "cli_channel",
+                "hour": day_start.hour,
+                "day_of_week": day_start.weekday(),
+                "outreach_result": None,
+                "response_delay_s": None,
+            }
+        )
+
+    trend = compute_relationship_trend(build_daily_summaries(interactions), recent_days=3)
+
+    assert trend.context_note() is not None

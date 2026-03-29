@@ -45,6 +45,10 @@ from sandbox.extensions.soul.presence import (
 )
 from sandbox.extensions.soul.storage import SoulStorage
 from sandbox.extensions.soul.tools import SoulStateResult
+from sandbox.extensions.soul.trends import (
+    build_daily_summaries,
+    compute_relationship_trend,
+)
 from sandbox.extensions.soul.wake import restore_after_gap
 
 if TYPE_CHECKING:
@@ -660,22 +664,37 @@ class SoulExtension:
 
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
         del prompt, turn_context
-        if self._state is None:
+        if self._state is None or self._storage is None:
             return None
 
         mood_label = self._mood_label(self._state.mood)
         note = self._context_note()
-        max_words = int(self._context_token_budget * 0.75)
-        context = (
-            "Soul state:\n"
-            f"- phase: {self._state.homeostasis.current_phase.value.lower()}\n"
-            f"- presence: {self._state.presence.value.lower()}\n"
-            f"- mood: {mood_label}\n"
-            f"- note: {note}"
-        )
+        relationship_note = await self._relationship_context_note()
+        max_words = max(24, int(self._context_token_budget * 0.75))
+        lines = [
+            "Soul state:",
+            f"- phase: {self._state.homeostasis.current_phase.value.lower()}",
+            f"- presence: {self._state.presence.value.lower()}",
+            f"- mood: {mood_label}",
+            f"- note: {note}",
+        ]
+        if relationship_note:
+            lines.append(f"- relationship: {relationship_note}")
+        context = "\n".join(lines)
         if len(context.split()) > max_words:
-            return "\n".join(context.splitlines()[:4])
+            return "\n".join(lines[:5])
         return context
+
+    async def _relationship_context_note(self) -> str | None:
+        if self._storage is None:
+            return None
+        interactions = await self._storage.list_interactions_since(
+            datetime.now(UTC) - timedelta(days=30)
+        )
+        if len(interactions) < 6:
+            return None
+        trend = compute_relationship_trend(build_daily_summaries(interactions))
+        return trend.context_note()
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="get_soul_state")
