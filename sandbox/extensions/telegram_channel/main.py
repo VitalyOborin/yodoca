@@ -18,6 +18,7 @@ from sandbox.extensions.telegram_channel.formatting import (
 )
 
 if TYPE_CHECKING:
+    from core.events.models import Event
     from core.extensions.context import ExtensionContext
     from core.extensions.contract import TurnContext
     from sandbox.extensions.kv.main import KvStoreProtocol
@@ -63,6 +64,10 @@ class TelegramChannelExtension:
         self._streaming_enabled = True
         self._stream_edit_interval_ms = 500
         self._stream_min_chunk_chars = 20
+        self._presence_enabled = True
+        self._presence_cooldown_seconds = 21600
+        self._last_presence_sent_at = 0.0
+        self._last_presence_key: str | None = None
         self._streams: dict[str, StreamState] = {}
 
     @property
@@ -258,6 +263,14 @@ class TelegramChannelExtension:
     async def initialize(self, context: "ExtensionContext") -> None:
         self._ctx = context
         self._kv = context.get_extension("kv")
+        self._presence_enabled = bool(context.get_config("presence_enabled", True))
+        self._presence_cooldown_seconds = int(
+            context.get_config("presence_cooldown_seconds", 21600)
+        )
+        context.subscribe_event(
+            "companion.presence.updated",
+            self._on_companion_presence_updated,
+        )
 
         self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
         self._stream_edit_interval_ms = int(
@@ -298,6 +311,62 @@ class TelegramChannelExtension:
             context.logger.info(
                 "Telegram channel initialized (polling, waiting for first message to capture chat_id)"
             )
+
+    def _build_presence_hint(self, payload: dict) -> str | None:
+        presence = str(payload.get("presence_state") or "").strip().upper()
+        phase = str(payload.get("phase") or "").strip().lower()
+        lifecycle = str(payload.get("lifecycle_phase") or "").strip().lower()
+        mapping = {
+            "WARM": "Companion is nearby and warm.",
+            "ATTENTIVE": "Companion is attentive right now.",
+            "REFLECTIVE": "Companion is quiet and reflective.",
+            "WITHDRAWN": "Companion is resting quietly.",
+        }
+        hint = mapping.get(presence)
+        if hint is None:
+            return None
+        if lifecycle == "discovery":
+            return f"{hint} Still getting to know your rhythm."
+        if phase == "care":
+            return "Companion is nearby and attentive."
+        return hint
+
+    async def _on_companion_presence_updated(self, event: "Event") -> None:
+        """Send a rare, low-noise presence hint on significant transitions."""
+        if (
+            not self._presence_enabled
+            or not self._bot
+            or not self._token
+            or not self._chat_id
+        ):
+            return
+        payload = dict(event.payload or {})
+        hint = self._build_presence_hint(payload)
+        if hint is None:
+            return
+
+        presence = str(payload.get("presence_state") or "").strip().upper()
+        phase = str(payload.get("phase") or "").strip().lower()
+        key = f"{presence}:{phase}"
+        now = time.monotonic()
+        if key == self._last_presence_key:
+            return
+        if now - self._last_presence_sent_at < self._presence_cooldown_seconds:
+            return
+
+        try:
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=escape_html(hint),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            if self._ctx:
+                self._ctx.logger.debug("Telegram presence hint failed", exc_info=True)
+            return
+
+        self._last_presence_key = key
+        self._last_presence_sent_at = now
 
     async def start(self) -> None:
         pass

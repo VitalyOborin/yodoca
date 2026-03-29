@@ -171,3 +171,59 @@ class TestInterceptGraceWindow:
         ext._handle_secure_input = AsyncMock()
         assert await ext._process_one_intercept() is True
         assert not ext._intercept_pending.is_set()
+
+
+class TestCompanionPresence:
+    """CLI prints lightweight presence lines for companion events."""
+
+    @pytest.mark.asyncio
+    async def test_presence_update_prints_deduped_status_line(self) -> None:
+        ext, _ = _make_ext()
+
+        with patch("builtins.print") as print_mock:
+            await ext._on_companion_presence_updated(
+                Event(
+                    id=1,
+                    topic="companion.presence.updated",
+                    source="soul",
+                    payload={"presence_state": "WARM", "phase": "SOCIAL"},
+                    created_at=0.0,
+                )
+            )
+            await ext._on_companion_presence_updated(
+                Event(
+                    id=2,
+                    topic="companion.presence.updated",
+                    source="soul",
+                    payload={"presence_state": "WARM", "phase": "SOCIAL"},
+                    created_at=1.0,
+                )
+            )
+
+        assert print_mock.call_count == 3
+        assert any(
+            "[companion: warm · social]" in str(call.args[0])
+            for call in print_mock.call_args_list
+            if call.args
+        )
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_change_prints_status_line(self) -> None:
+        ext, _ = _make_ext()
+
+        with patch("builtins.print") as print_mock:
+            await ext._on_companion_lifecycle_changed(
+                Event(
+                    id=1,
+                    topic="companion.lifecycle.changed",
+                    source="soul",
+                    payload={"new_lifecycle_phase": "FORMING"},
+                    created_at=0.0,
+                )
+            )
+
+        assert any(
+            "[companion: forming]" in str(call.args[0])
+            for call in print_mock.call_args_list
+            if call.args
+        )

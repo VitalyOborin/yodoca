@@ -23,15 +23,18 @@ class CliChannelExtension:
         self.context: ExtensionContext | None = None
         self._input_task: asyncio.Task[Any] | None = None
         self._streaming_enabled = True
+        self._presence_enabled = True
         self._stream_buffer = ""
         self._intercept_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._intercept_pending = asyncio.Event()
         self._response_complete = asyncio.Event()
         self._response_complete.set()
+        self._last_presence_key: str | None = None
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self.context = context
         self._streaming_enabled = bool(context.get_config("streaming_enabled", True))
+        self._presence_enabled = bool(context.get_config("presence_enabled", True))
         context.subscribe_event(
             SystemTopics.SECURE_INPUT_REQUEST,
             self._on_secure_input_request,
@@ -39,6 +42,14 @@ class CliChannelExtension:
         context.subscribe_event(
             SystemTopics.MCP_TOOL_APPROVAL_REQUEST,
             self._on_mcp_approval_request,
+        )
+        context.subscribe_event(
+            "companion.presence.updated",
+            self._on_companion_presence_updated,
+        )
+        context.subscribe_event(
+            "companion.lifecycle.changed",
+            self._on_companion_lifecycle_changed,
         )
 
     async def _on_secure_input_request(self, event: Any) -> None:
@@ -56,6 +67,47 @@ class CliChannelExtension:
         if target is None or target == self.context.extension_id:
             self._intercept_queue.put_nowait({**payload, "_type": "mcp_approval"})
             self._intercept_pending.set()
+
+    def _render_presence_line(self, payload: dict[str, Any]) -> str | None:
+        presence = str(payload.get("presence_state") or "").strip().lower()
+        phase = str(payload.get("phase") or "").strip().lower()
+        if not presence:
+            return None
+        if phase:
+            return f"[companion: {presence} · {phase}]"
+        return f"[companion: {presence}]"
+
+    async def _on_companion_presence_updated(self, event: Any) -> None:
+        """Print a compact status line when visible presence changes."""
+        if not self._presence_enabled:
+            return
+        payload = dict(event.payload or {})
+        line = self._render_presence_line(payload)
+        if not line:
+            return
+        key = line.lower()
+        if key == self._last_presence_key:
+            return
+        self._last_presence_key = key
+        print()
+        print(line, flush=True)
+        print()
+
+    async def _on_companion_lifecycle_changed(self, event: Any) -> None:
+        """Print rare lifecycle milestones as a short status line."""
+        if not self._presence_enabled:
+            return
+        payload = dict(event.payload or {})
+        lifecycle = str(payload.get("new_lifecycle_phase") or "").strip().lower()
+        if not lifecycle:
+            return
+        key = f"lifecycle:{lifecycle}"
+        if key == self._last_presence_key:
+            return
+        self._last_presence_key = key
+        print()
+        print(f"[companion: {lifecycle}]", flush=True)
+        print()
 
     async def on_stream_start(self, _user_id: str) -> None:
         self._stream_buffer = ""
