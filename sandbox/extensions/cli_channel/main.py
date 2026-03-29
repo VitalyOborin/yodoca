@@ -3,6 +3,7 @@
 import asyncio
 import getpass
 import logging
+import sys
 from typing import TYPE_CHECKING, Any
 
 from core.events.topics import SystemTopics
@@ -30,6 +31,7 @@ class CliChannelExtension:
         self._response_complete = asyncio.Event()
         self._response_complete.set()
         self._last_presence_key: str | None = None
+        self._awaiting_input = False
 
     async def initialize(self, context: "ExtensionContext") -> None:
         self.context = context
@@ -77,6 +79,22 @@ class CliChannelExtension:
             return f"[companion: {presence} · {phase}]"
         return f"[companion: {presence}]"
 
+    async def _safe_print(self, text: str) -> None:
+        """Print text immediately, even if the user is mid-input.
+
+        When input() is blocking, uses ANSI escape to clear the current line,
+        print the message, and re-display the prompt. The user's typed characters
+        remain in the OS terminal buffer and will be submitted on Enter.
+        """
+        if self._awaiting_input:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write(text)
+            sys.stdout.write("\n\n> ")
+            sys.stdout.flush()
+        else:
+            print(text)
+            print()
+
     async def _on_companion_presence_updated(self, event: Any) -> None:
         """Print a compact status line when visible presence changes."""
         if not self._presence_enabled:
@@ -89,9 +107,7 @@ class CliChannelExtension:
         if key == self._last_presence_key:
             return
         self._last_presence_key = key
-        print()
-        print(line, flush=True)
-        print()
+        await self._safe_print(line)
 
     async def _on_companion_lifecycle_changed(self, event: Any) -> None:
         """Print rare lifecycle milestones as a short status line."""
@@ -105,9 +121,7 @@ class CliChannelExtension:
         if key == self._last_presence_key:
             return
         self._last_presence_key = key
-        print()
-        print(f"[companion: {lifecycle}]", flush=True)
-        print()
+        await self._safe_print(f"[companion: {lifecycle}]")
 
     async def on_stream_start(self, _user_id: str) -> None:
         self._stream_buffer = ""
@@ -204,10 +218,13 @@ class CliChannelExtension:
             if await self._wait_for_pending_intercept():
                 continue
             try:
+                self._awaiting_input = True
                 line = await asyncio.to_thread(input, "> ")
             except (EOFError, KeyboardInterrupt):
                 logger.info("CLI input stream closed")
                 break
+            finally:
+                self._awaiting_input = False
             line = line.strip()
             if not line:
                 continue
@@ -290,6 +307,10 @@ class CliChannelExtension:
         print()
 
     async def send_message(self, message: str) -> None:
-        """Proactive: deliver to CLI (stdout)."""
-        print(message)
-        print()
+        """Proactive: deliver to CLI (stdout).
+
+        If the user is currently typing (input() is blocking), the message
+        is queued and displayed before the next prompt to avoid corrupting
+        the input line.
+        """
+        await self._safe_print(message)

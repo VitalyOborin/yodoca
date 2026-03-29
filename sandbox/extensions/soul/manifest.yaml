@@ -48,4 +48,4 @@ events:
     - topic: companion.lifecycle.changed
       description: "Companion lifecycle phase changed (discovery/forming/mature)."
 
-enabled: true
+enabled: false

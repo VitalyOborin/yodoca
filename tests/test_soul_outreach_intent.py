@@ -32,6 +32,7 @@ class IntentStorage:
         *,
         limit: int = 5,
         follow_up_window_hours: int = 4,
+        now: object = None,
     ) -> list[dict]:
         return self._unfollowed_interactions[:limit]
 
@@ -182,9 +183,7 @@ async def test_select_intent_chooses_curious_question() -> None:
 
 async def test_select_intent_chooses_gentle_checkin() -> None:
     state = _base_state()
-    state.user_presence.last_interaction_at = datetime(
-        2026, 3, 26, 9, 0, tzinfo=UTC
-    )
+    state.user_presence.last_interaction_at = datetime(2026, 3, 26, 9, 0, tzinfo=UTC)
     context = await _context_from(state=state)
 
     assert select_intent(context) is OutreachIntent.GENTLE_CHECKIN

@@ -200,7 +200,7 @@ class TestCompanionPresence:
                 )
             )
 
-        assert print_mock.call_count == 3
+        assert print_mock.call_count == 2
         assert any(
             "[companion: warm · social]" in str(call.args[0])
             for call in print_mock.call_args_list

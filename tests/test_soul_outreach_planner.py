@@ -1,4 +1,3 @@
-import logging
 from datetime import UTC, date, datetime
 
 from sandbox.extensions.soul.models import CompanionState, SoulLifecyclePhase
@@ -26,7 +25,9 @@ class PlannerStorage:
         *,
         limit: int = 5,
         follow_up_window_hours: int = 4,
+        now: object = None,
     ) -> list[dict]:
+        del limit, follow_up_window_hours, now
         return []
 
     async def list_traces_since(
@@ -36,6 +37,7 @@ class PlannerStorage:
         trace_types: tuple[str, ...] | None = None,
         limit: int = 20,
     ) -> list[dict]:
+        del since, trace_types, limit
         return [
             {
                 "id": 5,
@@ -48,6 +50,7 @@ class PlannerStorage:
         ]
 
     async def list_discovery_nodes(self, *, limit: int = 20) -> list[dict]:
+        del limit
         return [
             {
                 "id": 2,
@@ -63,21 +66,11 @@ class PlannerStorage:
         *,
         permanent_only: bool = False,
     ) -> list[dict]:
+        del permanent_only
         return []
 
     async def get_daily_metrics(self, metric_date: date) -> dict:
         return {"date": metric_date.isoformat()}
-
-
-class FakeKV:
-    def __init__(self, initial: dict[str, str] | None = None) -> None:
-        self._store = dict(initial or {})
-
-    async def get(self, key: str) -> str | None:
-        return self._store.get(key)
-
-    async def set(self, key: str, value: str) -> None:
-        self._store[key] = value
 
 
 def _base_state() -> CompanionState:
@@ -88,85 +81,53 @@ def _base_state() -> CompanionState:
     return state
 
 
-async def test_outreach_planner_uses_discovery_fallback_when_degraded() -> None:
+async def test_outreach_planner_builds_directive_for_discovery_question() -> None:
     planner = OutreachPlanner()
-    state = _base_state()
-    state.recovery.llm_degraded = True
 
     plan = await planner.generate(
-        state=state,
+        state=_base_state(),
         storage=PlannerStorage(),
-        kv=FakeKV(),
         now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
-        logger=logging.getLogger("test"),
     )
 
     assert plan.intent is OutreachIntent.DISCOVERY_QUESTION
-    assert plan.used_llm is False
-    assert plan.degraded_reason == "llm_degraded"
-    assert plan.message == "I still barely know you. What should I call you?"
+    assert "initiating contact proactively" in plan.directive
+    assert "get to know them better" in plan.directive
+    assert "identity" in plan.directive
+    assert plan.fallback_text == "I still barely know you. What should I call you?"
 
 
-async def test_outreach_planner_respects_daily_llm_cap(monkeypatch) -> None:
+async def test_outreach_planner_builds_directive_for_reflection() -> None:
     planner = OutreachPlanner()
-    planner._agent = object()  # type: ignore[assignment]
-    state = _base_state()
-    kv = FakeKV({"soul.outreach.llm_calls.2026-03-29": "3"})
-
-    plan = await planner.generate(
-        state=state,
-        storage=PlannerStorage(),
-        kv=kv,
-        now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
-        logger=logging.getLogger("test"),
-    )
-
-    assert plan.used_llm is False
-    assert plan.degraded_reason == "daily_cap"
-
-
-async def test_outreach_planner_generates_llm_message(monkeypatch) -> None:
-    planner = OutreachPlanner()
-    planner._agent = object()  # type: ignore[assignment]
     state = _base_state()
     state.discovery.lifecycle_phase = SoulLifecyclePhase.FORMING
     state.discovery.topics.identity = 0.8
     state.discovery.topics.rhythm = 0.8
     state.discovery.topics.communication = 0.8
     state.discovery.topics.interests = 0.8
-    kv = FakeKV()
-    noted: list[datetime] = []
-
-    class FakeResult:
-        final_output = "I've been thinking about what you said about purpose.\nExtra"
-
-    async def fake_run(agent, prompt, max_turns):
-        assert max_turns == 1
-        assert "Your personality:" in prompt
-        assert "You want to share a thought you've been sitting with." in prompt
-        assert "Never invent specifics you don't have" in prompt
-        return FakeResult()
-
-    monkeypatch.setattr(
-        "sandbox.extensions.soul.outreach_planner.Runner.run",
-        fake_run,
-    )
 
     plan = await planner.generate(
         state=state,
         storage=PlannerStorage(),
-        kv=kv,
         now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
-        logger=logging.getLogger("test"),
-        note_llm_call_fn=lambda: _note_call(noted),
     )
 
-    assert plan.used_llm is True
     assert plan.intent is OutreachIntent.SHARE_REFLECTION
-    assert plan.message == "I've been thinking about what you said about purpose."
-    assert kv._store["soul.outreach.llm_calls.2026-03-29"] == "1"
-    assert len(noted) == 1
+    assert "share a thought you've been sitting with" in plan.directive
+    assert "The user keeps returning to purpose." in plan.directive
+    assert plan.fallback_text == "I had a thought I wanted to share when we talk."
 
 
-async def _note_call(bucket: list[datetime]) -> None:
-    bucket.append(datetime.now(UTC))
+async def test_outreach_planner_returns_discovery_topic_without_mutating_state() -> None:
+    planner = OutreachPlanner()
+    state = _base_state()
+    original_topic = state.discovery.last_question_topic
+
+    plan = await planner.generate(
+        state=state,
+        storage=PlannerStorage(),
+        now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
+    )
+
+    assert plan.discovery_question_topic == "identity"
+    assert state.discovery.last_question_topic == original_topic

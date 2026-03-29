@@ -90,6 +90,9 @@ _DISCOVERY_TARGETS = {
 class DiscoveryRuntime:
     """Explicit lifecycle FSM plus discovery note/question generation."""
 
+    def destroy(self) -> None:
+        """Compatibility hook for SoulExtension.destroy()."""
+
     def apply_lifecycle_biases(self, state: CompanionState) -> None:
         targets = _DISCOVERY_TARGETS[state.discovery.lifecycle_phase]
         state.initiative.budget.daily_budget = targets["daily_budget"]

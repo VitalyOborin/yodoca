@@ -412,6 +412,7 @@ class TestProactiveLoop:
 
         router.invoke_agent_background = AsyncMock(side_effect=_slow_invoke)  # type: ignore[method-assign]
         router.notify_user = AsyncMock()  # type: ignore[method-assign]
+        router.record_assistant_message = AsyncMock()  # type: ignore[method-assign]
         loader._router = router
 
         event = SimpleNamespace(
@@ -430,6 +431,7 @@ class TestProactiveLoop:
         _args, kwargs = router.invoke_agent_background.await_args
         assert kwargs["turn_context"].channel_id == "telegram_channel"
         router.notify_user.assert_awaited_once_with("done", "telegram_channel")
+        router.record_assistant_message.assert_awaited_once_with("done")
 
 
 class TestInitializeAndLifecycle:

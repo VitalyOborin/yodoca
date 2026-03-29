@@ -33,6 +33,7 @@ class FakeSoulContext:
         self._extensions = extensions or {}
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.notifications: list[tuple[str, str | None]] = []
+        self.agent_tasks: list[tuple[str, str | None]] = []
         self.router_subscriptions: dict[str, Any] = {}
         self.bus_subscriptions: dict[str, Any] = {}
 
@@ -44,6 +45,14 @@ class FakeSoulContext:
 
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         self.notifications.append((text, channel_id))
+
+    async def request_agent_task(
+        self, prompt: str, channel_id: str | None = None
+    ) -> None:
+        self.agent_tasks.append((prompt, channel_id))
+
+    async def record_assistant_message(self, text: str) -> None:
+        pass
 
     def subscribe(self, event: str, handler: Any) -> None:
         self.router_subscriptions[event] = handler

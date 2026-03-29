@@ -277,3 +277,19 @@ class MessageRouter:
         if channel is None:
             channel = next(iter(self._channels.values()))
         await channel.send_message(text)
+
+    async def record_assistant_message(self, text: str) -> None:
+        """Inject an assistant message into the active thread without sending it.
+
+        Used by proactive flows (e.g. outreach) that deliver via notify_user
+        but also need the message in conversation history so the agent remembers it.
+        """
+        session = self._threads.thread
+        if session is None:
+            logger.warning("record_assistant_message: no active thread")
+            return
+        item: dict[str, Any] = {"role": "assistant", "content": text}
+        try:
+            await session.add_items([item])
+        except Exception:
+            logger.exception("Failed to record assistant message in thread")

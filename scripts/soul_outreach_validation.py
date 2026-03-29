@@ -100,9 +100,11 @@ class Scenario:
 
 
 def _iso(hours_ago: float) -> str:
-    return (datetime.now(UTC) - timedelta(hours=hours_ago)).replace(
-        microsecond=0
-    ).isoformat()
+    return (
+        (datetime.now(UTC) - timedelta(hours=hours_ago))
+        .replace(microsecond=0)
+        .isoformat()
+    )
 
 
 def build_scenarios() -> list[Scenario]:

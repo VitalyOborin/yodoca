@@ -88,19 +88,23 @@ def test_ignored_discovery_mode_applies_shorter_cooldown() -> None:
     assert IGNORED_COOLDOWN_DISCOVERY < IGNORED_COOLDOWN
 
 
-def test_response_clears_pending_without_cooldown() -> None:
+def test_response_clears_pending_and_applies_response_cooldown() -> None:
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = register_outreach_attempt(
         InitiativeState(),
         outreach_id="outreach-1",
         channel_id="cli_channel",
         availability_at_send=0.8,
-        now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
+        now=now,
     )
+    resolve_time = datetime(2026, 3, 29, 12, 10, tzinfo=UTC)
     resolved = resolve_outreach(
         state,
         result=OutreachResult.RESPONSE,
-        now=datetime(2026, 3, 29, 12, 10, tzinfo=UTC),
+        now=resolve_time,
     )
 
     assert resolved.pending_outreach is None
-    assert resolved.cooldown_until is None
+    from sandbox.extensions.soul.initiative import RESPONSE_COOLDOWN
+
+    assert resolved.cooldown_until == resolve_time + RESPONSE_COOLDOWN

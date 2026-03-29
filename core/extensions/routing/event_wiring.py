@@ -94,6 +94,7 @@ class EventWiringManager:
                 )
                 if response:
                     await router.notify_user(response, channel_id)
+                    await router.record_assistant_message(response)
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
                 logger.info(
                     "agent task: done",

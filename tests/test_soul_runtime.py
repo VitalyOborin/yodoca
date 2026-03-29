@@ -462,9 +462,10 @@ async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) 
     ext._state.user_presence.estimated_availability = 0.8
     now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
 
-    await ext._send_outreach("I was thinking about one thing...", now=now)
+    await ext._send_outreach(now=now)
 
-    assert context.notifications == [("I was thinking about one thing...", None)]
+    assert len(context.agent_tasks) == 1
+    assert context.notifications == []
     assert ext._state.initiative.pending_outreach is not None
     assert ext._state.initiative.budget.used_today == 1
     assert any(topic == "companion.outreach.attempted" for topic, _ in context.events)
@@ -484,9 +485,9 @@ async def test_outreach_uses_preferred_channel_metadata_when_available(
             "channel": SimpleNamespace(channel_id="telegram_channel"),
         }
     )
-    await ext._send_outreach("Ping", now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC))
+    await ext._send_outreach(now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC))
 
-    assert context.notifications[-1] == ("Ping", "telegram_channel")
+    assert context.agent_tasks[-1][1] == "telegram_channel"
 
 
 async def test_user_message_resolves_pending_outreach_as_response(
@@ -499,7 +500,7 @@ async def test_user_message_resolves_pending_outreach_as_response(
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.8
     attempted_at = datetime.now(UTC) - timedelta(minutes=5)
-    await ext._send_outreach("Ping", now=attempted_at)
+    await ext._send_outreach(now=attempted_at)
     ext._last_agent_response_at = attempted_at
 
     await ext._on_user_message({"text": "hi", "channel": object()})
@@ -523,7 +524,7 @@ async def test_tick_resolves_pending_outreach_as_ignored_when_available(
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.8
     attempted_at = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
-    await ext._send_outreach("Ping", now=attempted_at)
+    await ext._send_outreach(now=attempted_at)
 
     await ext._run_one_tick(now=attempted_at + timedelta(minutes=61))
 
@@ -543,7 +544,7 @@ async def test_tick_resolves_pending_outreach_as_timing_miss_when_unavailable(
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.2
     attempted_at = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
-    await ext._send_outreach("Ping", now=attempted_at)
+    await ext._send_outreach(now=attempted_at)
 
     await ext._run_one_tick(now=attempted_at + timedelta(minutes=61))
 
@@ -570,8 +571,8 @@ async def test_tick_triggers_one_shot_outreach_when_threshold_and_governor_allow
 
     await ext._run_one_tick(now=now)
 
-    assert len(context.notifications) == 1
-    assert "?" in context.notifications[0][0]
+    assert len(context.agent_tasks) == 1
+    assert "initiating contact proactively" in context.agent_tasks[0][0]
     assert ext._state.initiative.budget.used_today == 1
 
 
@@ -664,16 +665,8 @@ async def test_discovery_outreach_prefers_question_about_unknown_topic(
     ext._state.discovery.topics.interests = 0.6
     now = datetime.now(UTC)
 
-    with patch(
-        "sandbox.extensions.soul.outreach_planner.Runner.run",
-        new=AsyncMock(
-            return_value=SimpleNamespace(
-                final_output="What does a normal day usually feel like for you right now?"
-            )
-        ),
-    ):
-        text = await ext._build_outreach_text(now)
+    plan = await ext._build_outreach_directive(now)
 
-    assert "?" in text
-    assert "day" in text.lower()
-    assert ext._state.discovery.last_question_topic == "rhythm"
+    assert "initiating contact proactively" in plan.directive
+    assert "rhythm" in plan.directive
+    assert plan.discovery_question_topic == "rhythm"

@@ -34,6 +34,9 @@ class GateContext:
     async def notify_user(self, text: str, channel_id: str | None = None) -> None:
         self.notifications.append((text, channel_id))
 
+    async def record_assistant_message(self, text: str) -> None:
+        pass
+
     def subscribe(self, event: str, handler: Any) -> None:
         del event, handler
 

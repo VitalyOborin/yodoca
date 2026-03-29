@@ -90,6 +90,14 @@ class ExtensionContext:
         else:
             await self._router.notify_user(text, channel_id)
 
+    async def record_assistant_message(self, text: str) -> None:
+        """Record an assistant message in the active conversation thread.
+
+        The message is NOT sent to any channel — only stored in session history
+        so the agent sees it when the user responds next.
+        """
+        await self._router.record_assistant_message(text)
+
     async def invoke_agent(self, prompt: str) -> str:
         """Ask the agent to process a prompt and return a response."""
         return await self._router.invoke_agent(prompt)

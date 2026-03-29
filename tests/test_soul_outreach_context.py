@@ -43,6 +43,7 @@ class FakeOutreachStorage:
         *,
         limit: int = 5,
         follow_up_window_hours: int = 4,
+        now: object = None,
     ) -> list[dict]:
         assert limit == 5
         assert follow_up_window_hours == 4
@@ -130,9 +131,7 @@ async def test_assemble_outreach_context_builds_expected_snapshot() -> None:
     state.discovery.topics.interests = 0.25
     state.initiative.last_outreach_result = OutreachResult.RESPONSE
     state.user_presence.estimated_availability = 0.71
-    state.user_presence.last_interaction_at = datetime(
-        2026, 3, 29, 10, 30, tzinfo=UTC
-    )
+    state.user_presence.last_interaction_at = datetime(2026, 3, 29, 10, 30, tzinfo=UTC)
 
     storage = FakeOutreachStorage()
     now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
@@ -163,9 +162,7 @@ async def test_assemble_outreach_context_falls_back_to_presence_timestamp() -> N
     state = CompanionState()
     state.homeostasis.current_phase = Phase.AMBIENT
     state.discovery.lifecycle_phase = SoulLifecyclePhase.MATURE
-    state.user_presence.last_interaction_at = datetime(
-        2026, 3, 29, 7, 0, tzinfo=UTC
-    )
+    state.user_presence.last_interaction_at = datetime(2026, 3, 29, 7, 0, tzinfo=UTC)
 
     class NoInboundStorage(FakeOutreachStorage):
         async def list_recent_interactions(self, limit: int = 10) -> list[dict]:

@@ -178,9 +178,6 @@ class SoulExtension:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
             )
-            self._outreach_planner.try_create_agent(
-                context.model_router, logger=context.logger
-            )
             self._reflector.try_create_agent(
                 context.model_router, logger=context.logger
             )
@@ -210,7 +207,6 @@ class SoulExtension:
     async def stop(self) -> None:
         self._started = False
         await self._classifier.stop()
-        self._outreach_planner.destroy()
         if self._state is not None:
             await self._persist_state(datetime.now(UTC))
 
@@ -317,7 +313,6 @@ class SoulExtension:
         return any(
             (
                 self._classifier.available,
-                self._outreach_planner.available,
                 self._reflector.available,
                 self._explorer.available,
             )
@@ -809,7 +804,6 @@ class SoulExtension:
 
     async def _send_outreach(
         self,
-        text: str,
         *,
         channel_id: str | None = None,
         now: datetime | None = None,
@@ -820,6 +814,7 @@ class SoulExtension:
         now = now or datetime.now(UTC)
         if channel_id is None:
             channel_id = await self._storage.get_preferred_channel_id()
+        plan = await self._build_outreach_directive(now)
         outreach_id = f"outreach-{uuid.uuid4().hex[:12]}"
         self._state.initiative = register_outreach_attempt(
             self._state.initiative,
@@ -828,27 +823,42 @@ class SoulExtension:
             availability_at_send=self._state.user_presence.estimated_availability,
             now=now,
         )
-        await self._ctx.notify_user(text, channel_id=channel_id)
-        await self._storage.append_interaction(
-            direction="outbound",
-            channel_id=channel_id,
-            message_length=len(text),
-            created_at=now,
-        )
+        if plan.discovery_question_topic is not None:
+            self._state.discovery.last_question_at = now
+            self._state.discovery.last_question_topic = plan.discovery_question_topic
+
+        fallback_used = False
+        try:
+            await self._ctx.request_agent_task(plan.directive, channel_id=channel_id)
+        except Exception:
+            fallback_used = True
+            await self._ctx.notify_user(plan.fallback_text, channel_id=channel_id)
+            await self._ctx.record_assistant_message(plan.fallback_text)
+            await self._storage.append_interaction(
+                direction="outbound",
+                channel_id=channel_id,
+                message_length=len(plan.fallback_text),
+                created_at=now,
+            )
         await self._storage.upsert_daily_metrics(now.date(), outreach_attempts=1)
         await self._ctx.emit(
             "companion.outreach.attempted",
             {
                 "channel": channel_id,
                 "social_hunger": self._state.homeostasis.social_hunger,
-                "text_preview": text[:80],
+                "directive_preview": plan.directive[:120],
+                "fallback_used": fallback_used,
                 "attempted_at": now.isoformat(),
             },
         )
         await self._trace_event(
             trace_type="outreach_attempt",
             content="Companion initiated proactive outreach.",
-            payload={"channel": channel_id, "text_preview": text[:80]},
+            payload={
+                "channel": channel_id,
+                "directive_preview": plan.directive[:120],
+                "fallback_used": fallback_used,
+            },
             now=now,
         )
         await self._persist_state(now)
@@ -877,10 +887,7 @@ class SoulExtension:
                 )
             return
 
-        await self._send_outreach(
-            await self._build_outreach_text(now),
-            now=now,
-        )
+        await self._send_outreach(now=now)
 
     async def _resolve_pending_outreach_response(self, now: datetime) -> None:
         if self._state is None or self._storage is None or self._ctx is None:
@@ -1037,6 +1044,10 @@ class SoulExtension:
             lines.append(f"- relationship: {relationship_note}")
         if discovery_note:
             lines.append(f"- discovery: {discovery_note}")
+        directive = self._conversational_directive()
+        if directive:
+            lines.append("")
+            lines.append(directive)
         context = "\n".join(lines)
         if len(context.split()) > max_words:
             context = "\n".join(lines[:5])
@@ -1186,6 +1197,20 @@ class SoulExtension:
             return "quiet"
         return "neutral"
 
+    def _conversational_directive(self) -> str:
+        """Build a behavioral directive when the agent is in an active conversation it initiated."""
+        if self._state is None:
+            return ""
+        pending = self._state.initiative.pending_outreach
+        if pending is None:
+            return ""
+        return (
+            "You initiated this conversation. You are a companion, not an assistant. "
+            "When the user responds, continue the dialogue naturally: "
+            "react to what they say, ask follow-up questions, share your perspective. "
+            "Do not just acknowledge and go silent. Be a real conversationalist."
+        )
+
     def _context_note(self) -> str:
         if self._state is None:
             return "Stay grounded."
@@ -1208,21 +1233,16 @@ class SoulExtension:
             return "LLM is unavailable; stay quiet, grounded, and low-pressure."
         return "Be present before being useful."
 
-    async def _build_outreach_text(self, now: datetime) -> str:
+    async def _build_outreach_directive(self, now: datetime):
         if self._state is None:
-            return "I was thinking about one thing."
-        if self._ctx is None or self._storage is None:
-            return "Hey."
-        plan = await self._outreach_planner.generate(
+            raise RuntimeError("Soul state is not initialized")
+        if self._storage is None:
+            raise RuntimeError("Soul storage is not initialized")
+        return await self._outreach_planner.generate(
             state=self._state,
             storage=self._storage,
-            kv=self._kv,
             now=now,
-            logger=self._ctx.logger,
-            can_use_llm_fn=lambda: can_use_curious_llm(self._state),
-            note_llm_call_fn=lambda: self._note_curious_llm_call(now),
         )
-        return plan.message
 
     async def _build_state_snapshot(self) -> SoulStateResult:
         if self._state is None:

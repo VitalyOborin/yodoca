@@ -93,7 +93,7 @@ async def assemble_outreach_context(
         current_time.astimezone(UTC).day,
     )
     recent_interactions_raw = await storage.list_recent_interactions(limit=10)
-    unfollowed_raw = await storage.list_unfollowed_interactions(limit=5)
+    unfollowed_raw = await storage.list_unfollowed_interactions(limit=5, now=current_time)
     recent_traces_raw = await storage.list_traces_since(
         current_time - timedelta(hours=24),
         trace_types=("reflection", "exploration"),
@@ -204,7 +204,9 @@ def _compute_relationship_depth(
     state: CompanionState,
     relationship_patterns: list[RelationshipPatternSummary],
 ) -> str:
-    permanent_count = sum(1 for pattern in relationship_patterns if pattern.is_permanent)
+    permanent_count = sum(
+        1 for pattern in relationship_patterns if pattern.is_permanent
+    )
     if state.discovery.lifecycle_phase is SoulLifecyclePhase.MATURE:
         return "established"
     if permanent_count >= 2:
@@ -225,8 +227,9 @@ def _hours_since_last_user_message(
     for interaction in interactions:
         if interaction.direction == "inbound":
             return round(
-                (now.astimezone(UTC) - interaction.created_at.astimezone(UTC))
-                .total_seconds()
+                (
+                    now.astimezone(UTC) - interaction.created_at.astimezone(UTC)
+                ).total_seconds()
                 / 3600.0,
                 2,
             )

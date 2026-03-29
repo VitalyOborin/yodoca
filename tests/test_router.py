@@ -735,3 +735,40 @@ class TestHandleUserMessageExplicitThread:
             )
         assert len(sessions) == 2
         assert sessions[0] is sessions[1]
+
+
+class TestRecordAssistantMessage:
+    """record_assistant_message injects into thread without sending to channel."""
+
+    @pytest.mark.asyncio
+    async def test_records_message_in_active_thread(self, tmp_path: Path) -> None:
+        from core.extensions.persistence.thread_manager import ThreadManager
+
+        tm = ThreadManager()
+        tm.configure_thread(str(tmp_path / "t.db"), 1800)
+        router = MessageRouter(thread_manager=tm)
+
+        await router.record_assistant_message("Hello from outreach")
+
+        history = await tm.get_thread_history(tm.thread_id)
+        assert history is not None
+        found = any(
+            item.get("role") == "assistant" and "Hello from outreach" in str(item)
+            for item in history
+        )
+        assert found, f"Assistant message not found in thread history: {history}"
+
+    @pytest.mark.asyncio
+    async def test_does_not_send_to_channel(self) -> None:
+        router = MessageRouter()
+        ch = MockChannel()
+        router.register_channel("cli", ch)
+        await router.record_assistant_message("silent message")
+        assert ch.proactive_sent == []
+        assert ch.sent == []
+
+    @pytest.mark.asyncio
+    async def test_no_thread_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        router = MessageRouter()
+        await router.record_assistant_message("orphan")
+        assert "no active thread" in caplog.text

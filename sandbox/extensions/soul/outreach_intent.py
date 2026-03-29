@@ -42,6 +42,8 @@ def _should_ask_discovery_question(context: OutreachContext) -> bool:
 
 
 def _should_follow_up(context: OutreachContext) -> bool:
+    """User said something hours ago that was never followed up (storage anti-join).
+    Requires existing knowledge (discovery nodes or traces) to reference."""
     if not context.unfollowed_interactions:
         return False
     return bool(context.discovery_nodes or context.recent_traces)
@@ -52,6 +54,10 @@ def _has_recent_reflection(context: OutreachContext) -> bool:
 
 
 def _should_continue_thread(context: OutreachContext) -> bool:
+    """Most recent interaction is inbound (user spoke last) or last outreach was
+    ignored/missed — re-open the conversation.  Unlike follow_up, this doesn't
+    require an unfollowed-interaction window from storage; it fires on recency
+    or on a failed prior outreach attempt."""
     if context.recent_interactions:
         if context.recent_interactions[0].direction == "inbound":
             return True

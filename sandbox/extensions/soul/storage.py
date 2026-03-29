@@ -562,12 +562,14 @@ class SoulStorage:
         *,
         limit: int = 5,
         follow_up_window_hours: int = 4,
+        now: datetime | None = None,
     ) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(
                 self._list_unfollowed_interactions_sync,
                 limit,
                 follow_up_window_hours,
+                now or datetime.now(UTC),
             )
 
     def _list_interactions_since_sync(self, since: datetime) -> list[dict[str, Any]]:
@@ -619,10 +621,11 @@ class SoulStorage:
         self,
         limit: int,
         follow_up_window_hours: int,
+        now: datetime,
     ) -> list[dict[str, Any]]:
         conn = self._get_conn()
         follow_up_cutoff = (
-            datetime.now(UTC) - timedelta(hours=follow_up_window_hours)
+            now - timedelta(hours=follow_up_window_hours)
         ).isoformat()
         rows = conn.execute(
             """
