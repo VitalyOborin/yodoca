@@ -1,6 +1,9 @@
+from datetime import UTC, datetime
+
 from sandbox.extensions.soul.models import (
     CompanionState,
     OutreachResult,
+    PerceptionSample,
     Phase,
     PresenceState,
 )
@@ -13,6 +16,12 @@ def test_companion_state_json_round_trip() -> None:
     state.mood = 0.25
     state.tick_count = 42
     state.perception.openness_signal = 0.6
+    state.perception_window.samples.append(
+        PerceptionSample(
+            observed_at=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
+            signals=state.perception,
+        )
+    )
     state.user_presence.estimated_availability = 0.55
     state.initiative.budget.used_today = 1
     state.initiative.last_outreach_result = OutreachResult.RESPONSE
@@ -26,6 +35,7 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.mood == 0.25
     assert restored.tick_count == 42
     assert restored.perception.openness_signal == 0.6
+    assert len(restored.perception_window.samples) == 1
     assert restored.user_presence.estimated_availability == 0.55
     assert restored.initiative.budget.used_today == 1
     assert restored.initiative.last_outreach_result is OutreachResult.RESPONSE

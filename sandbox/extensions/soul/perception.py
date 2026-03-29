@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
-from sandbox.extensions.soul.models import PerceptionSignals
+from sandbox.extensions.soul.models import (
+    PerceptionSample,
+    PerceptionSignals,
+    PerceptionWindowState,
+)
 
 _EMOJI_RE = re.compile(
     "["
@@ -106,6 +111,91 @@ def smooth_signals(
         openness_signal=blend(previous.openness_signal, current.openness_signal),
         fatigue_signal=blend(previous.fatigue_signal, current.fatigue_signal),
         joy_signal=blend(previous.joy_signal, current.joy_signal),
+    )
+
+
+def append_window_sample(
+    window: PerceptionWindowState,
+    current: PerceptionSignals,
+    *,
+    observed_at: datetime,
+    max_samples: int = 8,
+    outlier_delta: float = 0.45,
+    outlier_dampening: float = 0.6,
+) -> PerceptionWindowState:
+    baseline = collapse_window(window)
+    sample = PerceptionSample(
+        observed_at=observed_at,
+        signals=_dampen_outlier(
+            current,
+            baseline=baseline,
+            outlier_delta=outlier_delta,
+            dampening=outlier_dampening,
+        ),
+    )
+    samples = [*window.samples, sample][-max_samples:]
+    return PerceptionWindowState(samples=samples)
+
+
+def collapse_window(
+    window: PerceptionWindowState,
+    *,
+    decay: float = 0.72,
+) -> PerceptionSignals:
+    if not window.samples:
+        return PerceptionSignals()
+
+    decay = clamp01(decay)
+    weights: list[float] = []
+    for index in range(len(window.samples)):
+        age = (len(window.samples) - 1) - index
+        weights.append(decay**age)
+
+    def average(selector: str) -> float:
+        numerator = 0.0
+        denominator = 0.0
+        for sample, weight in zip(window.samples, weights, strict=False):
+            numerator += getattr(sample.signals, selector) * weight
+            denominator += weight
+        if denominator == 0.0:
+            return 0.0
+        return round(clamp01(numerator / denominator), 4)
+
+    return PerceptionSignals(
+        stress_signal=average("stress_signal"),
+        withdrawal_signal=average("withdrawal_signal"),
+        openness_signal=average("openness_signal"),
+        fatigue_signal=average("fatigue_signal"),
+        joy_signal=average("joy_signal"),
+    )
+
+
+def _dampen_outlier(
+    current: PerceptionSignals,
+    *,
+    baseline: PerceptionSignals,
+    outlier_delta: float,
+    dampening: float,
+) -> PerceptionSignals:
+    dampening = clamp01(dampening)
+
+    def adjust(value: float, baseline_value: float) -> float:
+        delta = value - baseline_value
+        if abs(delta) <= outlier_delta:
+            return value
+        limited_delta = outlier_delta + ((abs(delta) - outlier_delta) * dampening)
+        signed_delta = limited_delta if delta >= 0 else -limited_delta
+        return clamp01(baseline_value + signed_delta)
+
+    return PerceptionSignals(
+        stress_signal=adjust(current.stress_signal, baseline.stress_signal),
+        withdrawal_signal=adjust(
+            current.withdrawal_signal,
+            baseline.withdrawal_signal,
+        ),
+        openness_signal=adjust(current.openness_signal, baseline.openness_signal),
+        fatigue_signal=adjust(current.fatigue_signal, baseline.fatigue_signal),
+        joy_signal=adjust(current.joy_signal, baseline.joy_signal),
     )
 
 

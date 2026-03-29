@@ -107,6 +107,46 @@ class PerceptionSignals:
 
 
 @dataclass(slots=True)
+class PerceptionSample:
+    observed_at: datetime
+    signals: PerceptionSignals
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "observed_at": _serialize_datetime(self.observed_at),
+            "signals": self.signals.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PerceptionSample:
+        return cls(
+            observed_at=_deserialize_datetime(data["observed_at"]),
+            signals=PerceptionSignals.from_dict(data.get("signals", {})),
+        )
+
+
+@dataclass(slots=True)
+class PerceptionWindowState:
+    samples: list[PerceptionSample] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "samples": [sample.to_dict() for sample in self.samples],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PerceptionWindowState:
+        raw_samples = data.get("samples", [])
+        return cls(
+            samples=[
+                PerceptionSample.from_dict(sample)
+                for sample in raw_samples
+                if isinstance(sample, dict)
+            ]
+        )
+
+
+@dataclass(slots=True)
 class TemperamentProfile:
     sociability: float = 0.5
     depth: float = 0.5
@@ -288,6 +328,9 @@ class CompanionState:
     mood: float = 0.0
     tick_count: int = 0
     perception: PerceptionSignals = field(default_factory=PerceptionSignals)
+    perception_window: PerceptionWindowState = field(
+        default_factory=PerceptionWindowState
+    )
     user_presence: UserPresenceState = field(default_factory=UserPresenceState)
     initiative: InitiativeState = field(default_factory=InitiativeState)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
@@ -300,6 +343,7 @@ class CompanionState:
             "mood": self.mood,
             "tick_count": self.tick_count,
             "perception": self.perception.to_dict(),
+            "perception_window": self.perception_window.to_dict(),
             "user_presence": self.user_presence.to_dict(),
             "initiative": self.initiative.to_dict(),
             "temperament": asdict(self.temperament),
@@ -317,6 +361,9 @@ class CompanionState:
             mood=float(data["mood"]),
             tick_count=int(data["tick_count"]),
             perception=PerceptionSignals.from_dict(data.get("perception", {})),
+            perception_window=PerceptionWindowState.from_dict(
+                data.get("perception_window", {})
+            ),
             user_presence=UserPresenceState.from_dict(data.get("user_presence", {})),
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),

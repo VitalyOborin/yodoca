@@ -1,6 +1,10 @@
-from sandbox.extensions.soul.models import PerceptionSignals
+from datetime import UTC, datetime, timedelta
+
+from sandbox.extensions.soul.models import PerceptionSignals, PerceptionWindowState
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
+    append_window_sample,
+    collapse_window,
     infer_signals,
     smooth_signals,
 )
@@ -42,3 +46,42 @@ def test_smoothing_keeps_signals_probabilistic() -> None:
 
     assert 0.2 < blended.openness_signal < 0.9
     assert 0.1 < blended.stress_signal < 0.8
+
+
+def test_sliding_window_preserves_recent_context_with_decay() -> None:
+    start = datetime(2026, 3, 1, tzinfo=UTC)
+    window = PerceptionWindowState()
+    window = append_window_sample(
+        window,
+        PerceptionSignals(openness_signal=0.2),
+        observed_at=start,
+    )
+    window = append_window_sample(
+        window,
+        PerceptionSignals(openness_signal=0.8),
+        observed_at=start + timedelta(days=1),
+    )
+
+    collapsed = collapse_window(window, decay=0.7)
+
+    assert 0.2 < collapsed.openness_signal < 0.8
+
+
+def test_outlier_dampening_prevents_single_message_takeover() -> None:
+    start = datetime(2026, 3, 1, tzinfo=UTC)
+    window = PerceptionWindowState()
+    for index in range(4):
+        window = append_window_sample(
+            window,
+            PerceptionSignals(stress_signal=0.1, openness_signal=0.2),
+            observed_at=start + timedelta(minutes=index),
+        )
+
+    window = append_window_sample(
+        window,
+        PerceptionSignals(stress_signal=1.0, openness_signal=0.0),
+        observed_at=start + timedelta(minutes=10),
+    )
+    collapsed = collapse_window(window)
+
+    assert collapsed.stress_signal < 0.7

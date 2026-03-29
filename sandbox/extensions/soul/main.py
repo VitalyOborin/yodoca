@@ -34,6 +34,8 @@ from sandbox.extensions.soul.mood_classifier import (
 )
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
+    append_window_sample,
+    collapse_window,
     infer_signals,
     smooth_signals,
 )
@@ -353,7 +355,16 @@ class SoulExtension:
                 response_delay_seconds=response_delay,
             )
         )
-        self._state.perception = smooth_signals(self._state.perception, inferred)
+        self._state.perception_window = append_window_sample(
+            self._state.perception_window,
+            inferred,
+            observed_at=now,
+        )
+        self._state.perception = smooth_signals(
+            self._state.perception,
+            collapse_window(self._state.perception_window),
+            alpha=0.5,
+        )
         self._state.homeostasis.social_hunger = max(
             0.05,
             self._state.homeostasis.social_hunger - 0.20,
