@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -362,7 +363,7 @@ class SoulExtension:
             raise RuntimeError("Soul extension is not initialized")
 
         now = now or datetime.now(UTC)
-        outreach_id = f"outreach-{int(now.timestamp())}"
+        outreach_id = f"outreach-{uuid.uuid4().hex[:12]}"
         self._state.initiative = register_outreach_attempt(
             self._state.initiative,
             outreach_id=outreach_id,
@@ -395,7 +396,14 @@ class SoulExtension:
             return
 
         outcome = check_outreach(self._state, now=now)
-        if outcome.decision is not BoundaryDecision.ALLOW:
+        if outcome.decision is BoundaryDecision.BLOCK:
+            return
+        if outcome.decision is BoundaryDecision.DEFER:
+            if self._ctx is not None:
+                self._ctx.logger.debug(
+                    "soul: outreach deferred (%s), will retry next tick",
+                    outcome.reason,
+                )
             return
 
         await self._send_outreach(
