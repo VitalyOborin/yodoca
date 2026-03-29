@@ -307,6 +307,96 @@ async def test_reflection_generator_writes_budgeted_reflection_trace(
     assert rows
 
 
+class _RuntimeKvStore:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str | None) -> None:
+        if value is None:
+            self.values.pop(key, None)
+            return
+        self.values[key] = value
+
+
+async def test_internal_exploration_writes_trace_and_respects_novelty(
+    tmp_path: Path,
+) -> None:
+    kv = _RuntimeKvStore()
+    context = FakeSoulContext(
+        tmp_path,
+        model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
+        extensions={"kv": kv},
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    assert ext._storage is not None
+    ext._state.homeostasis.current_phase = Phase.CURIOUS
+    now = datetime.now(UTC)
+    for index in range(3):
+        await ext._storage.append_trace(
+            trace_type="interaction",
+            phase=Phase.CURIOUS.value,
+            content=f"Trace {index}",
+            created_at=now - timedelta(minutes=index + 1),
+        )
+
+    with patch(
+        "sandbox.extensions.soul.main.Runner.run",
+        new=AsyncMock(return_value=SimpleNamespace(final_output="The user returns to the same unresolved topic.")),
+    ) as run_mock:
+        await ext._maybe_explore_internal_space(now)
+
+    with sqlite3.connect(context.data_dir / "soul.db") as conn:
+        rows = conn.execute(
+            "SELECT trace_type FROM traces WHERE trace_type = 'exploration'"
+        ).fetchall()
+
+    assert run_mock.await_count == 1
+    assert rows
+
+
+async def test_internal_exploration_novelty_exhaustion_lowers_curiosity(
+    tmp_path: Path,
+) -> None:
+    kv = _RuntimeKvStore()
+    context = FakeSoulContext(
+        tmp_path,
+        model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
+        extensions={"kv": kv},
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    assert ext._storage is not None
+    ext._state.homeostasis.current_phase = Phase.CURIOUS
+    ext._state.homeostasis.curiosity = 0.8
+    now = datetime.now(UTC)
+    for index in range(3):
+        await ext._storage.append_trace(
+            trace_type="interaction",
+            phase=Phase.CURIOUS.value,
+            content=f"Trace {index}",
+            created_at=now - timedelta(minutes=index + 1),
+        )
+
+    with patch(
+        "sandbox.extensions.soul.main.Runner.run",
+        new=AsyncMock(return_value=SimpleNamespace(final_output="Same observation.")),
+    ):
+        await ext._maybe_explore_internal_space(now)
+        await ext._maybe_explore_internal_space(now + timedelta(minutes=1))
+        await ext._maybe_explore_internal_space(now + timedelta(minutes=2))
+        await ext._maybe_explore_internal_space(now + timedelta(minutes=3))
+
+    assert ext._state.homeostasis.curiosity < 0.8
+
+
 async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) -> None:
     context = FakeSoulContext(tmp_path)
     ext = SoulExtension()

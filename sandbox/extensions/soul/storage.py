@@ -137,6 +137,43 @@ class SoulStorage:
         )
         conn.commit()
 
+    async def list_traces_since(
+        self,
+        since: datetime,
+        *,
+        trace_types: tuple[str, ...] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_traces_since_sync,
+                since,
+                trace_types,
+                limit,
+            )
+
+    def _list_traces_since_sync(
+        self,
+        since: datetime,
+        trace_types: tuple[str, ...] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        params: list[Any] = [since.astimezone(UTC).isoformat()]
+        sql = """
+            SELECT id, trace_type, phase, content, payload_json, created_at
+            FROM traces
+            WHERE created_at >= ?
+        """
+        if trace_types:
+            placeholders = ", ".join("?" for _ in trace_types)
+            sql += f" AND trace_type IN ({placeholders})"
+            params.extend(trace_types)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
     async def upsert_daily_metrics(
         self,
         metric_date: date,

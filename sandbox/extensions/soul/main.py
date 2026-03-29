@@ -101,6 +101,7 @@ class SoulExtension:
         self._context_token_budget = 200
         self._max_reflections_per_day = 5
         self._reflection_cooldown_minutes = 90
+        self._max_explorations_per_day = 3
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
@@ -110,6 +111,7 @@ class SoulExtension:
         self._classifier = ClassifierRuntime()
         self._trend_cache = TrendCache(ttl_seconds=300)
         self._reflection_agent: Agent | None = None
+        self._exploration_agent: Agent | None = None
 
     async def initialize(self, context: ExtensionContext) -> None:
         self._ctx = context
@@ -128,6 +130,9 @@ class SoulExtension:
         )
         self._reflection_cooldown_minutes = int(
             context.get_config("reflection_cooldown_minutes", 90)
+        )
+        self._max_explorations_per_day = int(
+            context.get_config("max_explorations_per_day", 3)
         )
         self._classifier = ClassifierRuntime(
             daily_budget=int(context.get_config("mood_classifier_daily_budget", 3)),
@@ -160,6 +165,18 @@ class SoulExtension:
                 )
             except Exception as exc:
                 context.logger.warning("soul: reflection model unavailable: %s", exc)
+            try:
+                self._exploration_agent = Agent(
+                    name="SoulExplorationAgent",
+                    instructions=(
+                        "Given the companion's own recent traces, produce one short novel observation. "
+                        "Keep it under 18 words. No markdown, no quotes, no theatrics."
+                    ),
+                    model=context.model_router.get_model("soul"),
+                    model_settings=ModelSettings(parallel_tool_calls=False),
+                )
+            except Exception as exc:
+                context.logger.warning("soul: exploration model unavailable: %s", exc)
         loaded_state = await self._storage.load_state()
         if loaded_state is None:
             self._state = CompanionState()
@@ -266,6 +283,7 @@ class SoulExtension:
         self._last_error = None
         self._classifier.destroy()
         self._reflection_agent = None
+        self._exploration_agent = None
 
     def health_check(self) -> bool:
         if (
@@ -358,6 +376,7 @@ class SoulExtension:
             )
 
         await self._maybe_generate_reflection(now)
+        await self._maybe_explore_internal_space(now)
         if phase_changed or presence_changed or self._persist_due(now):
             await self._persist_state(now)
         await self._maybe_trace_drive_boundaries(previous=previous_state, now=now)
@@ -974,6 +993,78 @@ class SoulExtension:
             f" playfulness={temperament.playfulness if temperament else 0.5:.2f}\n"
             "Write one internal reflection."
         )
+
+    async def _maybe_explore_internal_space(self, now: datetime) -> None:
+        if (
+            self._state is None
+            or self._storage is None
+            or self._exploration_agent is None
+            or self._state.homeostasis.current_phase is not Phase.CURIOUS
+        ):
+            return
+        if await self._get_daily_counter("soul.exploration.used", now) >= self._max_explorations_per_day:
+            return
+        traces = await self._storage.list_traces_since(
+            now - timedelta(days=7),
+            trace_types=("reflection", "interaction", "phase_transition"),
+            limit=8,
+        )
+        if len(traces) < 3:
+            return
+
+        prompt = self._build_exploration_prompt(traces)
+        try:
+            result = await Runner.run(self._exploration_agent, prompt, max_turns=1)
+        except Exception:
+            return
+        observation = (result.final_output or "").strip().splitlines()[0][:160].strip()
+        if not observation:
+            return
+        if not await self._mark_exploration_novelty(observation, now):
+            return
+        await self._trace_event(
+            trace_type="exploration",
+            content=observation,
+            payload={"source_count": len(traces)},
+            now=now,
+        )
+        await self._increment_daily_counter("soul.exploration.used", now)
+
+    def _build_exploration_prompt(self, traces: list[dict[str, Any]]) -> str:
+        snippets = [f"- {item['trace_type']}: {item['content']}" for item in traces[:5]]
+        return "Recent internal traces:\n" + "\n".join(snippets) + "\nWrite one novel observation."
+
+    async def _mark_exploration_novelty(self, observation: str, now: datetime) -> bool:
+        if self._kv is None or self._state is None:
+            return True
+        normalized = " ".join(observation.lower().split())
+        previous = await self._kv.get("soul.exploration.last_observation")
+        if normalized == (previous or ""):
+            streak = int(await self._kv.get("soul.exploration.novelty_miss") or 0) + 1
+            await self._kv.set("soul.exploration.novelty_miss", str(streak))
+            if streak >= 3:
+                self._state.homeostasis.curiosity = max(
+                    0.1,
+                    self._state.homeostasis.curiosity - 0.3,
+                )
+            return False
+        await self._kv.set("soul.exploration.last_observation", normalized)
+        await self._kv.set("soul.exploration.novelty_miss", "0")
+        return True
+
+    async def _get_daily_counter(self, prefix: str, now: datetime) -> int:
+        if self._kv is None:
+            return 0
+        raw = await self._kv.get(f"{prefix}.{now.date().isoformat()}")
+        return int(raw or 0)
+
+    async def _increment_daily_counter(self, prefix: str, now: datetime) -> int:
+        if self._kv is None:
+            return 0
+        key = f"{prefix}.{now.date().isoformat()}"
+        next_value = (await self._get_daily_counter(prefix, now)) + 1
+        await self._kv.set(key, str(next_value))
+        return next_value
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="get_soul_state")

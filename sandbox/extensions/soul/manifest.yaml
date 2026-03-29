@@ -23,6 +23,7 @@ config:
   mood_classifier_weight: 0.25
   max_reflections_per_day: 5
   reflection_cooldown_minutes: 90
+  max_explorations_per_day: 3
 
 schedules:
   - name: weekly_consolidation
