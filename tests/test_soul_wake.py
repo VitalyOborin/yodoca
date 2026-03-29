@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sandbox.extensions.soul.models import CompanionState, PerceptionSignals, Phase
 from sandbox.extensions.soul.wake import WakeMode, restore_after_gap
 
 
 def test_seamless_resume_updates_last_tick_only() -> None:
-    now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = CompanionState()
     state.homeostasis.last_tick_at = now - timedelta(minutes=2)
 
@@ -16,7 +16,7 @@ def test_seamless_resume_updates_last_tick_only() -> None:
 
 
 def test_soft_wake_caps_rest_need_and_returns_ambient() -> None:
-    now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = CompanionState()
     state.homeostasis.last_tick_at = now - timedelta(minutes=20)
     state.homeostasis.current_phase = Phase.CURIOUS
@@ -29,7 +29,7 @@ def test_soft_wake_caps_rest_need_and_returns_ambient() -> None:
 
 
 def test_natural_wake_resets_rest_need() -> None:
-    now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = CompanionState()
     state.homeostasis.last_tick_at = now - timedelta(hours=3)
 
@@ -40,7 +40,7 @@ def test_natural_wake_resets_rest_need() -> None:
 
 
 def test_long_absence_resets_to_baseline() -> None:
-    now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     state = CompanionState()
     state.mood = 0.8
     state.tick_count = 77

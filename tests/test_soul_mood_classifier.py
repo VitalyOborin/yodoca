@@ -61,7 +61,9 @@ async def test_user_message_triggers_llm_classification_with_budget_guard(
     assert ext._state is not None
     assert ext._state.perception.stress_signal > 0.2
     assert ext._state.homeostasis.care_impulse > 0.0
-    metrics = await ext._storage.get_daily_metrics(ext._state.homeostasis.last_tick_at.date())
+    metrics = await ext._storage.get_daily_metrics(
+        ext._state.homeostasis.last_tick_at.date()
+    )
     assert metrics is not None
     assert metrics["inference_count"] == 1
 

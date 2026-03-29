@@ -13,10 +13,7 @@ from sandbox.extensions.soul.models import (
 )
 
 _EMOJI_RE = re.compile(
-    "["
-    "\U0001F300-\U0001FAFF"
-    "\U00002600-\U000027BF"
-    "]",
+    "[\U0001f300-\U0001faff\U00002600-\U000027bf]",
 )
 
 
@@ -44,7 +41,9 @@ def infer_signals(observation: HeuristicPerceptionInput) -> PerceptionSignals:
     richness = clamp01((length - 24) / 120) if length > 24 else 0.0
     question_signal = clamp01(question_marks / 2)
     emoji_signal = clamp01(emoji_count / 2)
-    quick_follow_up = _quick_follow_up_score(observation.seconds_since_last_user_message)
+    quick_follow_up = _quick_follow_up_score(
+        observation.seconds_since_last_user_message
+    )
     delayed_response = _delayed_response_score(observation.response_delay_seconds)
     punctuation_intensity = clamp01((question_marks + exclamations + ellipsis) / 4)
 

@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from agents import Agent, ModelSettings, Runner, function_tool
+from agents import function_tool
 
 from core.events.topics import SystemTopics
 from sandbox.extensions.soul.boundary import BoundaryDecision, check_outreach
@@ -23,6 +23,7 @@ from sandbox.extensions.soul.drives import (
     tick_homeostasis,
     transition_phase,
 )
+from sandbox.extensions.soul.exploration_runtime import ExplorationRuntime
 from sandbox.extensions.soul.initiative import (
     register_outreach_attempt,
     resolve_outreach,
@@ -44,12 +45,17 @@ from sandbox.extensions.soul.presence import (
     estimate_availability,
     normalize_presence_now,
 )
+from sandbox.extensions.soul.reflection_runtime import ReflectionRuntime
 from sandbox.extensions.soul.storage import SoulStorage
 from sandbox.extensions.soul.temperament import (
     profile_from_questionnaire,
     questionnaire_keys,
 )
 from sandbox.extensions.soul.tools import SoulMetricsResult, SoulStateResult
+from sandbox.extensions.soul.trace_policy import (
+    detect_drive_boundary_crossings,
+    detect_perception_shift,
+)
 from sandbox.extensions.soul.trends import (
     RelationshipTrend,
     TrendCache,
@@ -99,9 +105,6 @@ class SoulExtension:
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
         self._context_token_budget = 200
-        self._max_reflections_per_day = 5
-        self._reflection_cooldown_minutes = 90
-        self._max_explorations_per_day = 3
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
@@ -110,8 +113,8 @@ class SoulExtension:
         self._last_error: str | None = None
         self._classifier = ClassifierRuntime()
         self._trend_cache = TrendCache(ttl_seconds=300)
-        self._reflection_agent: Agent | None = None
-        self._exploration_agent: Agent | None = None
+        self._reflector = ReflectionRuntime()
+        self._explorer = ExplorationRuntime()
 
     async def initialize(self, context: ExtensionContext) -> None:
         self._ctx = context
@@ -125,14 +128,12 @@ class SoulExtension:
         self._context_token_budget = int(
             context.get_config("context_token_budget", 200)
         )
-        self._max_reflections_per_day = int(
-            context.get_config("max_reflections_per_day", 5)
+        self._reflector = ReflectionRuntime(
+            max_per_day=int(context.get_config("max_reflections_per_day", 5)),
+            cooldown_minutes=int(context.get_config("reflection_cooldown_minutes", 90)),
         )
-        self._reflection_cooldown_minutes = int(
-            context.get_config("reflection_cooldown_minutes", 90)
-        )
-        self._max_explorations_per_day = int(
-            context.get_config("max_explorations_per_day", 3)
+        self._explorer = ExplorationRuntime(
+            max_per_day=int(context.get_config("max_explorations_per_day", 3)),
         )
         self._classifier = ClassifierRuntime(
             daily_budget=int(context.get_config("mood_classifier_daily_budget", 3)),
@@ -152,31 +153,10 @@ class SoulExtension:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
             )
-            try:
-                self._reflection_agent = Agent(
-                    name="SoulReflectionGenerator",
-                    instructions=(
-                        "Write one short internal reflection for a companion agent. "
-                        "Keep it functional, grounded, and under 18 words. "
-                        "No theatrical language, no markdown, no quotes."
-                    ),
-                    model=context.model_router.get_model("soul"),
-                    model_settings=ModelSettings(parallel_tool_calls=False),
-                )
-            except Exception as exc:
-                context.logger.warning("soul: reflection model unavailable: %s", exc)
-            try:
-                self._exploration_agent = Agent(
-                    name="SoulExplorationAgent",
-                    instructions=(
-                        "Given the companion's own recent traces, produce one short novel observation. "
-                        "Keep it under 18 words. No markdown, no quotes, no theatrics."
-                    ),
-                    model=context.model_router.get_model("soul"),
-                    model_settings=ModelSettings(parallel_tool_calls=False),
-                )
-            except Exception as exc:
-                context.logger.warning("soul: exploration model unavailable: %s", exc)
+            self._reflector.try_create_agent(
+                context.model_router, logger=context.logger
+            )
+            self._explorer.try_create_agent(context.model_router, logger=context.logger)
         loaded_state = await self._storage.load_state()
         if loaded_state is None:
             self._state = CompanionState()
@@ -282,8 +262,8 @@ class SoulExtension:
         self._initialized_at = None
         self._last_error = None
         self._classifier.destroy()
-        self._reflection_agent = None
-        self._exploration_agent = None
+        self._reflector.destroy()
+        self._explorer.destroy()
 
     def health_check(self) -> bool:
         if (
@@ -322,7 +302,7 @@ class SoulExtension:
             raise RuntimeError("Soul extension is not initialized")
 
         now = now or datetime.now(UTC)
-        previous_state = CompanionState.from_json(self._state.to_json())
+        previous_state = self._state.snapshot()
         await self._resolve_pending_outreach_timeout(now)
         await self._maybe_attempt_outreach(now)
         phase_before = self._state.homeostasis.current_phase
@@ -419,32 +399,9 @@ class SoulExtension:
     ) -> None:
         if self._state is None:
             return
-        deltas = {
-            "stress": abs(
-                self._state.perception.stress_signal - previous.perception.stress_signal
-            ),
-            "withdrawal": abs(
-                self._state.perception.withdrawal_signal
-                - previous.perception.withdrawal_signal
-            ),
-            "openness": abs(
-                self._state.perception.openness_signal
-                - previous.perception.openness_signal
-            ),
-            "fatigue": abs(
-                self._state.perception.fatigue_signal - previous.perception.fatigue_signal
-            ),
-            "joy": abs(self._state.perception.joy_signal - previous.perception.joy_signal),
-        }
-        strongest = max(deltas, key=deltas.get)
-        if deltas[strongest] <= 0.2:
-            return
-        await self._trace_event(
-            trace_type="perception_shift",
-            content=f"Perception shifted on {strongest}.",
-            payload={"deltas": deltas},
-            now=now,
-        )
+        shift = detect_perception_shift(self._state, previous)
+        if shift is not None:
+            await self._trace_event(**shift, now=now)
 
     async def _maybe_trace_drive_boundaries(
         self,
@@ -454,27 +411,8 @@ class SoulExtension:
     ) -> None:
         if self._state is None:
             return
-        drive_names = (
-            "curiosity",
-            "social_hunger",
-            "rest_need",
-            "reflection_need",
-            "care_impulse",
-            "overstimulation",
-        )
-        for name in drive_names:
-            before = getattr(previous.homeostasis, name)
-            after = getattr(self._state.homeostasis, name)
-            crossed_low = before >= 0.1 and after < 0.1
-            crossed_high = before <= 0.9 and after > 0.9
-            if not crossed_low and not crossed_high:
-                continue
-            await self._trace_event(
-                trace_type="drive_boundary",
-                content=f"Drive {name} crossed {'high' if crossed_high else 'low'} boundary.",
-                payload={"drive": name, "before": before, "after": after},
-                now=now,
-            )
+        for crossing in detect_drive_boundary_crossings(self._state, previous):
+            await self._trace_event(**crossing, now=now)
 
     async def _trace_interaction(
         self,
@@ -540,7 +478,7 @@ class SoulExtension:
             return
 
         now = normalize_presence_now()
-        previous_state = CompanionState.from_json(self._state.to_json())
+        previous_state = self._state.snapshot()
         gap_since_user = (
             (now - self._last_user_message_at).total_seconds()
             if self._last_user_message_at is not None
@@ -688,7 +626,10 @@ class SoulExtension:
     async def _maybe_attempt_outreach(self, now: datetime) -> None:
         if self._state is None:
             return
-        if self._state.homeostasis.social_hunger < self._state.initiative.adaptive_threshold:
+        if (
+            self._state.homeostasis.social_hunger
+            < self._state.initiative.adaptive_threshold
+        ):
             return
 
         outcome = check_outreach(self._state, now=now)
@@ -733,7 +674,10 @@ class SoulExtension:
         await self._trace_event(
             trace_type="outreach_result",
             content="Outreach resolved with a user response.",
-            payload={"result": OutreachResult.RESPONSE.value, "delay_seconds": delay_seconds},
+            payload={
+                "result": OutreachResult.RESPONSE.value,
+                "delay_seconds": delay_seconds,
+            },
             now=now,
         )
 
@@ -821,7 +765,11 @@ class SoulExtension:
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
         del prompt, turn_context
         context = await self._build_context_string()
-        if context is not None and self._storage is not None and self._state is not None:
+        if (
+            context is not None
+            and self._storage is not None
+            and self._state is not None
+        ):
             await self._storage.upsert_daily_metrics(
                 datetime.now(UTC).date(),
                 openness_avg=self._state.perception.openness_signal,
@@ -925,146 +873,30 @@ class SoulExtension:
             return None
 
     async def _maybe_generate_reflection(self, now: datetime) -> None:
-        if (
-            self._state is None
-            or self._storage is None
-            or self._reflection_agent is None
-            or self._state.homeostasis.current_phase is not Phase.REFLECTIVE
-        ):
+        if self._ctx is None or self._storage is None or self._state is None:
             return
-        metrics = await self._storage.get_daily_metrics(now.date())
-        used_today = int((metrics or {}).get("reflection_count") or 0)
-        if used_today >= self._max_reflections_per_day:
-            return
-        last_reflection_at = await self._get_last_reflection_at()
-        if (
-            last_reflection_at is not None
-            and (now - last_reflection_at).total_seconds()
-            < self._reflection_cooldown_minutes * 60
-        ):
-            return
-
         trend = await self._get_or_refresh_trend()
-        patterns = await self._storage.list_relationship_patterns(permanent_only=True)
-        prompt = self._build_reflection_prompt(trend, patterns)
-        try:
-            result = await Runner.run(self._reflection_agent, prompt, max_turns=1)
-        except Exception:
-            return
-
-        reflection = (result.final_output or "").strip().splitlines()[0][:160].strip()
-        if not reflection:
-            return
-        await self._trace_event(
-            trace_type="reflection",
-            content=reflection,
-            payload={"trend": trend.context_note()},
+        await self._reflector.maybe_generate(
             now=now,
-        )
-        await self._storage.upsert_daily_metrics(now.date(), reflection_count=1)
-        if self._kv is not None:
-            await self._kv.set("soul.reflection.last_at", now.isoformat())
-
-    async def _get_last_reflection_at(self) -> datetime | None:
-        if self._kv is None:
-            return None
-        raw = await self._kv.get("soul.reflection.last_at")
-        if not raw:
-            return None
-        try:
-            return datetime.fromisoformat(str(raw))
-        except ValueError:
-            return None
-
-    def _build_reflection_prompt(
-        self,
-        trend: RelationshipTrend,
-        patterns: list[dict[str, Any]],
-    ) -> str:
-        temperament = self._state.temperament if self._state is not None else None
-        top_patterns = [item["content"] for item in patterns[:2]]
-        return (
-            "Current phase: reflective\n"
-            f"Trend note: {trend.context_note() or 'No strong trend.'}\n"
-            f"Patterns: {top_patterns or ['None']}\n"
-            "Temperament:"
-            f" sociability={temperament.sociability if temperament else 0.5:.2f},"
-            f" depth={temperament.depth if temperament else 0.5:.2f},"
-            f" playfulness={temperament.playfulness if temperament else 0.5:.2f}\n"
-            "Write one internal reflection."
+            state=self._state,
+            storage=self._storage,
+            kv=self._kv,
+            logger=self._ctx.logger,
+            trend=trend,
+            trace_fn=self._trace_event,
         )
 
     async def _maybe_explore_internal_space(self, now: datetime) -> None:
-        if (
-            self._state is None
-            or self._storage is None
-            or self._exploration_agent is None
-            or self._state.homeostasis.current_phase is not Phase.CURIOUS
-        ):
+        if self._ctx is None or self._storage is None or self._state is None:
             return
-        if await self._get_daily_counter("soul.exploration.used", now) >= self._max_explorations_per_day:
-            return
-        traces = await self._storage.list_traces_since(
-            now - timedelta(days=7),
-            trace_types=("reflection", "interaction", "phase_transition"),
-            limit=8,
-        )
-        if len(traces) < 3:
-            return
-
-        prompt = self._build_exploration_prompt(traces)
-        try:
-            result = await Runner.run(self._exploration_agent, prompt, max_turns=1)
-        except Exception:
-            return
-        observation = (result.final_output or "").strip().splitlines()[0][:160].strip()
-        if not observation:
-            return
-        if not await self._mark_exploration_novelty(observation, now):
-            return
-        await self._trace_event(
-            trace_type="exploration",
-            content=observation,
-            payload={"source_count": len(traces)},
+        await self._explorer.maybe_explore(
             now=now,
+            state=self._state,
+            storage=self._storage,
+            kv=self._kv,
+            logger=self._ctx.logger,
+            trace_fn=self._trace_event,
         )
-        await self._increment_daily_counter("soul.exploration.used", now)
-
-    def _build_exploration_prompt(self, traces: list[dict[str, Any]]) -> str:
-        snippets = [f"- {item['trace_type']}: {item['content']}" for item in traces[:5]]
-        return "Recent internal traces:\n" + "\n".join(snippets) + "\nWrite one novel observation."
-
-    async def _mark_exploration_novelty(self, observation: str, now: datetime) -> bool:
-        if self._kv is None or self._state is None:
-            return True
-        normalized = " ".join(observation.lower().split())
-        previous = await self._kv.get("soul.exploration.last_observation")
-        if normalized == (previous or ""):
-            streak = int(await self._kv.get("soul.exploration.novelty_miss") or 0) + 1
-            await self._kv.set("soul.exploration.novelty_miss", str(streak))
-            if streak >= 3:
-                self._state.homeostasis.curiosity = max(
-                    0.1,
-                    self._state.homeostasis.curiosity - 0.3,
-                )
-            return False
-        await self._kv.set("soul.exploration.last_observation", normalized)
-        await self._kv.set("soul.exploration.novelty_miss", "0")
-        return True
-
-    async def _get_daily_counter(self, prefix: str, now: datetime) -> int:
-        if self._kv is None:
-            return 0
-        raw = await self._kv.get(f"{prefix}.{now.date().isoformat()}")
-        return int(raw or 0)
-
-    async def _increment_daily_counter(self, prefix: str, now: datetime) -> int:
-        if self._kv is None:
-            return 0
-        key = f"{prefix}.{now.date().isoformat()}"
-        next_value = (await self._get_daily_counter(prefix, now)) + 1
-        await self._kv.set(key, str(next_value))
-        return next_value
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="get_soul_state")

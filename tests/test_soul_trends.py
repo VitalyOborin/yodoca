@@ -94,7 +94,9 @@ def test_context_note_prefers_clear_relationship_signal() -> None:
             }
         )
 
-    trend = compute_relationship_trend(build_daily_summaries(interactions), recent_days=3)
+    trend = compute_relationship_trend(
+        build_daily_summaries(interactions), recent_days=3
+    )
 
     assert trend.context_note() is not None
 

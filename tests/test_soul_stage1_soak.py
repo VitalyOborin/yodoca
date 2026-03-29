@@ -2,8 +2,8 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conftest import FakeSoulContext
 from sandbox.extensions.soul.main import SoulExtension
+from tests.conftest import FakeSoulContext
 
 
 async def test_stage1_accelerated_soak_proves_life_cycle(tmp_path: Path) -> None:

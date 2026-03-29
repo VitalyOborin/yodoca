@@ -82,10 +82,7 @@ async def main() -> None:
     print(f"Artifacts: {root}")
     print(f"Notifications sent: {len(context.notifications)}")
     print(f"Night blocked: {len(context.notifications) == before_night}")
-    print(
-        "Last outreach result: "
-        f"{snapshot.initiative.get('last_outreach_result')}"
-    )
+    print(f"Last outreach result: {snapshot.initiative.get('last_outreach_result')}")
     print(f"Cooldown until: {snapshot.initiative.get('cooldown_until')}")
     print(f"Initiative snapshot: {snapshot.initiative}")
 

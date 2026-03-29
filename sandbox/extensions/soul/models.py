@@ -7,7 +7,7 @@ code so they can be reused by the simulator and later by the real extension.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -369,6 +369,31 @@ class CompanionState:
             user_presence=UserPresenceState.from_dict(data.get("user_presence", {})),
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),
+        )
+
+    def snapshot(self) -> CompanionState:
+        """Independent copy for before/after comparison without JSON round-trip."""
+        return CompanionState(
+            version=self.version,
+            homeostasis=replace(self.homeostasis),
+            presence=self.presence,
+            mood=self.mood,
+            tick_count=self.tick_count,
+            perception=replace(self.perception),
+            perception_window=PerceptionWindowState(
+                samples=list(self.perception_window.samples),
+            ),
+            user_presence=replace(self.user_presence),
+            initiative=replace(
+                self.initiative,
+                budget=replace(self.initiative.budget),
+                pending_outreach=(
+                    replace(self.initiative.pending_outreach)
+                    if self.initiative.pending_outreach is not None
+                    else None
+                ),
+            ),
+            temperament=replace(self.temperament),
         )
 
     @classmethod

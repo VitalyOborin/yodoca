@@ -45,7 +45,9 @@ def detect_relationship_patterns(
                 )
             )
 
-        initiator_days = sum(1 for item in summaries[-7:] if item.user_started_ratio >= 1.0)
+        initiator_days = sum(
+            1 for item in summaries[-7:] if item.user_started_ratio >= 1.0
+        )
         if initiator_days >= 3:
             patterns.append(
                 RelationshipPattern(
@@ -62,9 +64,7 @@ def detect_relationship_patterns(
                 )
             )
 
-        deep_days = sum(
-            1 for item in summaries[-7:] if item.avg_message_length >= 80
-        )
+        deep_days = sum(1 for item in summaries[-7:] if item.avg_message_length >= 80)
         if deep_days >= 3:
             patterns.append(
                 RelationshipPattern(

@@ -39,14 +39,17 @@ def test_apply_drift_rejects_personality_erosion() -> None:
 
     drifted = apply_drift(
         profile,
-        targets={field: 0.5 for field in (
-            "sociability",
-            "depth",
-            "playfulness",
-            "caution",
-            "sensitivity",
-            "persistence",
-        )},
+        targets={
+            field: 0.5
+            for field in (
+                "sociability",
+                "depth",
+                "playfulness",
+                "caution",
+                "sensitivity",
+                "persistence",
+            )
+        },
     )
 
     assert drifted == profile

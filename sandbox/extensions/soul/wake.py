@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from sandbox.extensions.soul.drives import tick_homeostasis, transition_phase
 from sandbox.extensions.soul.models import (
@@ -15,7 +15,7 @@ from sandbox.extensions.soul.models import (
 )
 
 
-class WakeMode(str, Enum):
+class WakeMode(StrEnum):
     SEAMLESS = "SEAMLESS"
     SOFT = "SOFT"
     NATURAL = "NATURAL"
@@ -34,7 +34,7 @@ def restore_after_gap(
     *,
     now: datetime | None = None,
 ) -> WakeUpResult:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     gap = now - state.homeostasis.last_tick_at
 
     if gap < timedelta(minutes=5):

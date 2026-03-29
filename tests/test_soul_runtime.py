@@ -290,8 +290,12 @@ async def test_reflection_generator_writes_budgeted_reflection_trace(
     assert ext._state is not None
     ext._state.homeostasis.current_phase = Phase.REFLECTIVE
     with patch(
-        "sandbox.extensions.soul.main.Runner.run",
-        new=AsyncMock(return_value=SimpleNamespace(final_output="User keeps circling purpose; stay gentle.")),
+        "sandbox.extensions.soul.reflection_runtime.Runner.run",
+        new=AsyncMock(
+            return_value=SimpleNamespace(
+                final_output="User keeps circling purpose; stay gentle."
+            )
+        ),
     ) as run_mock:
         await ext._maybe_generate_reflection(datetime.now(UTC))
 
@@ -346,8 +350,12 @@ async def test_internal_exploration_writes_trace_and_respects_novelty(
         )
 
     with patch(
-        "sandbox.extensions.soul.main.Runner.run",
-        new=AsyncMock(return_value=SimpleNamespace(final_output="The user returns to the same unresolved topic.")),
+        "sandbox.extensions.soul.exploration_runtime.Runner.run",
+        new=AsyncMock(
+            return_value=SimpleNamespace(
+                final_output="The user returns to the same unresolved topic."
+            )
+        ),
     ) as run_mock:
         await ext._maybe_explore_internal_space(now)
 
@@ -386,7 +394,7 @@ async def test_internal_exploration_novelty_exhaustion_lowers_curiosity(
         )
 
     with patch(
-        "sandbox.extensions.soul.main.Runner.run",
+        "sandbox.extensions.soul.exploration_runtime.Runner.run",
         new=AsyncMock(return_value=SimpleNamespace(final_output="Same observation.")),
     ):
         await ext._maybe_explore_internal_space(now)
@@ -414,7 +422,9 @@ async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) 
     assert any(topic == "companion.outreach.attempted" for topic, _ in context.events)
 
 
-async def test_user_message_resolves_pending_outreach_as_response(tmp_path: Path) -> None:
+async def test_user_message_resolves_pending_outreach_as_response(
+    tmp_path: Path,
+) -> None:
     context = FakeSoulContext(tmp_path)
     ext = SoulExtension()
     await ext.initialize(context)

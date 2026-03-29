@@ -24,10 +24,7 @@ _QUESTIONNAIRE_KEYS = (
 
 
 def normalize_profile(profile: TemperamentProfile) -> TemperamentProfile:
-    updates = {
-        field: _clamp(getattr(profile, field))
-        for field in _TRAIT_FIELDS
-    }
+    updates = {field: _clamp(getattr(profile, field)) for field in _TRAIT_FIELDS}
     return replace(profile, **updates)
 
 

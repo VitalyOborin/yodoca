@@ -63,9 +63,7 @@ class SoulStorage:
 
     def _load_state_sync(self) -> CompanionState | None:
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT state_json FROM soul_state WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT state_json FROM soul_state WHERE id = 1").fetchone()
         if row is None:
             return None
         return CompanionState.from_json(str(row["state_json"]))
