@@ -540,9 +540,13 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.phase.changed",
             {
+                "old_phase": from_phase.value,
+                "new_phase": to_phase.value,
                 "from_phase": from_phase.value,
                 "to_phase": to_phase.value,
+                "presence_state": self._presence_for_phase(to_phase).value,
                 "presence": self._presence_for_phase(to_phase).value,
+                "updated_at": now.isoformat(),
                 "occurred_at": now.isoformat(),
                 "tick_count": self._state.tick_count if self._state else 0,
             },
@@ -560,11 +564,14 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.presence.updated",
             {
+                "presence_state": to_presence.value,
                 "from_presence": from_presence.value,
                 "to_presence": to_presence.value,
                 "phase": self._state.homeostasis.current_phase.value
                 if self._state
                 else None,
+                "mood": self._state.mood if self._state else None,
+                "updated_at": now.isoformat(),
                 "occurred_at": now.isoformat(),
             },
         )
@@ -581,8 +588,11 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.lifecycle.changed",
             {
+                "old_lifecycle_phase": from_phase.value,
+                "new_lifecycle_phase": to_phase.value,
                 "from_lifecycle": from_phase.value,
                 "to_lifecycle": to_phase.value,
+                "updated_at": now.isoformat(),
                 "occurred_at": now.isoformat(),
             },
         )
@@ -1053,6 +1063,7 @@ class SoulExtension:
             logger=self._ctx.logger,
             trend=trend,
             trace_fn=self._trace_event,
+            emit_fn=self._ctx.emit,
         )
 
     async def _maybe_explore_internal_space(self, now: datetime) -> None:

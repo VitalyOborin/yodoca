@@ -56,6 +56,7 @@ class ReflectionRuntime:
         logger: logging.Logger,
         trend: RelationshipTrend,
         trace_fn: Callable[..., Awaitable[None]],
+        emit_fn: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         if (
             self._agent is None
@@ -90,6 +91,15 @@ class ReflectionRuntime:
             payload={"trend": trend.context_note()},
             now=now,
         )
+        if emit_fn is not None:
+            await emit_fn(
+                "companion.reflection.created",
+                {
+                    "phase": state.homeostasis.current_phase.value,
+                    "content_preview": reflection[:80],
+                    "created_at": now.isoformat(),
+                },
+            )
         await storage.upsert_daily_metrics(now.date(), reflection_count=1)
         if kv is not None:
             await kv.set("soul.reflection.last_at", now.isoformat())

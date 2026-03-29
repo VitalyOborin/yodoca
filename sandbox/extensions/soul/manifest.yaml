@@ -43,6 +43,8 @@ events:
       description: "Companion initiated proactive outreach."
     - topic: companion.outreach.result
       description: "Companion outreach was resolved."
+    - topic: companion.reflection.created
+      description: "Companion persisted a new reflection."
     - topic: companion.lifecycle.changed
       description: "Companion lifecycle phase changed (discovery/forming/mature)."
 

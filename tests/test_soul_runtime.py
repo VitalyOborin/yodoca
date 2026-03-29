@@ -43,6 +43,12 @@ async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> Non
     assert restored is not None
     assert restored.homeostasis.current_phase is Phase.CURIOUS
     assert restored.tick_count == 1
+    phase_payload = context.events[0][1]
+    presence_payload = context.events[1][1]
+    assert phase_payload["old_phase"] == "AMBIENT"
+    assert phase_payload["new_phase"] == "CURIOUS"
+    assert presence_payload["presence_state"] == "PLAYFUL"
+    assert "mood" in presence_payload
 
 
 async def test_initialize_wires_router_and_event_bus_subscriptions(
@@ -350,6 +356,7 @@ async def test_reflection_generator_writes_budgeted_reflection_trace(
     assert metrics is not None
     assert metrics["reflection_count"] == 1
     assert rows
+    assert any(topic == "companion.reflection.created" for topic, _ in context.events)
 
 
 class _RuntimeKvStore:
@@ -629,7 +636,11 @@ async def test_discovery_lifecycle_transitions_to_forming_after_enough_interacti
         )
 
     assert ext._state.discovery.lifecycle_phase is SoulLifecyclePhase.FORMING
-    assert any(topic == "companion.lifecycle.changed" for topic, _ in context.events)
+    lifecycle_event = next(
+        payload for topic, payload in context.events if topic == "companion.lifecycle.changed"
+    )
+    assert lifecycle_event["old_lifecycle_phase"] == "DISCOVERY"
+    assert lifecycle_event["new_lifecycle_phase"] == "FORMING"
 
 
 async def test_discovery_outreach_prefers_question_about_unknown_topic(
