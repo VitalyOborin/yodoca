@@ -500,6 +500,7 @@ async def test_tick_triggers_one_shot_outreach_when_threshold_and_governor_allow
     ext._state.homeostasis.social_hunger = 0.9
     ext._state.homeostasis.current_phase = Phase.CURIOUS
     now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    ext._state.homeostasis.phase_entered_at = now - timedelta(minutes=10)
     ext._state.homeostasis.last_tick_at = now - timedelta(minutes=30)
 
     await ext._run_one_tick(now=now)
@@ -517,8 +518,10 @@ async def test_tick_does_not_trigger_outreach_when_budget_spent(tmp_path: Path) 
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.8
     ext._state.homeostasis.social_hunger = 0.9
+    ext._state.homeostasis.current_phase = Phase.CURIOUS
     ext._state.initiative.budget.used_today = 5
     now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    ext._state.homeostasis.phase_entered_at = now - timedelta(minutes=10)
     ext._state.homeostasis.last_tick_at = now - timedelta(minutes=30)
 
     await ext._run_one_tick(now=now)

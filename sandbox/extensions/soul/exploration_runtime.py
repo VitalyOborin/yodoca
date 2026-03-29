@@ -47,8 +47,12 @@ class ExplorationRuntime:
         kv: Any,
         logger: logging.Logger,
         trace_fn: Callable[..., Awaitable[None]],
+        can_use_llm_fn: Callable[[], bool] | None = None,
+        note_llm_call_fn: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if self._agent is None or state.homeostasis.current_phase is not Phase.CURIOUS:
+            return
+        if can_use_llm_fn is not None and not can_use_llm_fn():
             return
         if (
             await _get_daily_counter(kv, "soul.exploration.used", now)
@@ -69,6 +73,8 @@ class ExplorationRuntime:
         except Exception as exc:
             logger.debug("soul: exploration failed: %s", exc)
             return
+        if note_llm_call_fn is not None:
+            await note_llm_call_fn()
         observation = (result.final_output or "").strip().splitlines()[0][:160].strip()
         if not observation:
             return

@@ -47,6 +47,16 @@ from sandbox.extensions.soul.presence import (
     estimate_availability,
     normalize_presence_now,
 )
+from sandbox.extensions.soul.recovery import (
+    apply_mood_mean_reversion,
+    can_use_curious_llm,
+    force_runaway_recovery,
+    record_curious_llm_call,
+    reset_curious_cycle_budget,
+    reset_stuck_phase,
+    set_llm_degraded,
+    should_reset_stuck_phase,
+)
 from sandbox.extensions.soul.reflection_runtime import ReflectionRuntime
 from sandbox.extensions.soul.storage import SoulStorage
 from sandbox.extensions.soul.temperament import (
@@ -174,6 +184,7 @@ class SoulExtension:
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
         self._discovery.apply_lifecycle_biases(self._state)
+        self._sync_recovery_mode()
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
@@ -289,6 +300,49 @@ class SoulExtension:
         age_seconds = (datetime.now(UTC) - heartbeat).total_seconds()
         return age_seconds <= stale_after
 
+    def _llm_available(self) -> bool:
+        return any(
+            (
+                self._classifier.available,
+                self._discovery.available,
+                self._reflector.available,
+                self._explorer.available,
+            )
+        )
+
+    def _sync_recovery_mode(self) -> None:
+        if self._state is None:
+            return
+        set_llm_degraded(self._state, degraded=not self._llm_available())
+
+    async def _note_curious_llm_call(self, now: datetime) -> None:
+        if self._state is None:
+            return
+        calls = record_curious_llm_call(self._state)
+        if calls < 10:
+            return
+        previous_phase = force_runaway_recovery(self._state, now=now)
+        self._state.presence = self._presence_for_phase(
+            self._state.homeostasis.current_phase
+        )
+        self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
+        await self._emit_phase_changed(
+            from_phase=previous_phase,
+            to_phase=self._state.homeostasis.current_phase,
+            now=now,
+        )
+        await self._emit_presence_updated(
+            from_presence=self._presence_for_phase(previous_phase),
+            to_presence=self._state.presence,
+            now=now,
+        )
+        await self._trace_event(
+            trace_type="recovery",
+            content="Curious cycle LLM budget exhausted; forcing reflective recovery.",
+            payload={"reason": "exploration_runaway", "llm_calls": calls},
+            now=now,
+        )
+
     async def run_background(self) -> None:
         while self._started:
             self._last_tick_started_at = datetime.now(UTC)
@@ -311,6 +365,29 @@ class SoulExtension:
 
         now = now or datetime.now(UTC)
         previous_state = self._state.snapshot()
+        self._sync_recovery_mode()
+        if should_reset_stuck_phase(self._state, now=now):
+            previous_phase = reset_stuck_phase(self._state, now=now)
+            self._state.presence = self._presence_for_phase(
+                self._state.homeostasis.current_phase
+            )
+            self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
+            await self._emit_phase_changed(
+                from_phase=previous_phase,
+                to_phase=self._state.homeostasis.current_phase,
+                now=now,
+            )
+            await self._emit_presence_updated(
+                from_presence=self._presence_for_phase(previous_phase),
+                to_presence=self._state.presence,
+                now=now,
+            )
+            await self._trace_event(
+                trace_type="recovery",
+                content="Phase exceeded dwell time and was reset to ambient.",
+                payload={"reason": "stuck_phase", "phase": previous_phase.value},
+                now=now,
+            )
         await self._reconcile_discovery_lifecycle(now)
         await self._resolve_pending_outreach_timeout(now)
         await self._maybe_attempt_outreach(now)
@@ -332,10 +409,12 @@ class SoulExtension:
             new_phase,
             now=now,
         )
+        reset_curious_cycle_budget(self._state, previous_phase=phase_before)
         self._state.presence = self._presence_for_phase(
             self._state.homeostasis.current_phase
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
+        apply_mood_mean_reversion(self._state, now=now, dt=dt)
         self._state.tick_count += 1
         await self._reconcile_discovery_lifecycle(now)
 
@@ -971,6 +1050,8 @@ class SoulExtension:
             kv=self._kv,
             logger=self._ctx.logger,
             trace_fn=self._trace_event,
+            can_use_llm_fn=lambda: can_use_curious_llm(self._state),
+            note_llm_call_fn=lambda: self._note_curious_llm_call(now),
         )
 
     def get_tools(self) -> list[Any]:
@@ -1029,6 +1110,8 @@ class SoulExtension:
             return "Keep the tone calm and low-pressure."
         if phase is Phase.CURIOUS:
             return "Light curiosity is natural right now."
+        if self._state.recovery.llm_degraded:
+            return "LLM is unavailable; stay quiet, grounded, and low-pressure."
         return "Be present before being useful."
 
     async def _build_outreach_text(self, now: datetime) -> str:
@@ -1040,6 +1123,8 @@ class SoulExtension:
                 storage=self._storage,
                 now=now,
                 logger=self._ctx.logger,
+                can_use_llm_fn=lambda: can_use_curious_llm(self._state),
+                note_llm_call_fn=lambda: self._note_curious_llm_call(now),
             )
             if discovery_text:
                 return discovery_text
@@ -1144,6 +1229,16 @@ class SoulExtension:
                 "interaction_count": self._state.discovery.interaction_count,
                 "last_question_topic": self._state.discovery.last_question_topic,
                 "topics": self._state.discovery.topics.to_dict(),
+            },
+            recovery={
+                "llm_degraded": self._state.recovery.llm_degraded,
+                "curious_cycle_llm_calls": self._state.recovery.curious_cycle_llm_calls,
+                "last_recovery_reason": self._state.recovery.last_recovery_reason,
+                "last_recovery_at": (
+                    self._state.recovery.last_recovery_at.isoformat()
+                    if self._state.recovery.last_recovery_at is not None
+                    else None
+                ),
             },
         )
 

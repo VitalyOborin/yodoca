@@ -24,6 +24,7 @@ class SoulStateResult(BaseModel):
     user_presence: dict[str, str | int | float | None] = Field(default_factory=dict)
     temperament: dict[str, str | int | float | None] = Field(default_factory=dict)
     discovery: dict[str, object] = Field(default_factory=dict)
+    recovery: dict[str, object] = Field(default_factory=dict)
     error: str | None = None
 
 

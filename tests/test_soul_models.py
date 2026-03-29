@@ -32,6 +32,8 @@ def test_companion_state_json_round_trip() -> None:
     state.discovery.lifecycle_phase = SoulLifecyclePhase.FORMING
     state.discovery.interaction_count = 17
     state.discovery.topics.work = 0.8
+    state.recovery.llm_degraded = True
+    state.recovery.curious_cycle_llm_calls = 4
 
     restored = CompanionState.from_json(state.to_json())
 
@@ -51,3 +53,5 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.discovery.lifecycle_phase is SoulLifecyclePhase.FORMING
     assert restored.discovery.interaction_count == 17
     assert restored.discovery.topics.work == 0.8
+    assert restored.recovery.llm_degraded is True
+    assert restored.recovery.curious_cycle_llm_calls == 4

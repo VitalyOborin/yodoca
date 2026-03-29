@@ -373,6 +373,50 @@ class DiscoveryState:
 
 
 @dataclass(slots=True)
+class RecoveryState:
+    low_mood_since: datetime | None = None
+    llm_degraded: bool = False
+    curious_cycle_llm_calls: int = 0
+    last_recovery_at: datetime | None = None
+    last_recovery_reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "low_mood_since": (
+                _serialize_datetime(self.low_mood_since)
+                if self.low_mood_since is not None
+                else None
+            ),
+            "llm_degraded": self.llm_degraded,
+            "curious_cycle_llm_calls": self.curious_cycle_llm_calls,
+            "last_recovery_at": (
+                _serialize_datetime(self.last_recovery_at)
+                if self.last_recovery_at is not None
+                else None
+            ),
+            "last_recovery_reason": self.last_recovery_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RecoveryState:
+        return cls(
+            low_mood_since=(
+                _deserialize_datetime(data["low_mood_since"])
+                if data.get("low_mood_since")
+                else None
+            ),
+            llm_degraded=bool(data.get("llm_degraded", False)),
+            curious_cycle_llm_calls=int(data.get("curious_cycle_llm_calls", 0)),
+            last_recovery_at=(
+                _deserialize_datetime(data["last_recovery_at"])
+                if data.get("last_recovery_at")
+                else None
+            ),
+            last_recovery_reason=data.get("last_recovery_reason"),
+        )
+
+
+@dataclass(slots=True)
 class HomeostasisState:
     curiosity: float = 0.3
     social_hunger: float = 0.2
@@ -427,6 +471,7 @@ class CompanionState:
     initiative: InitiativeState = field(default_factory=InitiativeState)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
     discovery: DiscoveryState = field(default_factory=DiscoveryState)
+    recovery: RecoveryState = field(default_factory=RecoveryState)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -441,6 +486,7 @@ class CompanionState:
             "initiative": self.initiative.to_dict(),
             "temperament": asdict(self.temperament),
             "discovery": self.discovery.to_dict(),
+            "recovery": self.recovery.to_dict(),
         }
 
     def to_json(self) -> str:
@@ -462,6 +508,7 @@ class CompanionState:
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),
             discovery=DiscoveryState.from_dict(data.get("discovery", {})),
+            recovery=RecoveryState.from_dict(data.get("recovery", {})),
         )
 
     def snapshot(self) -> CompanionState:
@@ -491,6 +538,7 @@ class CompanionState:
                 self.discovery,
                 topics=replace(self.discovery.topics),
             ),
+            recovery=replace(self.recovery),
         )
 
     @classmethod

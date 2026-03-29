@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -105,6 +106,10 @@ class DiscoveryRuntime:
     def __init__(self) -> None:
         self._agent: Agent | None = None
 
+    @property
+    def available(self) -> bool:
+        return self._agent is not None
+
     def try_create_agent(self, model_router: Any, *, logger: logging.Logger) -> None:
         try:
             self._agent = Agent(
@@ -198,6 +203,8 @@ class DiscoveryRuntime:
         storage: SoulStorage,
         now: datetime,
         logger: logging.Logger,
+        can_use_llm_fn: Callable[[], bool] | None = None,
+        note_llm_call_fn: Callable[[], Awaitable[None]] | None = None,
     ) -> str | None:
         if state.discovery.lifecycle_phase is SoulLifecyclePhase.MATURE:
             return None
@@ -210,9 +217,11 @@ class DiscoveryRuntime:
 
         prompt = await self._build_prompt(storage, state, topic)
         text = _FALLBACK_QUESTIONS[topic]
-        if self._agent is not None:
+        if self._agent is not None and (can_use_llm_fn is None or can_use_llm_fn()):
             try:
                 result = await Runner.run(self._agent, prompt, max_turns=1)
+                if note_llm_call_fn is not None:
+                    await note_llm_call_fn()
                 candidate = (result.final_output or "").strip().splitlines()[0][:220]
                 if candidate:
                     text = candidate
