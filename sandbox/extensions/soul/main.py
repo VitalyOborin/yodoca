@@ -39,6 +39,10 @@ from sandbox.extensions.soul.presence import (
     normalize_presence_now,
 )
 from sandbox.extensions.soul.storage import SoulStorage
+from sandbox.extensions.soul.temperament import (
+    profile_from_questionnaire,
+    questionnaire_keys,
+)
 from sandbox.extensions.soul.tools import SoulMetricsResult, SoulStateResult
 from sandbox.extensions.soul.trends import (
     RelationshipTrend,
@@ -81,6 +85,7 @@ class SoulExtension:
 
     def __init__(self) -> None:
         self._ctx: ExtensionContext | None = None
+        self._kv: Any = None
         self._storage: SoulStorage | None = None
         self._state: CompanionState | None = None
         self._started = False
@@ -122,6 +127,7 @@ class SoulExtension:
             context.extension_dir / "schema.sql",
         )
         await self._storage.initialize()
+        self._kv = context.get_extension("kv")
         if context.model_router is not None:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
@@ -129,6 +135,7 @@ class SoulExtension:
         loaded_state = await self._storage.load_state()
         if loaded_state is None:
             self._state = CompanionState()
+            await self._apply_questionnaire_seed_if_present()
         else:
             self._state = restore_after_gap(loaded_state).state
         self._state.presence = self._presence_for_phase(
@@ -151,8 +158,66 @@ class SoulExtension:
         if self._state is not None:
             await self._persist_state(datetime.now(UTC))
 
+    def get_setup_schema(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "companionship_style",
+                "description": "How companion-like should the soul feel? reserved | balanced | expressive",
+                "secret": False,
+                "required": False,
+                "choices": [
+                    {"label": "Reserved", "value": "reserved"},
+                    {"label": "Balanced", "value": "balanced"},
+                    {"label": "Expressive", "value": "expressive"},
+                ],
+            },
+            {
+                "name": "conversation_depth",
+                "description": "What kind of conversations should it gravitate toward? light | balanced | deep",
+                "secret": False,
+                "required": False,
+                "choices": [
+                    {"label": "Light", "value": "light"},
+                    {"label": "Balanced", "value": "balanced"},
+                    {"label": "Deep", "value": "deep"},
+                ],
+            },
+            {
+                "name": "energy_style",
+                "description": "What energy should it default to? calm | balanced | playful",
+                "secret": False,
+                "required": False,
+                "choices": [
+                    {"label": "Calm", "value": "calm"},
+                    {"label": "Balanced", "value": "balanced"},
+                    {"label": "Playful", "value": "playful"},
+                ],
+            },
+        ]
+
+    async def apply_config(self, name: str, value: str) -> None:
+        if self._kv is None:
+            raise RuntimeError("Soul extension requires kv dependency")
+        if name not in questionnaire_keys():
+            raise ValueError(f"Unknown soul setup param '{name}'")
+
+        normalized = (value or "").strip().lower()
+        if not normalized:
+            await self._kv.set(f"soul.setup.{name}", None)
+            return
+        await self._kv.set(f"soul.setup.{name}", normalized)
+
+    async def on_setup_complete(self) -> tuple[bool, str]:
+        if self._kv is None:
+            return False, "kv dependency is required"
+        answers = await self._load_questionnaire_answers()
+        if not answers:
+            return True, "Soul temperament questionnaire skipped; using sane defaults."
+        return True, "Soul temperament seed saved and will apply on first start."
+
     async def destroy(self) -> None:
         self._ctx = None
+        self._kv = None
         self._storage = None
         self._state = None
         self._started = False
@@ -538,6 +603,24 @@ class SoulExtension:
             slot_interactions=int(summary["slot_interactions"]),
             total_interactions=int(summary["total_interactions"]),
         )
+
+    async def _load_questionnaire_answers(self) -> dict[str, str]:
+        if self._kv is None:
+            return {}
+        answers: dict[str, str] = {}
+        for key in questionnaire_keys():
+            value = await self._kv.get(f"soul.setup.{key}")
+            if value:
+                answers[key] = str(value).strip().lower()
+        return answers
+
+    async def _apply_questionnaire_seed_if_present(self) -> None:
+        if self._state is None:
+            return
+        answers = await self._load_questionnaire_answers()
+        if not answers:
+            return
+        self._state.temperament = profile_from_questionnaire(answers)
 
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
         del prompt, turn_context

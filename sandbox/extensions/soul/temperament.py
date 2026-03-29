@@ -16,6 +16,12 @@ _TRAIT_FIELDS = (
     "persistence",
 )
 
+_QUESTIONNAIRE_KEYS = (
+    "companionship_style",
+    "conversation_depth",
+    "energy_style",
+)
+
 
 def normalize_profile(profile: TemperamentProfile) -> TemperamentProfile:
     updates = {
@@ -87,6 +93,38 @@ def seeded_profile(
             seed_source=seed_source,
         )
     )
+
+
+def profile_from_questionnaire(
+    answers: dict[str, str],
+    *,
+    seed_source: str = "questionnaire",
+) -> TemperamentProfile:
+    profile = seeded_profile(seed_source=seed_source)
+    companionship = answers.get("companionship_style", "balanced").strip().lower()
+    depth = answers.get("conversation_depth", "balanced").strip().lower()
+    energy = answers.get("energy_style", "balanced").strip().lower()
+
+    if companionship == "reserved":
+        profile = replace(profile, sociability=0.35, caution=0.7)
+    elif companionship == "expressive":
+        profile = replace(profile, sociability=0.7, caution=0.35, sensitivity=0.6)
+
+    if depth == "light":
+        profile = replace(profile, depth=0.35, playfulness=0.6)
+    elif depth == "deep":
+        profile = replace(profile, depth=0.75, sensitivity=0.65)
+
+    if energy == "calm":
+        profile = replace(profile, playfulness=0.3, persistence=0.6)
+    elif energy == "playful":
+        profile = replace(profile, playfulness=0.75, persistence=0.45)
+
+    return normalize_profile(profile)
+
+
+def questionnaire_keys() -> tuple[str, ...]:
+    return _QUESTIONNAIRE_KEYS
 
 
 def _clamp(value: float) -> float:

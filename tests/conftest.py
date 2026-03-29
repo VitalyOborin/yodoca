@@ -23,12 +23,14 @@ class FakeSoulContext:
         data_subdir: str = "soul-data",
         logger_name: str = "test.soul",
         model_router: Any = None,
+        extensions: dict[str, Any] | None = None,
     ) -> None:
         self._config = config or {}
         self.data_dir = tmp_path / data_subdir
         self.extension_dir = Path("sandbox/extensions/soul")
         self.logger = logging.getLogger(logger_name)
         self.model_router = model_router
+        self._extensions = extensions or {}
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.notifications: list[tuple[str, str | None]] = []
         self.router_subscriptions: dict[str, Any] = {}
@@ -48,6 +50,21 @@ class FakeSoulContext:
 
     def subscribe_event(self, topic: str, handler: Any) -> None:
         self.bus_subscriptions[topic] = handler
+
+    def get_extension(self, extension_id: str) -> Any:
+        if extension_id in self._extensions:
+            return self._extensions[extension_id]
+        if extension_id == "kv":
+            return _NullKvStore()
+        raise KeyError(extension_id)
+
+
+class _NullKvStore:
+    async def get(self, key: str) -> str | None:
+        return None
+
+    async def set(self, key: str, value: str | None) -> None:
+        del key, value
 
 
 @pytest.fixture
