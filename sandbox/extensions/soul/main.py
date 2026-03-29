@@ -540,15 +540,17 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.phase.changed",
             {
-                "old_phase": from_phase.value,
+                # Canonical keys (preferred by new consumers)
                 "new_phase": to_phase.value,
+                "old_phase": from_phase.value,
+                "presence_state": self._presence_for_phase(to_phase).value,
+                "updated_at": now.isoformat(),
+                "tick_count": self._state.tick_count if self._state else 0,
+                # Aliases (backward compat)
                 "from_phase": from_phase.value,
                 "to_phase": to_phase.value,
-                "presence_state": self._presence_for_phase(to_phase).value,
                 "presence": self._presence_for_phase(to_phase).value,
-                "updated_at": now.isoformat(),
                 "occurred_at": now.isoformat(),
-                "tick_count": self._state.tick_count if self._state else 0,
             },
         )
 
@@ -564,14 +566,19 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.presence.updated",
             {
+                # Canonical keys (preferred by new consumers)
                 "presence_state": to_presence.value,
-                "from_presence": from_presence.value,
-                "to_presence": to_presence.value,
                 "phase": self._state.homeostasis.current_phase.value
                 if self._state
                 else None,
                 "mood": self._state.mood if self._state else None,
+                "lifecycle_phase": self._state.discovery.lifecycle_phase.value
+                if self._state
+                else None,
                 "updated_at": now.isoformat(),
+                # Aliases (backward compat)
+                "from_presence": from_presence.value,
+                "to_presence": to_presence.value,
                 "occurred_at": now.isoformat(),
             },
         )
@@ -588,11 +595,13 @@ class SoulExtension:
         await self._ctx.emit(
             "companion.lifecycle.changed",
             {
-                "old_lifecycle_phase": from_phase.value,
+                # Canonical keys (preferred by new consumers)
                 "new_lifecycle_phase": to_phase.value,
+                "old_lifecycle_phase": from_phase.value,
+                "updated_at": now.isoformat(),
+                # Aliases (backward compat)
                 "from_lifecycle": from_phase.value,
                 "to_lifecycle": to_phase.value,
-                "updated_at": now.isoformat(),
                 "occurred_at": now.isoformat(),
             },
         )
@@ -1280,29 +1289,36 @@ class SoulExtension:
         )
 
     async def get_presence_surface(self) -> dict[str, Any]:
-        """Return a compact, UI-safe presence snapshot for channel surfaces."""
-        snapshot = await self._build_state_snapshot()
-        if not snapshot.success:
+        """Return a compact, UI-safe presence snapshot for channel surfaces.
+
+        Reads only from in-memory state (no DB queries) to stay cheap
+        even under frequent polling or multiple concurrent SSE clients.
+        """
+        if self._state is None:
             return {
                 "success": False,
-                "status": snapshot.status,
-                "error": snapshot.error,
+                "status": "error",
+                "error": "Soul runtime is not initialized.",
             }
 
+        now = datetime.now(UTC)
+        time_in_phase = int(
+            (now - self._state.homeostasis.phase_entered_at).total_seconds()
+        )
         return {
             "success": True,
-            "status": snapshot.status,
-            "health": snapshot.health,
-            "phase": snapshot.phase,
-            "presence_state": snapshot.presence,
-            "mood": snapshot.mood,
-            "time_in_phase_seconds": snapshot.time_in_phase_seconds,
-            "last_tick_at": snapshot.last_tick_at,
-            "lifecycle_phase": snapshot.discovery.get("lifecycle_phase"),
-            "estimated_availability": snapshot.user_presence.get(
-                "estimated_availability"
+            "status": "ok",
+            "health": self.health_check(),
+            "phase": self._state.homeostasis.current_phase.value,
+            "presence_state": self._state.presence.value,
+            "mood": self._state.mood,
+            "time_in_phase_seconds": max(time_in_phase, 0),
+            "last_tick_at": self._state.homeostasis.last_tick_at.isoformat(),
+            "lifecycle_phase": self._state.discovery.lifecycle_phase.value,
+            "estimated_availability": (
+                self._state.user_presence.estimated_availability
             ),
-            "llm_degraded": snapshot.recovery.get("llm_degraded"),
+            "llm_degraded": self._state.recovery.llm_degraded,
         }
 
     async def _build_metrics_snapshot(self) -> SoulMetricsResult:

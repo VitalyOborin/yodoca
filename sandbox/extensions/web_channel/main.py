@@ -181,7 +181,11 @@ class WebChannelExtension:
         return self._task_engine
 
     def get_soul(self) -> Any | None:
-        """Resolve soul extension lazily. Returns None when unavailable."""
+        """Resolve soul extension lazily. Returns None when unavailable.
+
+        Not cached (unlike scheduler/inbox/task_engine) because the soul
+        extension may restart its background loop independently.
+        """
         if not self._context:
             return None
         try:
