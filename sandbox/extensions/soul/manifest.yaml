@@ -43,5 +43,7 @@ events:
       description: "Companion initiated proactive outreach."
     - topic: companion.outreach.result
       description: "Companion outreach was resolved."
+    - topic: companion.lifecycle.changed
+      description: "Companion lifecycle phase changed (discovery/forming/mature)."
 
 enabled: true

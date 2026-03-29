@@ -3,11 +3,32 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from conftest import FakeSoulContext
 
 from sandbox.extensions.soul.main import SoulExtension
-from sandbox.extensions.soul.models import CompanionState, Phase
-from sandbox.extensions.soul.recovery import apply_mood_mean_reversion
+from sandbox.extensions.soul.models import CompanionState, Phase, TemperamentProfile
+from sandbox.extensions.soul.recovery import apply_mood_mean_reversion, mood_baseline
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_min", "expected_max"),
+    [
+        (TemperamentProfile(), -0.05, 0.05),
+        (TemperamentProfile(playfulness=0.9, sociability=0.8), 0.15, 0.40),
+        (TemperamentProfile(playfulness=0.1, caution=0.9), -0.30, -0.10),
+    ],
+    ids=["default-near-zero", "playful-social-positive", "cautious-negative"],
+)
+def test_mood_baseline_maps_temperament_to_expected_range(
+    profile: TemperamentProfile,
+    expected_min: float,
+    expected_max: float,
+) -> None:
+    result = mood_baseline(profile)
+    assert expected_min <= result <= expected_max, (
+        f"mood_baseline={result} outside [{expected_min}, {expected_max}]"
+    )
 
 
 def test_mood_mean_reversion_applies_long_low_mood_floor() -> None:
@@ -33,7 +54,7 @@ async def test_no_llm_mode_keeps_runtime_alive_and_marks_degraded(
     ext._state.homeostasis.last_tick_at = datetime.now(UTC) - timedelta(minutes=30)
 
     await ext._run_one_tick(now=datetime.now(UTC))
-    snapshot = ext._build_state_snapshot()
+    snapshot = await ext._build_state_snapshot()
 
     assert snapshot.success is True
     assert snapshot.recovery["llm_degraded"] is True

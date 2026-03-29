@@ -230,7 +230,7 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     ext._state.tick_count = 5
     ext._state.mood = 0.2
 
-    snapshot = ext._build_state_snapshot()
+    snapshot = await ext._build_state_snapshot()
 
     assert snapshot.success is True
     assert snapshot.phase == "REFLECTIVE"

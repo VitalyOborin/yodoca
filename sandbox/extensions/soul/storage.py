@@ -579,9 +579,6 @@ class SoulStorage:
         async with self._lock:
             return await asyncio.to_thread(self._list_channel_preferences_sync, limit)
 
-    def get_channel_preferences_snapshot(self, *, limit: int = 10) -> list[dict[str, Any]]:
-        return self._list_channel_preferences_sync(limit)
-
     def _list_channel_preferences_sync(self, limit: int) -> list[dict[str, Any]]:
         conn = self._get_conn()
         rows = conn.execute(

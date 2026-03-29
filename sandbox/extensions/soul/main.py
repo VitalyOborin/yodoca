@@ -392,7 +392,12 @@ class SoulExtension:
                 payload={"reason": "stuck_phase", "phase": previous_phase.value},
                 now=now,
             )
-        await self._reconcile_discovery_lifecycle(now)
+        permanent_patterns = len(
+            await self._storage.list_relationship_patterns(permanent_only=True)
+        )
+        await self._reconcile_discovery_lifecycle(
+            now, permanent_patterns=permanent_patterns
+        )
         await self._resolve_pending_outreach_timeout(now)
         await self._maybe_attempt_outreach(now)
         phase_before = self._state.homeostasis.current_phase
@@ -420,7 +425,9 @@ class SoulExtension:
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
         apply_mood_mean_reversion(self._state, now=now, dt=dt)
         self._state.tick_count += 1
-        await self._reconcile_discovery_lifecycle(now)
+        await self._reconcile_discovery_lifecycle(
+            now, permanent_patterns=permanent_patterns
+        )
 
         phase_changed = self._state.homeostasis.current_phase is not phase_before
         presence_changed = self._state.presence is not presence_before
@@ -585,13 +592,15 @@ class SoulExtension:
         now: datetime,
         *,
         apply_biases: bool = True,
+        permanent_patterns: int | None = None,
     ) -> None:
         if self._storage is None or self._state is None:
             return
         previous = self._state.discovery.lifecycle_phase
-        permanent_patterns = len(
-            await self._storage.list_relationship_patterns(permanent_only=True)
-        )
+        if permanent_patterns is None:
+            permanent_patterns = len(
+                await self._storage.list_relationship_patterns(permanent_only=True)
+            )
         changed = self._discovery.reconcile_lifecycle(
             self._state,
             now=now,
@@ -1064,7 +1073,7 @@ class SoulExtension:
         @function_tool(name_override="get_soul_state")
         async def get_soul_state() -> SoulStateResult:
             """Return the current soul runtime state for debugging."""
-            return self._build_state_snapshot()
+            return await self._build_state_snapshot()
 
         @function_tool(name_override="get_soul_metrics")
         async def get_soul_metrics() -> SoulMetricsResult:
@@ -1151,7 +1160,7 @@ class SoulExtension:
             return "I wanted to check in softly."
         return "I was thinking about one small thing."
 
-    def _build_state_snapshot(self) -> SoulStateResult:
+    async def _build_state_snapshot(self) -> SoulStateResult:
         if self._state is None:
             return SoulStateResult(
                 success=False,
@@ -1171,7 +1180,7 @@ class SoulExtension:
         channels = (
             []
             if self._storage is None
-            else self._storage.get_channel_preferences_snapshot(limit=5)
+            else await self._storage.list_channel_preferences(limit=5)
         )
         uptime = (
             int((now - self._initialized_at).total_seconds())

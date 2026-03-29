@@ -33,6 +33,7 @@ async def test_stage2_automated_gate_scenarios(tmp_path: Path) -> None:
     social_after_response = ext._state.homeostasis.social_hunger
 
     ext._state.homeostasis.social_hunger = 0.95
+    ext._state.initiative.budget.used_today = ext._state.initiative.budget.daily_budget
     await ext._run_one_tick(now=noon + timedelta(hours=1))
     assert len(context.notifications) == 1
     assert ext._state.homeostasis.social_hunger >= social_after_response
@@ -62,6 +63,6 @@ async def test_stage2_automated_gate_scenarios(tmp_path: Path) -> None:
     await ext._run_one_tick(now=night)
     assert len(context.notifications) == 2
 
-    snapshot = ext._build_state_snapshot()
+    snapshot = await ext._build_state_snapshot()
     assert "daily_budget" in snapshot.initiative
     assert "last_outreach_result" in snapshot.initiative

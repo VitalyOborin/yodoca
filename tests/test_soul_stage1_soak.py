@@ -37,7 +37,7 @@ async def test_stage1_accelerated_soak_proves_life_cycle(tmp_path: Path) -> None
     for _ in range(6):
         await ext._on_user_message({"text": "...", "channel": object()})
     evening_context = await ext.get_context("hello", object())
-    snapshot = ext._build_state_snapshot()
+    snapshot = await ext._build_state_snapshot()
 
     assert morning_context is not None
     assert evening_context is not None
