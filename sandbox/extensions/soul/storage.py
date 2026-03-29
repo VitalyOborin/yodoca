@@ -497,6 +497,121 @@ class SoulStorage:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    async def save_relationship_pattern(
+        self,
+        *,
+        pattern_key: str,
+        pattern_type: str,
+        content: str,
+        repetition_count: int,
+        confidence: float,
+        is_permanent: bool,
+        source_json: str | None,
+        seen_at: datetime,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._save_relationship_pattern_sync,
+                pattern_key,
+                pattern_type,
+                content,
+                repetition_count,
+                confidence,
+                is_permanent,
+                source_json,
+                seen_at,
+            )
+
+    def _save_relationship_pattern_sync(
+        self,
+        pattern_key: str,
+        pattern_type: str,
+        content: str,
+        repetition_count: int,
+        confidence: float,
+        is_permanent: bool,
+        source_json: str | None,
+        seen_at: datetime,
+    ) -> None:
+        ts = seen_at.astimezone(UTC).isoformat()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO relationship_patterns (
+                pattern_key,
+                pattern_type,
+                content,
+                repetition_count,
+                confidence,
+                first_seen_at,
+                last_seen_at,
+                is_permanent,
+                source_json,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pattern_key) DO UPDATE SET
+                pattern_type = excluded.pattern_type,
+                content = excluded.content,
+                repetition_count = excluded.repetition_count,
+                confidence = excluded.confidence,
+                last_seen_at = excluded.last_seen_at,
+                is_permanent = excluded.is_permanent,
+                source_json = excluded.source_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                pattern_key,
+                pattern_type,
+                content,
+                repetition_count,
+                confidence,
+                ts,
+                ts,
+                1 if is_permanent else 0,
+                source_json,
+                ts,
+            ),
+        )
+        conn.commit()
+
+    async def list_relationship_patterns(
+        self,
+        *,
+        permanent_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_relationship_patterns_sync,
+                permanent_only,
+            )
+
+    def _list_relationship_patterns_sync(
+        self,
+        permanent_only: bool,
+    ) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                pattern_key,
+                pattern_type,
+                content,
+                repetition_count,
+                confidence,
+                first_seen_at,
+                last_seen_at,
+                is_permanent,
+                source_json,
+                updated_at
+            FROM relationship_patterns
+            WHERE (? = 0 OR is_permanent = 1)
+            ORDER BY confidence DESC, updated_at DESC
+            """,
+            (1 if permanent_only else 0,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
         conn = self._get_conn()
         cursor = conn.execute(

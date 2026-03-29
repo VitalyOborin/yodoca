@@ -12,6 +12,11 @@ from agents import function_tool
 from core.events.topics import SystemTopics
 from sandbox.extensions.soul.boundary import BoundaryDecision, check_outreach
 from sandbox.extensions.soul.classifier_runtime import ClassifierRuntime
+from sandbox.extensions.soul.consolidation import (
+    apply_identity_shift,
+    detect_relationship_patterns,
+    should_run_weekly_consolidation,
+)
 from sandbox.extensions.soul.drives import (
     resolve_phase,
     tick_homeostasis,
@@ -214,6 +219,19 @@ class SoulExtension:
         if not answers:
             return True, "Soul temperament questionnaire skipped; using sane defaults."
         return True, "Soul temperament seed saved and will apply on first start."
+
+    async def execute_task(self, task_name: str) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        if task_name == "weekly_consolidation":
+            return await self._run_weekly_consolidation(now)
+        if task_name == "daily_trace_cleanup":
+            if self._storage is None:
+                return None
+            deleted = await self._storage.cleanup_traces_older_than(
+                now - timedelta(days=14)
+            )
+            return {"status": "ok", "deleted_traces": deleted}
+        return None
 
     async def destroy(self) -> None:
         self._ctx = None
@@ -671,6 +689,62 @@ class SoulExtension:
         trend = compute_relationship_trend(build_daily_summaries(interactions))
         self._trend_cache.set(trend, now=now)
         return trend
+
+    async def _run_weekly_consolidation(self, now: datetime) -> dict[str, Any] | None:
+        if self._storage is None or self._state is None:
+            return None
+        last_run_at = await self._get_last_consolidation_at()
+        if not should_run_weekly_consolidation(last_run_at=last_run_at, now=now):
+            return {"status": "skipped", "reason": "cooldown"}
+
+        interactions = await self._storage.list_interactions_since(
+            now - timedelta(days=30)
+        )
+        summaries = build_daily_summaries(interactions)
+        trend = compute_relationship_trend(summaries)
+        patterns = detect_relationship_patterns(summaries, trend)
+        for pattern in patterns:
+            await self._storage.save_relationship_pattern(
+                pattern_key=pattern.pattern_key,
+                pattern_type=pattern.pattern_type,
+                content=pattern.content,
+                repetition_count=pattern.repetition_count,
+                confidence=pattern.confidence,
+                is_permanent=pattern.is_permanent,
+                source_json=pattern.source_json,
+                seen_at=now,
+            )
+
+        previous = self._state.temperament
+        self._state.temperament = apply_identity_shift(
+            self._state.temperament,
+            patterns=patterns,
+            trend=trend,
+        )
+        deleted_traces = await self._storage.cleanup_traces_older_than(
+            now - timedelta(days=14)
+        )
+        await self._persist_state(now)
+        if self._kv is not None:
+            await self._kv.set("soul.consolidation.last_run_at", now.isoformat())
+        self._trend_cache.invalidate()
+        return {
+            "status": "ok",
+            "patterns_saved": len(patterns),
+            "temperament_changed": self._state.temperament != previous,
+            "deleted_traces": deleted_traces,
+        }
+
+    async def _get_last_consolidation_at(self) -> datetime | None:
+        if self._kv is None:
+            return None
+        raw = await self._kv.get("soul.consolidation.last_run_at")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
 
     def get_tools(self) -> list[Any]:
         @function_tool(name_override="get_soul_state")

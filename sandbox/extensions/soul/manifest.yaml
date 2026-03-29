@@ -22,6 +22,14 @@ config:
   mood_classifier_signal_threshold: 0.45
   mood_classifier_weight: 0.25
 
+schedules:
+  - name: weekly_consolidation
+    cron: "0 4 * * 1"
+    task: weekly_consolidation
+  - name: daily_trace_cleanup
+    cron: "0 4 * * *"
+    task: daily_trace_cleanup
+
 events:
   publishes:
     - topic: companion.phase.changed

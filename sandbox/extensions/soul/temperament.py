@@ -53,7 +53,10 @@ def apply_drift(
     seed_source: str | None = None,
 ) -> TemperamentProfile:
     normalized = normalize_profile(profile)
+    baseline_variance = profile_variance(normalized)
     rate = drift_rate_for(normalized)
+    if baseline_variance < 0.05:
+        rate = 1.0
     candidate = normalized
     for field, target in targets.items():
         if field not in _TRAIT_FIELDS:

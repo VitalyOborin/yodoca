@@ -66,6 +66,19 @@ CREATE TABLE IF NOT EXISTS interaction_patterns (
     PRIMARY KEY (hour, day_of_week)
 );
 
+CREATE TABLE IF NOT EXISTS relationship_patterns (
+    pattern_key            TEXT PRIMARY KEY,
+    pattern_type           TEXT NOT NULL,
+    content                TEXT NOT NULL,
+    repetition_count       INTEGER NOT NULL DEFAULT 0,
+    confidence             REAL NOT NULL DEFAULT 0.0,
+    first_seen_at          TEXT NOT NULL,
+    last_seen_at           TEXT NOT NULL,
+    is_permanent           INTEGER NOT NULL DEFAULT 0,
+    source_json            TEXT,
+    updated_at             TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS soul_metrics (
     date                      TEXT PRIMARY KEY,
     outreach_attempts         INTEGER NOT NULL DEFAULT 0,
