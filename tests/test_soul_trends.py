@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
 from sandbox.extensions.soul.trends import (
+    RelationshipTrend,
+    TrendCache,
     build_daily_summaries,
     compute_relationship_trend,
 )
@@ -95,3 +97,24 @@ def test_context_note_prefers_clear_relationship_signal() -> None:
     trend = compute_relationship_trend(build_daily_summaries(interactions), recent_days=3)
 
     assert trend.context_note() is not None
+
+
+def test_trend_cache_returns_cached_value_within_ttl() -> None:
+    cache = TrendCache(ttl_seconds=60)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    trend = RelationshipTrend(openness_trend=0.15)
+
+    cache.set(trend, now=now)
+
+    assert cache.get(now + timedelta(seconds=30)) is trend
+    assert cache.get(now + timedelta(seconds=61)) is None
+
+
+def test_trend_cache_invalidate_clears_state() -> None:
+    cache = TrendCache(ttl_seconds=300)
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    cache.set(RelationshipTrend(), now=now)
+
+    cache.invalidate()
+
+    assert cache.get(now) is None

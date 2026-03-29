@@ -9,6 +9,30 @@ from statistics import fmean
 from typing import Any
 
 
+class TrendCache:
+    """Time-limited cache for computed relationship trends."""
+
+    def __init__(self, *, ttl_seconds: float = 300) -> None:
+        self._trend: RelationshipTrend | None = None
+        self._refreshed_at: datetime | None = None
+        self._ttl_seconds = ttl_seconds
+
+    def get(self, now: datetime) -> RelationshipTrend | None:
+        if self._trend is None or self._refreshed_at is None:
+            return None
+        if (now - self._refreshed_at).total_seconds() > self._ttl_seconds:
+            return None
+        return self._trend
+
+    def set(self, trend: RelationshipTrend, *, now: datetime) -> None:
+        self._trend = trend
+        self._refreshed_at = now
+
+    def invalidate(self) -> None:
+        self._trend = None
+        self._refreshed_at = None
+
+
 @dataclass(slots=True)
 class RelationshipTrend:
     openness_trend: float = 0.0

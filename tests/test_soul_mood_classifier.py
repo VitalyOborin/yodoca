@@ -18,7 +18,7 @@ async def test_initialize_sets_up_mood_classifier_agent_when_model_router_exists
 
     await ext.initialize(context)
 
-    assert ext._mood_classifier_agent is not None
+    assert ext._classifier.available
 
 
 async def test_user_message_triggers_llm_classification_with_budget_guard(
@@ -36,7 +36,7 @@ async def test_user_message_triggers_llm_classification_with_budget_guard(
     await ext.initialize(context)
 
     with patch(
-        "sandbox.extensions.soul.main.Runner.run",
+        "sandbox.extensions.soul.classifier_runtime.Runner.run",
         new=AsyncMock(
             return_value=SimpleNamespace(
                 final_output=(
@@ -53,8 +53,8 @@ async def test_user_message_triggers_llm_classification_with_budget_guard(
                 "channel": object(),
             }
         )
-        assert ext._active_classifier_tasks
-        await asyncio.gather(*ext._active_classifier_tasks)
+        assert ext._classifier.active_tasks
+        await asyncio.gather(*ext._classifier.active_tasks)
         await ext.stop()
 
     assert run_mock.await_count == 1
@@ -85,7 +85,7 @@ async def test_budget_exhaustion_skips_llm_classification(tmp_path) -> None:
     )
 
     with patch(
-        "sandbox.extensions.soul.main.Runner.run",
+        "sandbox.extensions.soul.classifier_runtime.Runner.run",
         new=AsyncMock(),
     ) as run_mock:
         await ext._on_user_message(
