@@ -574,6 +574,91 @@ S0-T1a → S0-T1b → S0-T3 → S0-T4 → S0-T5 → S0-T6 (hard gate)
 | Stage 4 | Формирующийся характер | Temperament differs from seed |
 | Stage 5 | Полный companion runtime | Discovery + recovery + metrics |
 | Stage 6 | Ощущение присутствия без сообщений | Visual presence in ≥1 channel |
+| Stage 7 | Живой, контекстный outreach вместо hardcoded шаблонов | S7-T6 E2E prompt validation |
+
+> **Stage 7** задокументирован в [soul_outreach_planner.md](soul_outreach_planner.md), ADR: [039-soul-outreach-planner.md](../adr/039-soul-outreach-planner.md).
+
+***
+
+***
+
+## Stage 7 — LLM-Native Outreach Planner
+
+> Полный дизайн и задачи: [soul_outreach_planner.md](soul_outreach_planner.md).
+
+Проблема: Stages 0–6 реализовали "тело" компаньона (drives, гомеостаз, фазы, инициатива), но **что сказать** при outreach — это 5 hardcoded строк. Компаньон корректно решает *когда* выходить на связь, но не *о чём* говорить.
+
+Stage 7 заменяет статические строки на LLM-driven OutreachPlanner, который:
+1. Собирает контекст из существующего storage (interactions, traces, discovery, temperament)
+2. Выбирает intent (follow_up, discovery_question, share_reflection, gentle_checkin, ...)
+3. Генерирует natural, personality-driven message через один LLM call
+
+### 46. `S7-T0` Storage read-model upgrade [3–4h]
+
+Добавление read-методов в `SoulStorage`, необходимых для context assembler:
+- `list_recent_interactions(limit)` — последние N записей DESC
+- `list_unfollowed_interactions(limit, follow_up_window_hours)` — inbound без outbound follow-up
+- Возможно: индекс на `(direction, created_at)`
+- Unit tests
+
+Блокеры: нет.
+Параллельно: можно с S7-T2, S7-T3.
+Результат: storage API покрывает нужды assembler.
+
+### 47. `S7-T1` OutreachContext assembler [4–6h]
+
+Dataclass `OutreachContext` + `assemble_outreach_context(state, storage)`. Сборка из 6 storage queries (включая 2 новых из S7-T0).
+
+Блокеры: S7-T0.
+Параллельно: можно с S7-T2 если interface согласован.
+Результат: тестируемый context assembler.
+
+### 48. `S7-T2` Intent selector [4–6h]
+
+`select_intent(context) → OutreachIntent`. Детерминированный маппинг: phase × lifecycle × trends × available_context → intent.
+
+Блокеры: S7-T1.
+Параллельно: нет.
+Результат: intent selection, покрытый unit tests.
+
+### 49. `S7-T3` Temperament-to-prompt directive [2–4h]
+
+`build_temperament_directive(profile) → str`. Personality section для LLM prompt на основе TemperamentProfile.
+
+Блокеры: нет.
+Параллельно: можно с S7-T0, S7-T1.
+Результат: personality bridge к LLM.
+
+### 50. `S7-T4` OutreachPlanner runtime + LLM agent [8–12h]
+
+`outreach_planner.py`: `OutreachPlanner` class с `try_create_agent`, `destroy`, `generate`. System prompt template, per-intent context blocks, degraded mode fallback, LLM generation cap (`max_outreach_llm_calls_per_day = 3`).
+
+Блокеры: S7-T1, S7-T2, S7-T3.
+Параллельно: нет.
+Результат: working LLM-driven outreach.
+
+### 51. `S7-T5` Integration into main.py [6–8h]
+
+- Инициализация OutreachPlanner в `__init__`, `initialize`, `destroy`
+- Замена `_build_outreach_text` на вызов planner
+- Удаление outreach-кода из discovery_runtime
+- LLM generation cap tracking
+- Обновление/переписывание тестов
+
+Блокеры: S7-T4.
+Параллельно: нет.
+Результат: planner интегрирован, tests зелёные.
+
+### 52. `S7-T6` E2E prompt quality validation [4–6h]
+
+Ручное тестирование outreach quality с реальным LLM по всем lifecycle × intent комбинациям.
+
+Блокеры: S7-T5.
+Параллельно: нет.
+Результат: качественный outreach, не cringe.
+
+**Общий объём Stage 7:** 31–46 часов.
+**Критический путь:** S7-T0 + S7-T3 (parallel) → S7-T1 → S7-T2 → S7-T4 → S7-T5 → S7-T6.
 
 ***
 
@@ -597,3 +682,8 @@ S0-T1a → S0-T1b → S0-T3 → S0-T4 → S0-T5 → S0-T6 (hard gate)
 | 12 | `S6-T1` — rescoped (basic events → S1-T4, full surface → S6-T1) | AI review | Basic phase events = 10 строк в inner loop. Full surface (outreach, reflection) зависит от later stages. |
 | 13 | `S2-T6` — добавлено "критерии записать ДО прогона" | AI review | Защита от cognitive bias при GO/NO-GO evaluation. |
 | 14 | Stage 3 — добавлен manifest upgrade note | Review | `depends_on` меняется с `[kv]` на `[kv, memory]` по Stage Dependency Contract. |
+| 15 | `S7-T0` — новая задача (storage read-model upgrade) | User review | Storage API не имеет `list_recent_interactions` и `list_unfollowed_interactions`. Без S7-T0 assembler scope занижен. |
+| 16 | `S7-T1` blocker: — → S7-T0 | User review | Context assembler зависит от новых storage методов. |
+| 17 | `S7-T5` re-estimate: 4–6h → 6–8h | User review | Интеграция + удаление outreach из discovery_runtime + тесты = больше scope. |
+| 18 | Stage 7 inference budget: `3–5/day` → `≤3/day` (capped) | User review | Противоречие с blueprint contract `1–3/день`. Добавлен LLM generation cap. |
+| 19 | Stage 7 — no backward compatibility | User review | Research project — можно сносить и перестраивать без migration ceremony. |
