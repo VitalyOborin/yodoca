@@ -90,6 +90,47 @@ def test_transition_phase_updates_phase_and_timestamp() -> None:
     assert transitioned.last_tick_at == now
 
 
+def test_resolve_phase_exits_ambient_when_drives_at_ceiling() -> None:
+    """When multiple drives are at ceiling while in AMBIENT, agent must pick one."""
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    state = HomeostasisState(
+        curiosity=0.95,
+        social_hunger=0.75,
+        rest_need=0.10,
+        reflection_need=0.95,
+        care_impulse=0.95,
+        overstimulation=0.10,
+        current_phase=Phase.AMBIENT,
+        phase_entered_at=now - timedelta(minutes=10),
+        last_tick_at=now,
+    )
+
+    resolved = resolve_phase(state, now=now)
+
+    assert resolved is not Phase.AMBIENT
+    assert resolved in {Phase.CURIOUS, Phase.REFLECTIVE, Phase.CARE}
+
+
+def test_resolve_phase_stays_in_active_phase_when_drives_tied() -> None:
+    """When in an active phase and multiple drives are tied, keep current phase."""
+    now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    state = HomeostasisState(
+        curiosity=0.95,
+        social_hunger=0.95,
+        rest_need=0.10,
+        reflection_need=0.95,
+        care_impulse=0.95,
+        overstimulation=0.10,
+        current_phase=Phase.CURIOUS,
+        phase_entered_at=now - timedelta(minutes=10),
+        last_tick_at=now,
+    )
+
+    resolved = resolve_phase(state, now=now)
+
+    assert resolved is Phase.CURIOUS
+
+
 def test_circadian_modifier_changes_between_day_and_night() -> None:
     day = circadian_modifier(12)
     night = circadian_modifier(2)

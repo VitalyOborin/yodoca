@@ -9,7 +9,7 @@ from sandbox.extensions.soul.models import HomeostasisState, Phase
 
 DRIVE_GROWTH_RATE = 0.008
 HYSTERESIS_MARGIN = 0.15
-MIN_DWELL_TIME = timedelta(minutes=5)
+MIN_DWELL_TIME = timedelta(minutes=10)
 MIN_DRIVE_VALUE = 0.05
 MAX_DRIVE_VALUE = 0.95
 OVERSTIMULATION_REST_THRESHOLD = 0.8
@@ -108,19 +108,12 @@ def resolve_phase(
     if top_score < 0.35:
         return Phase.AMBIENT
 
-    current_score = (
-        scores[state.current_phase] if state.current_phase in scores else 0.0
-    )
     if state.current_phase is not Phase.AMBIENT:
+        current_score = scores.get(state.current_phase, 0.0)
         if top_phase is state.current_phase:
             return state.current_phase
         if top_score - current_score < hysteresis_margin:
             return state.current_phase
-
-    sorted_scores = sorted(scores.values(), reverse=True)
-    second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
-    if top_score - second_score < hysteresis_margin:
-        return Phase.AMBIENT
 
     return top_phase
 

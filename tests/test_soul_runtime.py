@@ -498,7 +498,7 @@ async def test_user_message_resolves_pending_outreach_as_response(
 
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.8
-    attempted_at = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    attempted_at = datetime.now(UTC) - timedelta(minutes=5)
     await ext._send_outreach("Ping", now=attempted_at)
     ext._last_agent_response_at = attempted_at
 

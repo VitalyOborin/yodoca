@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from sandbox.extensions.soul.initiative import (
     IGNORED_COOLDOWN,
+    IGNORED_COOLDOWN_DISCOVERY,
     can_attempt_outreach,
     refresh_budget,
     register_outreach_attempt,
@@ -64,6 +65,27 @@ def test_resolve_ignored_applies_cooldown() -> None:
     assert resolved.last_outreach_result is OutreachResult.IGNORED
     assert resolved.cooldown_until == resolved_at + IGNORED_COOLDOWN
     assert can_attempt_outreach(resolved, now=resolved_at) is False
+
+
+def test_ignored_discovery_mode_applies_shorter_cooldown() -> None:
+    state = register_outreach_attempt(
+        InitiativeState(),
+        outreach_id="outreach-1",
+        channel_id="cli_channel",
+        availability_at_send=0.8,
+        now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
+    )
+    resolved_at = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
+
+    resolved = resolve_outreach(
+        state,
+        result=OutreachResult.IGNORED,
+        now=resolved_at,
+        discovery_mode=True,
+    )
+
+    assert resolved.cooldown_until == resolved_at + IGNORED_COOLDOWN_DISCOVERY
+    assert IGNORED_COOLDOWN_DISCOVERY < IGNORED_COOLDOWN
 
 
 def test_response_clears_pending_without_cooldown() -> None:

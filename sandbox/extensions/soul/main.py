@@ -890,6 +890,8 @@ class SoulExtension:
             self._state.initiative,
             result=OutreachResult.RESPONSE,
             now=now,
+            discovery_mode=self._state.discovery.lifecycle_phase
+            is SoulLifecyclePhase.DISCOVERY,
         )
         delay_seconds = int((now - pending.attempted_at).total_seconds())
         await self._storage.upsert_daily_metrics(now.date(), outreach_responses=1)
@@ -929,6 +931,8 @@ class SoulExtension:
             result=result,
             now=now,
             apply_cooldown=result is OutreachResult.IGNORED,
+            discovery_mode=self._state.discovery.lifecycle_phase
+            is SoulLifecyclePhase.DISCOVERY,
         )
         metric_key = (
             "outreach_ignored"

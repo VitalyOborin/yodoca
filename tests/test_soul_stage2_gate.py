@@ -15,11 +15,11 @@ async def test_stage2_automated_gate_scenarios(tmp_path: Path) -> None:
 
     assert ext._state is not None
 
-    noon = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    noon = datetime.now(UTC).replace(second=0, microsecond=0)
     ext._state.user_presence.estimated_availability = 0.8
     ext._state.homeostasis.current_phase = Phase.CURIOUS
     ext._state.homeostasis.social_hunger = 0.9
-    ext._state.homeostasis.last_tick_at = noon - timedelta(hours=4)
+    ext._state.homeostasis.last_tick_at = noon - timedelta(minutes=10)
 
     await ext._run_one_tick(now=noon)
 
@@ -38,12 +38,12 @@ async def test_stage2_automated_gate_scenarios(tmp_path: Path) -> None:
     assert len(context.notifications) == 1
     assert ext._state.homeostasis.social_hunger >= social_after_response
 
-    next_day = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+    next_day = noon + timedelta(days=1)
     ext._state.initiative.budget.last_reset_at = noon
     ext._state.initiative.budget.used_today = 0
     ext._state.user_presence.estimated_availability = 0.8
     ext._state.homeostasis.social_hunger = 0.95
-    ext._state.homeostasis.last_tick_at = next_day - timedelta(hours=4)
+    ext._state.homeostasis.last_tick_at = next_day - timedelta(minutes=10)
 
     await ext._run_one_tick(now=next_day)
     assert len(context.notifications) == 2
@@ -57,10 +57,10 @@ async def test_stage2_automated_gate_scenarios(tmp_path: Path) -> None:
     ext._state.initiative.cooldown_until = None
     ext._state.user_presence.estimated_availability = 0.8
     ext._state.homeostasis.social_hunger = 0.95
-    night = datetime(2026, 3, 30, 23, 0, tzinfo=UTC)
-    ext._state.homeostasis.last_tick_at = night - timedelta(hours=4)
+    night_hour = noon.replace(hour=23, minute=0)
+    ext._state.homeostasis.last_tick_at = night_hour - timedelta(minutes=10)
 
-    await ext._run_one_tick(now=night)
+    await ext._run_one_tick(now=night_hour)
     assert len(context.notifications) == 2
 
     snapshot = await ext._build_state_snapshot()

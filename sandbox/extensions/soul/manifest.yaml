@@ -16,14 +16,14 @@ config:
   tick_interval_seconds: 30
   persist_interval_seconds: 60
   context_token_budget: 200
-  user_timezone: "UTC"
+  user_timezone: "UTC+3"
   mood_classifier_daily_budget: 3
   mood_classifier_min_chars: 180
   mood_classifier_signal_threshold: 0.45
   mood_classifier_weight: 0.25
-  max_reflections_per_day: 5
+  max_reflections_per_day: 10
   reflection_cooldown_minutes: 90
-  max_explorations_per_day: 3
+  max_explorations_per_day: 5
 
 schedules:
   - name: weekly_consolidation

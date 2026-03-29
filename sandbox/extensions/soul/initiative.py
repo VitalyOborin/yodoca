@@ -13,6 +13,7 @@ from sandbox.extensions.soul.models import (
 )
 
 IGNORED_COOLDOWN = timedelta(hours=6)
+IGNORED_COOLDOWN_DISCOVERY = timedelta(hours=2)
 REJECTED_COOLDOWN = timedelta(days=2)
 OUTREACH_WINDOW = timedelta(minutes=60)
 
@@ -87,6 +88,7 @@ def resolve_outreach(
     result: OutreachResult,
     now: datetime | None = None,
     apply_cooldown: bool = True,
+    discovery_mode: bool = False,
 ) -> InitiativeState:
     now = now or datetime.now(UTC)
     if state.pending_outreach is None:
@@ -95,7 +97,9 @@ def resolve_outreach(
     cooldown_until = state.cooldown_until
     if apply_cooldown:
         if result is OutreachResult.IGNORED:
-            cooldown_until = now + IGNORED_COOLDOWN
+            cooldown_until = now + (
+                IGNORED_COOLDOWN_DISCOVERY if discovery_mode else IGNORED_COOLDOWN
+            )
         elif result is OutreachResult.REJECTED:
             cooldown_until = now + REJECTED_COOLDOWN
         elif result in {OutreachResult.RESPONSE, OutreachResult.TIMING_MISS}:
