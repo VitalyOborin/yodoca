@@ -11,6 +11,7 @@ description: |
 
 depends_on:
   - kv
+  - memory
 
 config:
   tick_interval_seconds: 30

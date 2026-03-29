@@ -234,7 +234,86 @@ class SoulStorage:
                 ts.isoformat(),
             ),
         )
+        self._update_interaction_pattern_sync(
+            hour=ts.hour,
+            day_of_week=ts.weekday(),
+            direction=direction,
+            outreach_result=outreach_result,
+            response_delay_s=response_delay_s,
+            updated_at=ts,
+        )
         conn.commit()
+
+    def _update_interaction_pattern_sync(
+        self,
+        *,
+        hour: int,
+        day_of_week: int,
+        direction: str,
+        outreach_result: str | None,
+        response_delay_s: int | None,
+        updated_at: datetime,
+    ) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO interaction_patterns (
+                hour,
+                day_of_week,
+                updated_at
+            )
+            VALUES (?, ?, ?)
+            ON CONFLICT(hour, day_of_week) DO NOTHING
+            """,
+            (hour, day_of_week, updated_at.isoformat()),
+        )
+        conn.execute(
+            """
+            UPDATE interaction_patterns
+            SET
+                interaction_count = interaction_count + 1,
+                inbound_count = inbound_count + ?,
+                outbound_count = outbound_count + ?,
+                response_count = response_count + ?,
+                ignored_count = ignored_count + ?,
+                timing_miss_count = timing_miss_count + ?,
+                rejected_count = rejected_count + ?,
+                updated_at = ?
+            WHERE hour = ? AND day_of_week = ?
+            """,
+            (
+                1 if direction == "inbound" else 0,
+                1 if direction == "outbound" else 0,
+                1 if outreach_result == "response" else 0,
+                1 if outreach_result == "ignored" else 0,
+                1 if outreach_result == "timing_miss" else 0,
+                1 if outreach_result == "rejected" else 0,
+                updated_at.isoformat(),
+                hour,
+                day_of_week,
+            ),
+        )
+        if response_delay_s is not None:
+            row = conn.execute(
+                """
+                SELECT avg_response_delay_s, response_delay_samples
+                FROM interaction_patterns
+                WHERE hour = ? AND day_of_week = ?
+                """,
+                (hour, day_of_week),
+            ).fetchone()
+            samples = int(row["response_delay_samples"] or 0)
+            avg_delay = float(row["avg_response_delay_s"] or 0.0)
+            next_samples = samples + 1
+            next_avg = ((avg_delay * samples) + response_delay_s) / next_samples
+            conn.execute(
+                """
+                UPDATE interaction_patterns
+                SET avg_response_delay_s = ?, response_delay_samples = ?
+                WHERE hour = ? AND day_of_week = ?
+                """,
+                (next_avg, next_samples, hour, day_of_week),
+            )
 
     async def cleanup_traces_older_than(self, cutoff: datetime) -> int:
         async with self._lock:
@@ -283,6 +362,49 @@ class SoulStorage:
             "slot_interactions": int(row["slot_interactions"] or 0),
             "last_interaction_at": row["last_interaction_at"],
         }
+
+    async def get_interaction_pattern(
+        self,
+        *,
+        hour: int,
+        day_of_week: int,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_interaction_pattern_sync,
+                hour,
+                day_of_week,
+            )
+
+    def _get_interaction_pattern_sync(
+        self,
+        hour: int,
+        day_of_week: int,
+    ) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT
+                hour,
+                day_of_week,
+                interaction_count,
+                inbound_count,
+                outbound_count,
+                response_count,
+                ignored_count,
+                timing_miss_count,
+                rejected_count,
+                avg_response_delay_s,
+                response_delay_samples,
+                updated_at
+            FROM interaction_patterns
+            WHERE hour = ? AND day_of_week = ?
+            """,
+            (hour, day_of_week),
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
 
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
         conn = self._get_conn()

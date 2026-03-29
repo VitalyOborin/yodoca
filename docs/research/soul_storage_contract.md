@@ -11,6 +11,7 @@ This contract covers:
 - `soul_state`
 - `traces`
 - `interaction_log`
+- `interaction_patterns`
 - `soul_metrics`
 
 It does not yet cover later-stage tables such as:
@@ -138,6 +139,28 @@ Read pattern:
 - Diagnostics
 - Evaluation gates
 - Future self-correction logic
+
+### `interaction_patterns`
+
+Purpose:
+
+- Derived hour × day aggregates for availability and response behavior
+
+Write pattern:
+
+- Update incrementally whenever `interaction_log` receives a new row
+- Keep one row per `(hour, day_of_week)` slot
+- Maintain:
+  - total interactions
+  - inbound/outbound counts
+  - outreach result counts
+  - average response delay
+
+Read pattern:
+
+- Pattern-based availability estimation
+- Relationship trend metrics in Stage 3
+- Metrics/observability views in Stage 3 and later
 
 ## Indexing Rules
 

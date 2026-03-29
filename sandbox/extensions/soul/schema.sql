@@ -48,6 +48,22 @@ CREATE INDEX IF NOT EXISTS idx_interaction_log_hour_day
 CREATE INDEX IF NOT EXISTS idx_interaction_log_channel_created_at
     ON interaction_log(channel_id, created_at);
 
+CREATE TABLE IF NOT EXISTS interaction_patterns (
+    hour                      INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    day_of_week               INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+    interaction_count         INTEGER NOT NULL DEFAULT 0,
+    inbound_count             INTEGER NOT NULL DEFAULT 0,
+    outbound_count            INTEGER NOT NULL DEFAULT 0,
+    response_count            INTEGER NOT NULL DEFAULT 0,
+    ignored_count             INTEGER NOT NULL DEFAULT 0,
+    timing_miss_count         INTEGER NOT NULL DEFAULT 0,
+    rejected_count            INTEGER NOT NULL DEFAULT 0,
+    avg_response_delay_s      REAL,
+    response_delay_samples    INTEGER NOT NULL DEFAULT 0,
+    updated_at                TEXT NOT NULL,
+    PRIMARY KEY (hour, day_of_week)
+);
+
 CREATE TABLE IF NOT EXISTS soul_metrics (
     date                      TEXT PRIMARY KEY,
     outreach_attempts         INTEGER NOT NULL DEFAULT 0,

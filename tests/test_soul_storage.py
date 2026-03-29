@@ -52,6 +52,16 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     assert summary["total_interactions"] >= 1
     assert summary["last_interaction_at"] is not None
 
+    pattern = await storage.get_interaction_pattern(
+        hour=datetime.now(UTC).hour,
+        day_of_week=datetime.now(UTC).weekday(),
+    )
+
+    assert pattern is not None
+    assert pattern["interaction_count"] >= 1
+    assert pattern["inbound_count"] >= 1
+    assert pattern["avg_response_delay_s"] == 42.0
+
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
             "SELECT direction, channel_id, response_delay_s FROM interaction_log"
