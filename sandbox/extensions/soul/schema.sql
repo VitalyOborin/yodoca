@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS interaction_log (
 CREATE INDEX IF NOT EXISTS idx_interaction_log_created_at
     ON interaction_log(created_at);
 
+CREATE INDEX IF NOT EXISTS idx_interaction_log_direction_created_at
+    ON interaction_log(direction, created_at);
+
 CREATE INDEX IF NOT EXISTS idx_interaction_log_hour_day
     ON interaction_log(hour, day_of_week);
 

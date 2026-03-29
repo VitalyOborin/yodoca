@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -553,6 +553,23 @@ class SoulStorage:
         async with self._lock:
             return await asyncio.to_thread(self._list_interactions_since_sync, since)
 
+    async def list_recent_interactions(self, limit: int = 10) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_recent_interactions_sync, limit)
+
+    async def list_unfollowed_interactions(
+        self,
+        *,
+        limit: int = 5,
+        follow_up_window_hours: int = 4,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_unfollowed_interactions_sync,
+                limit,
+                follow_up_window_hours,
+            )
+
     def _list_interactions_since_sync(self, since: datetime) -> list[dict[str, Any]]:
         conn = self._get_conn()
         rows = conn.execute(
@@ -572,6 +589,69 @@ class SoulStorage:
             ORDER BY created_at ASC
             """,
             (since.astimezone(UTC).isoformat(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _list_recent_interactions_sync(self, limit: int) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                direction,
+                channel_id,
+                hour,
+                day_of_week,
+                outreach_result,
+                message_length,
+                openness_signal,
+                response_delay_s,
+                created_at
+            FROM interaction_log
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _list_unfollowed_interactions_sync(
+        self,
+        limit: int,
+        follow_up_window_hours: int,
+    ) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        follow_up_cutoff = (
+            datetime.now(UTC) - timedelta(hours=follow_up_window_hours)
+        ).isoformat()
+        rows = conn.execute(
+            """
+            SELECT
+                inbound.id,
+                inbound.direction,
+                inbound.channel_id,
+                inbound.hour,
+                inbound.day_of_week,
+                inbound.outreach_result,
+                inbound.message_length,
+                inbound.openness_signal,
+                inbound.response_delay_s,
+                inbound.created_at
+            FROM interaction_log AS inbound
+            WHERE inbound.direction = 'inbound'
+              AND inbound.created_at <= ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM interaction_log AS outbound
+                  WHERE outbound.direction = 'outbound'
+                    AND outbound.created_at > inbound.created_at
+                    AND julianday(outbound.created_at)
+                        <= julianday(inbound.created_at) + (? / 24.0)
+              )
+            ORDER BY inbound.created_at DESC, inbound.id DESC
+            LIMIT ?
+            """,
+            (follow_up_cutoff, follow_up_window_hours, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 

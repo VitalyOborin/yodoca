@@ -103,3 +103,82 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
         ).fetchone()
 
     assert row == ("inbound", "cli_channel", 128, 0.65, 42)
+
+
+async def test_soul_storage_lists_recent_interactions_desc(tmp_path: Path) -> None:
+    db_path = tmp_path / "soul.db"
+    schema_path = Path("sandbox/extensions/soul/schema.sql")
+    storage = SoulStorage(db_path, schema_path)
+    await storage.initialize()
+
+    base = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="cli_channel",
+        message_length=20,
+        created_at=base,
+    )
+    await storage.append_interaction(
+        direction="outbound",
+        channel_id="cli_channel",
+        message_length=30,
+        created_at=base + timedelta(minutes=5),
+    )
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="telegram_channel",
+        message_length=40,
+        created_at=base + timedelta(minutes=10),
+    )
+
+    interactions = await storage.list_recent_interactions(limit=2)
+
+    assert len(interactions) == 2
+    assert interactions[0]["channel_id"] == "telegram_channel"
+    assert interactions[1]["direction"] == "outbound"
+
+
+async def test_soul_storage_lists_unfollowed_interactions(tmp_path: Path) -> None:
+    db_path = tmp_path / "soul.db"
+    schema_path = Path("sandbox/extensions/soul/schema.sql")
+    storage = SoulStorage(db_path, schema_path)
+    await storage.initialize()
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    stale_inbound = now - timedelta(hours=8)
+    followed_inbound = now - timedelta(hours=10)
+    recent_inbound = now - timedelta(hours=1)
+
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="cli_channel",
+        message_length=90,
+        created_at=stale_inbound,
+    )
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="cli_channel",
+        message_length=60,
+        created_at=followed_inbound,
+    )
+    await storage.append_interaction(
+        direction="outbound",
+        channel_id="cli_channel",
+        message_length=55,
+        created_at=followed_inbound + timedelta(hours=2),
+    )
+    await storage.append_interaction(
+        direction="inbound",
+        channel_id="telegram_channel",
+        message_length=40,
+        created_at=recent_inbound,
+    )
+
+    interactions = await storage.list_unfollowed_interactions(
+        limit=5,
+        follow_up_window_hours=4,
+    )
+
+    assert len(interactions) == 1
+    assert interactions[0]["channel_id"] == "cli_channel"
+    assert interactions[0]["message_length"] == 90
