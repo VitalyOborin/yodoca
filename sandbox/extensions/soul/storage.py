@@ -648,6 +648,66 @@ class SoulStorage:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    async def append_discovery_node(
+        self,
+        *,
+        topic: str,
+        content: str,
+        confidence: float,
+        source_json: str | None,
+        created_at: datetime,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._append_discovery_node_sync,
+                topic,
+                content,
+                confidence,
+                source_json,
+                created_at,
+            )
+
+    def _append_discovery_node_sync(
+        self,
+        topic: str,
+        content: str,
+        confidence: float,
+        source_json: str | None,
+        created_at: datetime,
+    ) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO discovery_nodes (topic, content, confidence, source_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                topic,
+                content,
+                confidence,
+                source_json,
+                created_at.astimezone(UTC).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    async def list_discovery_nodes(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_discovery_nodes_sync, limit)
+
+    def _list_discovery_nodes_sync(self, limit: int) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT id, topic, content, confidence, source_json, created_at
+            FROM discovery_nodes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
         conn = self._get_conn()
         cursor = conn.execute(

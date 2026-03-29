@@ -18,6 +18,7 @@ from sandbox.extensions.soul.consolidation import (
     detect_relationship_patterns,
     should_run_weekly_consolidation,
 )
+from sandbox.extensions.soul.discovery_runtime import DiscoveryRuntime
 from sandbox.extensions.soul.drives import (
     resolve_phase,
     tick_homeostasis,
@@ -33,6 +34,7 @@ from sandbox.extensions.soul.models import (
     OutreachResult,
     Phase,
     PresenceState,
+    SoulLifecyclePhase,
 )
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
@@ -113,6 +115,7 @@ class SoulExtension:
         self._last_error: str | None = None
         self._classifier = ClassifierRuntime()
         self._trend_cache = TrendCache(ttl_seconds=300)
+        self._discovery = DiscoveryRuntime()
         self._reflector = ReflectionRuntime()
         self._explorer = ExplorationRuntime()
 
@@ -153,6 +156,9 @@ class SoulExtension:
             self._classifier.try_create_agent(
                 context.model_router, logger=context.logger
             )
+            self._discovery.try_create_agent(
+                context.model_router, logger=context.logger
+            )
             self._reflector.try_create_agent(
                 context.model_router, logger=context.logger
             )
@@ -167,6 +173,7 @@ class SoulExtension:
             self._state.homeostasis.current_phase
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
+        self._discovery.apply_lifecycle_biases(self._state)
         context.subscribe("user_message", self._on_user_message)
         context.subscribe("agent_response", self._on_agent_response)
         context.subscribe_event(
@@ -262,6 +269,7 @@ class SoulExtension:
         self._initialized_at = None
         self._last_error = None
         self._classifier.destroy()
+        self._discovery.destroy()
         self._reflector.destroy()
         self._explorer.destroy()
 
@@ -303,6 +311,7 @@ class SoulExtension:
 
         now = now or datetime.now(UTC)
         previous_state = self._state.snapshot()
+        await self._reconcile_discovery_lifecycle(now)
         await self._resolve_pending_outreach_timeout(now)
         await self._maybe_attempt_outreach(now)
         phase_before = self._state.homeostasis.current_phase
@@ -328,6 +337,7 @@ class SoulExtension:
         )
         self._state.mood = self._derive_mood(self._state.homeostasis.current_phase)
         self._state.tick_count += 1
+        await self._reconcile_discovery_lifecycle(now)
 
         phase_changed = self._state.homeostasis.current_phase is not phase_before
         presence_changed = self._state.presence is not presence_before
@@ -469,6 +479,60 @@ class SoulExtension:
             },
         )
 
+    async def _emit_lifecycle_changed(
+        self,
+        *,
+        from_phase: SoulLifecyclePhase,
+        to_phase: SoulLifecyclePhase,
+        now: datetime,
+    ) -> None:
+        if self._ctx is None:
+            return
+        await self._ctx.emit(
+            "companion.lifecycle.changed",
+            {
+                "from_lifecycle": from_phase.value,
+                "to_lifecycle": to_phase.value,
+                "occurred_at": now.isoformat(),
+            },
+        )
+
+    async def _reconcile_discovery_lifecycle(
+        self,
+        now: datetime,
+        *,
+        apply_biases: bool = True,
+    ) -> None:
+        if self._storage is None or self._state is None:
+            return
+        previous = self._state.discovery.lifecycle_phase
+        permanent_patterns = len(
+            await self._storage.list_relationship_patterns(permanent_only=True)
+        )
+        changed = self._discovery.reconcile_lifecycle(
+            self._state,
+            now=now,
+            permanent_patterns=permanent_patterns,
+        )
+        if apply_biases:
+            self._discovery.apply_lifecycle_biases(self._state)
+        if changed is None:
+            return
+        await self._emit_lifecycle_changed(
+            from_phase=previous,
+            to_phase=changed,
+            now=now,
+        )
+        await self._trace_event(
+            trace_type="lifecycle_transition",
+            content=f"Lifecycle changed from {previous.value} to {changed.value}",
+            payload={
+                "from_lifecycle": previous.value,
+                "to_lifecycle": changed.value,
+            },
+            now=now,
+        )
+
     async def _on_user_message(self, payload: dict[str, object]) -> None:
         if self._ctx is None or self._storage is None or self._state is None:
             return
@@ -510,6 +574,13 @@ class SoulExtension:
             0.05,
             self._state.homeostasis.social_hunger - 0.20,
         )
+        await self._discovery.register_user_message(
+            state=self._state,
+            storage=self._storage,
+            text=text,
+            now=now,
+        )
+        await self._reconcile_discovery_lifecycle(now, apply_biases=False)
         await self._resolve_pending_outreach_response(now)
         await self._storage.append_interaction(
             direction="inbound",
@@ -644,7 +715,7 @@ class SoulExtension:
             return
 
         await self._send_outreach(
-            self._build_outreach_text(),
+            await self._build_outreach_text(now),
             now=now,
         )
 
@@ -785,16 +856,20 @@ class SoulExtension:
         note = self._context_note()
         trend = await self._get_or_refresh_trend()
         relationship_note = trend.context_note()
+        discovery_note = self._discovery.context_note(self._state)
         max_words = max(24, int(self._context_token_budget * 0.75))
         lines = [
             "Soul state:",
             f"- phase: {self._state.homeostasis.current_phase.value.lower()}",
+            f"- lifecycle: {self._state.discovery.lifecycle_phase.value.lower()}",
             f"- presence: {self._state.presence.value.lower()}",
             f"- mood: {mood_label}",
             f"- note: {note}",
         ]
         if relationship_note:
             lines.append(f"- relationship: {relationship_note}")
+        if discovery_note:
+            lines.append(f"- discovery: {discovery_note}")
         context = "\n".join(lines)
         if len(context.split()) > max_words:
             context = "\n".join(lines[:5])
@@ -956,9 +1031,18 @@ class SoulExtension:
             return "Light curiosity is natural right now."
         return "Be present before being useful."
 
-    def _build_outreach_text(self) -> str:
+    async def _build_outreach_text(self, now: datetime) -> str:
         if self._state is None:
             return "I was thinking about one thing."
+        if self._ctx is not None and self._storage is not None:
+            discovery_text = await self._discovery.maybe_build_outreach(
+                state=self._state,
+                storage=self._storage,
+                now=now,
+                logger=self._ctx.logger,
+            )
+            if discovery_text:
+                return discovery_text
 
         phase = self._state.homeostasis.current_phase
         if phase is Phase.REFLECTIVE:
@@ -1054,6 +1138,12 @@ class SoulExtension:
                 "persistence": self._state.temperament.persistence,
                 "drift_events": self._state.temperament.drift_events,
                 "seed_source": self._state.temperament.seed_source,
+            },
+            discovery={
+                "lifecycle_phase": self._state.discovery.lifecycle_phase.value,
+                "interaction_count": self._state.discovery.interaction_count,
+                "last_question_topic": self._state.discovery.last_question_topic,
+                "topics": self._state.discovery.topics.to_dict(),
             },
         )
 

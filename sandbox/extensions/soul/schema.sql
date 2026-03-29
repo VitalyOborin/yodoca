@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS relationship_patterns (
     updated_at             TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS discovery_nodes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic         TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    confidence    REAL NOT NULL DEFAULT 0.0,
+    source_json   TEXT,
+    created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_nodes_created_at
+    ON discovery_nodes(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_nodes_topic_created_at
+    ON discovery_nodes(topic, created_at);
+
 CREATE TABLE IF NOT EXISTS soul_metrics (
     date                      TEXT PRIMARY KEY,
     outreach_attempts         INTEGER NOT NULL DEFAULT 0,

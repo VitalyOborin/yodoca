@@ -51,6 +51,12 @@ class OutreachResult(StrEnum):
     REJECTED = "rejected"
 
 
+class SoulLifecyclePhase(StrEnum):
+    DISCOVERY = "DISCOVERY"
+    FORMING = "FORMING"
+    MATURE = "MATURE"
+
+
 @dataclass(slots=True)
 class UserPresenceState:
     last_interaction_at: datetime | None = None
@@ -283,6 +289,90 @@ class InitiativeState:
 
 
 @dataclass(slots=True)
+class DiscoveryTopicCoverage:
+    identity: float = 0.0
+    work: float = 0.0
+    rhythm: float = 0.0
+    communication: float = 0.0
+    interests: float = 0.0
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "identity": self.identity,
+            "work": self.work,
+            "rhythm": self.rhythm,
+            "communication": self.communication,
+            "interests": self.interests,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DiscoveryTopicCoverage:
+        return cls(
+            identity=float(data.get("identity", 0.0)),
+            work=float(data.get("work", 0.0)),
+            rhythm=float(data.get("rhythm", 0.0)),
+            communication=float(data.get("communication", 0.0)),
+            interests=float(data.get("interests", 0.0)),
+        )
+
+
+@dataclass(slots=True)
+class DiscoveryState:
+    lifecycle_phase: SoulLifecyclePhase = SoulLifecyclePhase.DISCOVERY
+    phase_entered_at: datetime = field(default_factory=utc_now)
+    first_interaction_at: datetime | None = None
+    interaction_count: int = 0
+    topics: DiscoveryTopicCoverage = field(default_factory=DiscoveryTopicCoverage)
+    last_question_at: datetime | None = None
+    last_question_topic: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lifecycle_phase": self.lifecycle_phase.value,
+            "phase_entered_at": _serialize_datetime(self.phase_entered_at),
+            "first_interaction_at": (
+                _serialize_datetime(self.first_interaction_at)
+                if self.first_interaction_at is not None
+                else None
+            ),
+            "interaction_count": self.interaction_count,
+            "topics": self.topics.to_dict(),
+            "last_question_at": (
+                _serialize_datetime(self.last_question_at)
+                if self.last_question_at is not None
+                else None
+            ),
+            "last_question_topic": self.last_question_topic,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DiscoveryState:
+        return cls(
+            lifecycle_phase=SoulLifecyclePhase(
+                data.get("lifecycle_phase", SoulLifecyclePhase.DISCOVERY.value)
+            ),
+            phase_entered_at=(
+                _deserialize_datetime(data["phase_entered_at"])
+                if data.get("phase_entered_at")
+                else utc_now()
+            ),
+            first_interaction_at=(
+                _deserialize_datetime(data["first_interaction_at"])
+                if data.get("first_interaction_at")
+                else None
+            ),
+            interaction_count=int(data.get("interaction_count", 0)),
+            topics=DiscoveryTopicCoverage.from_dict(data.get("topics", {})),
+            last_question_at=(
+                _deserialize_datetime(data["last_question_at"])
+                if data.get("last_question_at")
+                else None
+            ),
+            last_question_topic=data.get("last_question_topic"),
+        )
+
+
+@dataclass(slots=True)
 class HomeostasisState:
     curiosity: float = 0.3
     social_hunger: float = 0.2
@@ -336,6 +426,7 @@ class CompanionState:
     user_presence: UserPresenceState = field(default_factory=UserPresenceState)
     initiative: InitiativeState = field(default_factory=InitiativeState)
     temperament: TemperamentProfile = field(default_factory=TemperamentProfile)
+    discovery: DiscoveryState = field(default_factory=DiscoveryState)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -349,6 +440,7 @@ class CompanionState:
             "user_presence": self.user_presence.to_dict(),
             "initiative": self.initiative.to_dict(),
             "temperament": asdict(self.temperament),
+            "discovery": self.discovery.to_dict(),
         }
 
     def to_json(self) -> str:
@@ -369,6 +461,7 @@ class CompanionState:
             user_presence=UserPresenceState.from_dict(data.get("user_presence", {})),
             initiative=InitiativeState.from_dict(data.get("initiative", {})),
             temperament=TemperamentProfile(**data["temperament"]),
+            discovery=DiscoveryState.from_dict(data.get("discovery", {})),
         )
 
     def snapshot(self) -> CompanionState:
@@ -394,6 +487,10 @@ class CompanionState:
                 ),
             ),
             temperament=replace(self.temperament),
+            discovery=replace(
+                self.discovery,
+                topics=replace(self.discovery.topics),
+            ),
         )
 
     @classmethod

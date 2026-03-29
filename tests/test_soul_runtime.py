@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 from conftest import FakeSoulContext
 
 from sandbox.extensions.soul.main import SoulExtension
-from sandbox.extensions.soul.models import Phase, PresenceState
+from sandbox.extensions.soul.models import Phase, PresenceState, SoulLifecyclePhase
 
 
 async def test_inner_tick_emits_phase_and_presence_events(tmp_path: Path) -> None:
@@ -181,6 +181,7 @@ async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
 
     assert result is not None
     assert "phase:" in result
+    assert "lifecycle:" in result
     assert "presence:" in result
     assert "mood: warm" in result
     assert "User seems tired; be brief and present." in result
@@ -238,6 +239,7 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert "curiosity" in snapshot.drives
     assert "daily_budget" in snapshot.initiative
     assert "estimated_availability" in snapshot.user_presence
+    assert snapshot.discovery["lifecycle_phase"] == "DISCOVERY"
     assert len(ext.get_tools()) == 2
 
 
@@ -503,7 +505,7 @@ async def test_tick_triggers_one_shot_outreach_when_threshold_and_governor_allow
     await ext._run_one_tick(now=now)
 
     assert len(context.notifications) == 1
-    assert "curious" in context.notifications[0][0].lower()
+    assert "?" in context.notifications[0][0]
     assert ext._state.initiative.budget.used_today == 1
 
 
@@ -515,10 +517,89 @@ async def test_tick_does_not_trigger_outreach_when_budget_spent(tmp_path: Path) 
     assert ext._state is not None
     ext._state.user_presence.estimated_availability = 0.8
     ext._state.homeostasis.social_hunger = 0.9
-    ext._state.initiative.budget.used_today = 1
+    ext._state.initiative.budget.used_today = 5
     now = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     ext._state.homeostasis.last_tick_at = now - timedelta(minutes=30)
 
     await ext._run_one_tick(now=now)
 
     assert context.notifications == []
+
+
+async def test_user_message_creates_discovery_node_and_updates_topic_coverage(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    assert ext._storage is not None
+
+    await ext._on_user_message(
+        {
+            "text": "My name is Vitaly and I build agent runtimes.",
+            "channel": object(),
+        }
+    )
+
+    nodes = await ext._storage.list_discovery_nodes(limit=5)
+
+    assert ext._state.discovery.interaction_count == 1
+    assert ext._state.discovery.topics.identity > 0.0
+    assert nodes
+    assert nodes[0]["topic"] in {"identity", "work"}
+
+
+async def test_discovery_lifecycle_transitions_to_forming_after_enough_interactions(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    for index in range(20):
+        await ext._on_user_message(
+            {
+                "text": f"I work on agent systems and prefer short messages {index}",
+                "channel": object(),
+            }
+        )
+
+    assert ext._state.discovery.lifecycle_phase is SoulLifecyclePhase.FORMING
+    assert any(topic == "companion.lifecycle.changed" for topic, _ in context.events)
+
+
+async def test_discovery_outreach_prefers_question_about_unknown_topic(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(
+        tmp_path,
+        model_router=SimpleNamespace(get_model=lambda agent_id: "gpt-5-mini"),
+    )
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.homeostasis.current_phase = Phase.CURIOUS
+    ext._state.discovery.topics.identity = 0.8
+    ext._state.discovery.topics.work = 0.7
+    ext._state.discovery.topics.rhythm = 0.1
+    ext._state.discovery.topics.communication = 0.6
+    ext._state.discovery.topics.interests = 0.6
+    now = datetime.now(UTC)
+
+    with patch(
+        "sandbox.extensions.soul.discovery_runtime.Runner.run",
+        new=AsyncMock(
+            return_value=SimpleNamespace(
+                final_output="What does a normal day usually feel like for you right now?"
+            )
+        ),
+    ):
+        text = await ext._build_outreach_text(now)
+
+    assert "?" in text
+    assert "day" in text.lower()
+    assert ext._state.discovery.last_question_topic == "rhythm"

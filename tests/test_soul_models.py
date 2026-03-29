@@ -6,6 +6,7 @@ from sandbox.extensions.soul.models import (
     PerceptionSample,
     Phase,
     PresenceState,
+    SoulLifecyclePhase,
 )
 
 
@@ -28,6 +29,9 @@ def test_companion_state_json_round_trip() -> None:
     state.temperament.playfulness = 0.7
     state.temperament.drift_events = 2
     state.temperament.seed_source = "questionnaire"
+    state.discovery.lifecycle_phase = SoulLifecyclePhase.FORMING
+    state.discovery.interaction_count = 17
+    state.discovery.topics.work = 0.8
 
     restored = CompanionState.from_json(state.to_json())
 
@@ -44,3 +48,6 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.temperament.playfulness == 0.7
     assert restored.temperament.drift_events == 2
     assert restored.temperament.seed_source == "questionnaire"
+    assert restored.discovery.lifecycle_phase is SoulLifecyclePhase.FORMING
+    assert restored.discovery.interaction_count == 17
+    assert restored.discovery.topics.work == 0.8

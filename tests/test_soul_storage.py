@@ -75,10 +75,20 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     interactions = await storage.list_interactions_since(
         datetime.now(UTC) - timedelta(days=1)
     )
+    await storage.append_discovery_node(
+        topic="work",
+        content="User builds agent runtimes.",
+        confidence=0.7,
+        source_json=None,
+        created_at=datetime.now(UTC),
+    )
+    discovery_nodes = await storage.list_discovery_nodes(limit=5)
 
     assert len(interactions) == 1
     assert interactions[0]["message_length"] == 128
     assert interactions[0]["openness_signal"] == 0.65
+    assert len(discovery_nodes) == 1
+    assert discovery_nodes[0]["topic"] == "work"
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
