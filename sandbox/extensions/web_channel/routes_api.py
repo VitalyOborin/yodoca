@@ -16,6 +16,7 @@ from sandbox.extensions.inbox.models import InboxItemInput
 from sandbox.extensions.web_channel.models import (
     CancelTaskRequest,
     CancelTaskResponse,
+    CompanionPresenceResponse,
     CreateOnceScheduleRequest,
     CreateProjectRequest,
     CreateRecurringScheduleRequest,
@@ -207,6 +208,13 @@ def _task_engine_unavailable_response() -> JSONResponse:
     )
 
 
+def _soul_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "soul extension unavailable"},
+    )
+
+
 def _get_inbox_extension(request: Request):
     ext = _get_extension(request)
     return ext.get_inbox()
@@ -215,6 +223,11 @@ def _get_inbox_extension(request: Request):
 def _get_task_engine(request: Request):
     ext = _get_extension(request)
     return ext.get_task_engine()
+
+
+def _get_soul_extension(request: Request):
+    ext = _get_extension(request)
+    return ext.get_soul()
 
 
 def _to_mapping(data: object) -> dict:
@@ -1187,3 +1200,61 @@ async def get_notifications(request: Request) -> NotificationsResponse:
         timeout = 30
     notifications = await bridge.wait_notification(timeout=float(timeout))
     return NotificationsResponse(notifications=notifications)
+
+
+@router.get("/companion/presence")
+async def get_companion_presence(request: Request) -> JSONResponse:
+    """Return the current compact soul presence snapshot for the web UI."""
+    soul = _get_soul_extension(request)
+    if not soul:
+        return _soul_unavailable_response()
+
+    get_presence_surface = getattr(soul, "get_presence_surface", None)
+    if not callable(get_presence_surface):
+        return _soul_unavailable_response()
+
+    snapshot = CompanionPresenceResponse.model_validate(await get_presence_surface())
+    return JSONResponse(content=snapshot.model_dump())
+
+
+@router.get("/companion/presence/stream", response_model=None)
+async def stream_companion_presence(request: Request):
+    """SSE stream for companion presence-domain events."""
+    soul = _get_soul_extension(request)
+    if not soul:
+        return _soul_unavailable_response()
+
+    ext = _get_extension(request)
+    queue = ext.create_companion_stream_queue()
+
+    get_presence_surface = getattr(soul, "get_presence_surface", None)
+    initial_snapshot = None
+    if callable(get_presence_surface):
+        initial_snapshot = await get_presence_surface()
+
+    async def event_generator():
+        try:
+            if initial_snapshot:
+                payload = dict(initial_snapshot)
+                payload["event"] = "companion.presence.snapshot"
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        except asyncio.CancelledError:
+            return
+        finally:
+            ext.remove_companion_stream_queue(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

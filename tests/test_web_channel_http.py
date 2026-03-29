@@ -53,6 +53,22 @@ def mock_context():
     task_engine_ext.cancel_task = AsyncMock(
         return_value=MagicMock(task_id="", status="not_found", message="Task not found")
     )
+    soul_ext = MagicMock()
+    soul_ext.get_presence_surface = AsyncMock(
+        return_value={
+            "success": True,
+            "status": "ok",
+            "health": True,
+            "phase": "CURIOUS",
+            "presence_state": "PLAYFUL",
+            "mood": 0.35,
+            "time_in_phase_seconds": 42,
+            "last_tick_at": "2026-03-29T09:00:00+00:00",
+            "lifecycle_phase": "FORMING",
+            "estimated_availability": 0.8,
+            "llm_degraded": False,
+        }
+    )
     event_handlers = {}
 
     ctx.get_config = MagicMock(
@@ -75,6 +91,8 @@ def mock_context():
             if extension_id == "inbox"
             else task_engine_ext
             if extension_id == "task_engine"
+            else soul_ext
+            if extension_id == "soul"
             else None
         )
     )
@@ -133,6 +151,7 @@ def mock_context():
     ctx._scheduler_ext = scheduler_ext
     ctx._inbox_ext = inbox_ext
     ctx._task_engine_ext = task_engine_ext
+    ctx._soul_ext = soul_ext
     ctx._event_handlers = event_handlers
     return ctx
 
@@ -170,6 +189,15 @@ def test_web_channel_subscribes_to_inbox_ingested(mock_context):
     ext = WebChannelExtension()
     asyncio.run(ext.initialize(mock_context))
     mock_context.subscribe_event.assert_any_call("inbox.item.ingested", ANY)
+
+
+def test_web_channel_subscribes_to_companion_events(mock_context):
+    ext = WebChannelExtension()
+    asyncio.run(ext.initialize(mock_context))
+    mock_context.subscribe_event.assert_any_call("companion.presence.updated", ANY)
+    mock_context.subscribe_event.assert_any_call("companion.phase.changed", ANY)
+    mock_context.subscribe_event.assert_any_call("companion.lifecycle.changed", ANY)
+    mock_context.subscribe_event.assert_any_call("companion.reflection.created", ANY)
 
 
 def test_get_threads(web_channel_app, mock_context):
@@ -383,6 +411,40 @@ def test_get_notifications_empty(web_channel_app):
     resp = client.get("/api/notifications?timeout=1")
     assert resp.status_code == 200
     assert resp.json()["notifications"] == []
+
+
+def test_get_companion_presence_ok(web_channel_app, mock_context):
+    client = TestClient(web_channel_app)
+    resp = client.get("/api/companion/presence")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["presence_state"] == "PLAYFUL"
+    mock_context._soul_ext.get_presence_surface.assert_awaited_once()
+
+
+def test_companion_presence_handler_broadcasts_to_stream_queue(
+    web_channel_app, mock_context
+):
+    ext = web_channel_app.state.extension
+    handler = mock_context._event_handlers["companion.presence.updated"]
+
+    async def _exercise_queue():
+        queue = ext.create_companion_stream_queue()
+        try:
+            await handler(
+                MagicMock(
+                    topic="companion.presence.updated",
+                    payload={"presence_state": "WARM", "phase": "SOCIAL"},
+                )
+            )
+            return await asyncio.wait_for(queue.get(), timeout=1.0)
+        finally:
+            ext.remove_companion_stream_queue(queue)
+
+    payload = asyncio.run(_exercise_queue())
+    assert payload["event"] == "companion.presence.updated"
+    assert payload["presence_state"] == "WARM"
 
 
 def test_get_inbox_items_ok(web_channel_app, mock_context):
@@ -845,3 +907,27 @@ def test_task_endpoints_return_503_when_extension_missing(mock_context):
     cancel_resp = client.post("/api/tasks/task-1/cancel")
     assert cancel_resp.status_code == 503
     assert cancel_resp.json() == {"detail": "task_engine extension unavailable"}
+
+
+def test_companion_endpoints_return_503_when_extension_missing(mock_context):
+    def get_extension_without_soul(extension_id):
+        if extension_id == "scheduler":
+            return mock_context._scheduler_ext
+        if extension_id == "inbox":
+            return mock_context._inbox_ext
+        if extension_id == "task_engine":
+            return mock_context._task_engine_ext
+        return None
+
+    mock_context.get_extension = MagicMock(side_effect=get_extension_without_soul)
+    ext = WebChannelExtension()
+    asyncio.run(ext.initialize(mock_context))
+    from sandbox.extensions.web_channel.app import create_app
+
+    client = TestClient(create_app(ext))
+    resp = client.get("/api/companion/presence")
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "soul extension unavailable"}
+    stream_resp = client.get("/api/companion/presence/stream")
+    assert stream_resp.status_code == 503
+    assert stream_resp.json() == {"detail": "soul extension unavailable"}

@@ -203,6 +203,23 @@ class NotificationsResponse(BaseModel):
     notifications: list[Notification]
 
 
+class CompanionPresenceResponse(BaseModel):
+    """GET /api/companion/presence response."""
+
+    success: bool
+    status: str = "ok"
+    health: bool | None = None
+    phase: str | None = None
+    presence_state: str | None = None
+    mood: float | None = None
+    time_in_phase_seconds: int | None = None
+    last_tick_at: str | None = None
+    lifecycle_phase: str | None = None
+    estimated_availability: float | None = None
+    llm_degraded: bool | None = None
+    error: str | None = None
+
+
 class InboxItem(BaseModel):
     """Single inbox item (current snapshot)."""
 

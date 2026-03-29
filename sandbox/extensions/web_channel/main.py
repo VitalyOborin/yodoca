@@ -52,6 +52,9 @@ class WebChannelExtension:
         self._inbox_stream_queues: dict[
             asyncio.Queue[dict[str, Any]], asyncio.AbstractEventLoop
         ] = {}
+        self._companion_stream_queues: dict[
+            asyncio.Queue[dict[str, Any]], asyncio.AbstractEventLoop
+        ] = {}
 
     def _setup_request_logger(self, log_file: str) -> logging.Logger:
         """Configure a dedicated file logger for web_channel HTTP audit events."""
@@ -115,6 +118,18 @@ class WebChannelExtension:
             )
         )
         context.subscribe_event("inbox.item.ingested", self._on_inbox_item_ingested)
+        context.subscribe_event(
+            "companion.presence.updated", self._on_companion_stream_event
+        )
+        context.subscribe_event(
+            "companion.phase.changed", self._on_companion_stream_event
+        )
+        context.subscribe_event(
+            "companion.lifecycle.changed", self._on_companion_stream_event
+        )
+        context.subscribe_event(
+            "companion.reflection.created", self._on_companion_stream_event
+        )
         self._app = create_app(self)
 
     async def _on_inbox_item_ingested(self, event: "Event") -> None:
@@ -122,6 +137,12 @@ class WebChannelExtension:
         payload = dict(event.payload or {})
         payload["event"] = "inbox.item.ingested"
         self.push_inbox_stream_event(payload)
+
+    async def _on_companion_stream_event(self, event: "Event") -> None:
+        """Forward companion presence-domain events to SSE subscribers."""
+        payload = dict(event.payload or {})
+        payload["event"] = event.topic
+        self.push_companion_stream_event(payload)
 
     def get_scheduler(self) -> Any | None:
         """Resolve scheduler extension lazily. Returns None when unavailable."""
@@ -159,6 +180,15 @@ class WebChannelExtension:
             self._task_engine = None
         return self._task_engine
 
+    def get_soul(self) -> Any | None:
+        """Resolve soul extension lazily. Returns None when unavailable."""
+        if not self._context:
+            return None
+        try:
+            return self._context.get_extension("soul")
+        except Exception:
+            return None
+
     async def start(self) -> None:
         pass
 
@@ -193,6 +223,7 @@ class WebChannelExtension:
 
     async def destroy(self) -> None:
         self._inbox_stream_queues.clear()
+        self._companion_stream_queues.clear()
 
     def health_check(self) -> bool:
         return self._bridge is not None
@@ -243,6 +274,30 @@ class WebChannelExtension:
         except RuntimeError:
             current_loop = None
         for queue, loop in tuple(self._inbox_stream_queues.items()):
+            if current_loop is loop:
+                queue.put_nowait(payload)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, payload)
+
+    def create_companion_stream_queue(self) -> asyncio.Queue[dict[str, Any]]:
+        """Create and register queue for /api/companion/presence/stream SSE."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._companion_stream_queues[queue] = asyncio.get_running_loop()
+        return queue
+
+    def remove_companion_stream_queue(
+        self, queue: asyncio.Queue[dict[str, Any]]
+    ) -> None:
+        """Remove queue from companion SSE subscribers."""
+        self._companion_stream_queues.pop(queue, None)
+
+    def push_companion_stream_event(self, payload: dict[str, Any]) -> None:
+        """Broadcast companion event payload to all active SSE subscribers."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        for queue, loop in tuple(self._companion_stream_queues.items()):
             if current_loop is loop:
                 queue.put_nowait(payload)
             else:

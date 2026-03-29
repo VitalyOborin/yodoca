@@ -1279,6 +1279,32 @@ class SoulExtension:
             channels=channels,
         )
 
+    async def get_presence_surface(self) -> dict[str, Any]:
+        """Return a compact, UI-safe presence snapshot for channel surfaces."""
+        snapshot = await self._build_state_snapshot()
+        if not snapshot.success:
+            return {
+                "success": False,
+                "status": snapshot.status,
+                "error": snapshot.error,
+            }
+
+        return {
+            "success": True,
+            "status": snapshot.status,
+            "health": snapshot.health,
+            "phase": snapshot.phase,
+            "presence_state": snapshot.presence,
+            "mood": snapshot.mood,
+            "time_in_phase_seconds": snapshot.time_in_phase_seconds,
+            "last_tick_at": snapshot.last_tick_at,
+            "lifecycle_phase": snapshot.discovery.get("lifecycle_phase"),
+            "estimated_availability": snapshot.user_presence.get(
+                "estimated_availability"
+            ),
+            "llm_degraded": snapshot.recovery.get("llm_degraded"),
+        }
+
     async def _build_metrics_snapshot(self) -> SoulMetricsResult:
         if self._state is None or self._storage is None:
             return SoulMetricsResult(
@@ -1348,7 +1374,9 @@ class SoulExtension:
                 "Review identity drift and soften tone; openness trend is falling."
             )
         if len(recovery_events) >= 3:
-            alerts.append("Recovery safeguards are firing often; inspect runtime stability.")
+            alerts.append(
+                "Recovery safeguards are firing often; inspect runtime stability."
+            )
             self_corrections.append(
                 "Inspect repeated recovery events; the runtime may be oscillating."
             )
