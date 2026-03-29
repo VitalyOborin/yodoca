@@ -736,6 +736,16 @@ class SoulExtension:
                     else None
                 ),
             },
+            temperament={
+                "sociability": self._state.temperament.sociability,
+                "depth": self._state.temperament.depth,
+                "playfulness": self._state.temperament.playfulness,
+                "caution": self._state.temperament.caution,
+                "sensitivity": self._state.temperament.sensitivity,
+                "persistence": self._state.temperament.persistence,
+                "drift_events": self._state.temperament.drift_events,
+                "seed_source": self._state.temperament.seed_source,
+            },
         )
 
     async def _build_metrics_snapshot(self) -> SoulMetricsResult:

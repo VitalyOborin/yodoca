@@ -154,6 +154,8 @@ class TemperamentProfile:
     caution: float = 0.5
     sensitivity: float = 0.5
     persistence: float = 0.5
+    drift_events: int = 0
+    seed_source: str = "default"
 
 
 @dataclass(slots=True)

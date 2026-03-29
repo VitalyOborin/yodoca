@@ -26,6 +26,8 @@ def test_companion_state_json_round_trip() -> None:
     state.initiative.budget.used_today = 1
     state.initiative.last_outreach_result = OutreachResult.RESPONSE
     state.temperament.playfulness = 0.7
+    state.temperament.drift_events = 2
+    state.temperament.seed_source = "questionnaire"
 
     restored = CompanionState.from_json(state.to_json())
 
@@ -40,3 +42,5 @@ def test_companion_state_json_round_trip() -> None:
     assert restored.initiative.budget.used_today == 1
     assert restored.initiative.last_outreach_result is OutreachResult.RESPONSE
     assert restored.temperament.playfulness == 0.7
+    assert restored.temperament.drift_events == 2
+    assert restored.temperament.seed_source == "questionnaire"

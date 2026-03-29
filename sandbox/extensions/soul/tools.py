@@ -22,6 +22,7 @@ class SoulStateResult(BaseModel):
     perception: dict[str, float] = Field(default_factory=dict)
     initiative: dict[str, str | int | float | None] = Field(default_factory=dict)
     user_presence: dict[str, str | int | float | None] = Field(default_factory=dict)
+    temperament: dict[str, str | int | float | None] = Field(default_factory=dict)
     error: str | None = None
 
 
