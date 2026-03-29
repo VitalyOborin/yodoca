@@ -73,3 +73,16 @@ def test_apply_drift_updates_profile_when_signal_is_meaningful() -> None:
     assert drifted.drift_events == 1
     assert drifted.seed_source == "usage"
     assert profile_variance(drifted) >= 0.05
+
+
+def test_flat_profile_uses_bootstrap_shift_for_first_identity_change() -> None:
+    profile = TemperamentProfile()
+
+    drifted = apply_drift(
+        profile,
+        targets={"depth": 0.9, "playfulness": 0.2, "caution": 0.8},
+        seed_source="usage",
+    )
+
+    assert drifted != profile
+    assert drifted.drift_events == 1

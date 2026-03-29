@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -280,6 +281,7 @@ class SoulExtension:
             raise RuntimeError("Soul extension is not initialized")
 
         now = now or datetime.now(UTC)
+        previous_state = CompanionState.from_json(self._state.to_json())
         await self._resolve_pending_outreach_timeout(now)
         await self._maybe_attempt_outreach(now)
         phase_before = self._state.homeostasis.current_phase
@@ -315,11 +317,14 @@ class SoulExtension:
                 to_phase=self._state.homeostasis.current_phase,
                 now=now,
             )
-            await self._storage.append_trace(
+            await self._trace_event(
                 trace_type="phase_transition",
-                phase=self._state.homeostasis.current_phase.value,
                 content=f"Phase changed from {phase_before.value} to {self._state.homeostasis.current_phase.value}",
-                created_at=now,
+                payload={
+                    "from_phase": phase_before.value,
+                    "to_phase": self._state.homeostasis.current_phase.value,
+                },
+                now=now,
             )
 
         if presence_changed:
@@ -331,6 +336,7 @@ class SoulExtension:
 
         if phase_changed or presence_changed or self._persist_due(now):
             await self._persist_state(now)
+        await self._maybe_trace_drive_boundaries(previous=previous_state, now=now)
 
     def _persist_due(self, now: datetime) -> bool:
         if self._last_persist_at is None:
@@ -343,6 +349,103 @@ class SoulExtension:
             return
         await self._storage.save_state(self._state, updated_at=now)
         self._last_persist_at = now
+
+    async def _trace_event(
+        self,
+        *,
+        trace_type: str,
+        content: str,
+        now: datetime,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self._storage is None or self._state is None:
+            return
+        await self._storage.append_trace(
+            trace_type=trace_type,
+            phase=self._state.homeostasis.current_phase.value,
+            content=content,
+            payload_json=json.dumps(payload, ensure_ascii=False) if payload else None,
+            created_at=now,
+        )
+
+    async def _maybe_trace_perception_shift(
+        self,
+        *,
+        previous: CompanionState,
+        now: datetime,
+    ) -> None:
+        if self._state is None:
+            return
+        deltas = {
+            "stress": abs(
+                self._state.perception.stress_signal - previous.perception.stress_signal
+            ),
+            "withdrawal": abs(
+                self._state.perception.withdrawal_signal
+                - previous.perception.withdrawal_signal
+            ),
+            "openness": abs(
+                self._state.perception.openness_signal
+                - previous.perception.openness_signal
+            ),
+            "fatigue": abs(
+                self._state.perception.fatigue_signal - previous.perception.fatigue_signal
+            ),
+            "joy": abs(self._state.perception.joy_signal - previous.perception.joy_signal),
+        }
+        strongest = max(deltas, key=deltas.get)
+        if deltas[strongest] <= 0.2:
+            return
+        await self._trace_event(
+            trace_type="perception_shift",
+            content=f"Perception shifted on {strongest}.",
+            payload={"deltas": deltas},
+            now=now,
+        )
+
+    async def _maybe_trace_drive_boundaries(
+        self,
+        *,
+        previous: CompanionState,
+        now: datetime,
+    ) -> None:
+        if self._state is None:
+            return
+        drive_names = (
+            "curiosity",
+            "social_hunger",
+            "rest_need",
+            "reflection_need",
+            "care_impulse",
+            "overstimulation",
+        )
+        for name in drive_names:
+            before = getattr(previous.homeostasis, name)
+            after = getattr(self._state.homeostasis, name)
+            crossed_low = before >= 0.1 and after < 0.1
+            crossed_high = before <= 0.9 and after > 0.9
+            if not crossed_low and not crossed_high:
+                continue
+            await self._trace_event(
+                trace_type="drive_boundary",
+                content=f"Drive {name} crossed {'high' if crossed_high else 'low'} boundary.",
+                payload={"drive": name, "before": before, "after": after},
+                now=now,
+            )
+
+    async def _trace_interaction(
+        self,
+        *,
+        direction: str,
+        message_length: int,
+        now: datetime,
+    ) -> None:
+        await self._trace_event(
+            trace_type="interaction",
+            content=f"{direction.capitalize()} interaction observed.",
+            payload={"direction": direction, "message_length": message_length},
+            now=now,
+        )
 
     async def _emit_phase_changed(
         self,
@@ -394,6 +497,7 @@ class SoulExtension:
             return
 
         now = normalize_presence_now()
+        previous_state = CompanionState.from_json(self._state.to_json())
         gap_since_user = (
             (now - self._last_user_message_at).total_seconds()
             if self._last_user_message_at is not None
@@ -439,6 +543,12 @@ class SoulExtension:
         await self._storage.upsert_daily_metrics(now.date(), message_count=1)
         await self._refresh_user_presence(now)
         await self._persist_state(now)
+        await self._trace_interaction(
+            direction="inbound",
+            message_length=len(text),
+            now=now,
+        )
+        await self._maybe_trace_perception_shift(previous=previous_state, now=now)
         if self._ctx is not None:
             await self._classifier.maybe_schedule(
                 text=text,
@@ -456,10 +566,17 @@ class SoulExtension:
             return
 
         now = normalize_presence_now()
+        message_text = str(payload.get("text") or "")
         await self._storage.append_interaction(
             direction="outbound",
             channel_id=self._extract_channel_id(payload),
+            message_length=len(message_text),
             created_at=now,
+        )
+        await self._trace_interaction(
+            direction="outbound",
+            message_length=len(message_text),
+            now=now,
         )
         await self._refresh_user_presence(now)
         self._last_agent_response_at = now
@@ -474,11 +591,11 @@ class SoulExtension:
             return
 
         now = datetime.now(UTC)
-        await self._storage.append_trace(
+        await self._trace_event(
             trace_type="thread_completed",
-            phase=self._state.homeostasis.current_phase.value,
             content=f"Thread {thread_id} completed",
-            created_at=now,
+            payload={"thread_id": thread_id},
+            now=now,
         )
 
     async def _send_outreach(
@@ -516,6 +633,12 @@ class SoulExtension:
                 "text_preview": text[:80],
                 "attempted_at": now.isoformat(),
             },
+        )
+        await self._trace_event(
+            trace_type="outreach_attempt",
+            content="Companion initiated proactive outreach.",
+            payload={"channel": channel_id, "text_preview": text[:80]},
+            now=now,
         )
         await self._persist_state(now)
 
@@ -564,6 +687,12 @@ class SoulExtension:
                 "resolved_at": now.isoformat(),
             },
         )
+        await self._trace_event(
+            trace_type="outreach_result",
+            content="Outreach resolved with a user response.",
+            payload={"result": OutreachResult.RESPONSE.value, "delay_seconds": delay_seconds},
+            now=now,
+        )
 
     async def _resolve_pending_outreach_timeout(self, now: datetime) -> None:
         if self._state is None or self._storage is None or self._ctx is None:
@@ -597,6 +726,12 @@ class SoulExtension:
                 "delay_seconds": None,
                 "resolved_at": now.isoformat(),
             },
+        )
+        await self._trace_event(
+            trace_type="outreach_result",
+            content=f"Outreach resolved as {result.value}.",
+            payload={"result": result.value},
+            now=now,
         )
 
     async def _refresh_user_presence(self, now: datetime) -> None:

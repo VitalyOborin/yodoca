@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -133,6 +134,35 @@ async def test_user_message_updates_perception_and_social_hunger(
     assert ext._state.perception.withdrawal_signal > 0.1
     assert ext._last_user_message_at is not None
     assert ext._state.user_presence.estimated_availability >= 0.3
+
+
+async def test_thresholded_trace_policy_records_meaningful_events(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    ext._state.presence = PresenceState.SILENT
+    ext._state.homeostasis.current_phase = Phase.AMBIENT
+    ext._state.homeostasis.curiosity = 0.95
+    ext._state.homeostasis.phase_entered_at = datetime.now(UTC) - timedelta(minutes=10)
+    ext._state.homeostasis.last_tick_at = datetime.now(UTC) - timedelta(minutes=10)
+    await ext._run_one_tick(now=datetime.now(UTC))
+    await ext._on_user_message(
+        {
+            "text": "I am really tired and not very talkative today...",
+            "channel": object(),
+        }
+    )
+
+    with sqlite3.connect(context.data_dir / "soul.db") as conn:
+        rows = conn.execute("SELECT trace_type FROM traces ORDER BY id ASC").fetchall()
+
+    trace_types = [row[0] for row in rows]
+    assert "phase_transition" in trace_types
+    assert "interaction" in trace_types
 
 
 async def test_context_provider_returns_compact_note(tmp_path: Path) -> None:
