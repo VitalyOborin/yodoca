@@ -6,7 +6,9 @@ sandbox/extensions/memory/storage.py
 sandbox/extensions/memory/tools.py
 sandbox/extensions/scheduler/main.py
 sandbox/extensions/soul/main.py
+sandbox/extensions/soul/models.py
 sandbox/extensions/soul/storage.py
 sandbox/extensions/task_engine/main.py
 sandbox/extensions/task_engine/worker.py
+sandbox/extensions/telegram_channel/main.py
 sandbox/extensions/web_channel/routes_api.py

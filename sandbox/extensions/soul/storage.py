@@ -575,7 +575,9 @@ class SoulStorage:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    async def list_channel_preferences(self, *, limit: int = 10) -> list[dict[str, Any]]:
+    async def list_channel_preferences(
+        self, *, limit: int = 10
+    ) -> list[dict[str, Any]]:
         async with self._lock:
             return await asyncio.to_thread(self._list_channel_preferences_sync, limit)
 

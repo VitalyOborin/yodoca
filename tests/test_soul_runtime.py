@@ -318,7 +318,7 @@ async def test_transparency_snapshot_exposes_raw_state_and_recent_artifacts(
     snapshot = await ext._build_transparency_snapshot()
 
     assert snapshot.success is True
-    assert "\"version\"" in snapshot.raw_state_json
+    assert '"version"' in snapshot.raw_state_json
     assert snapshot.recent_traces
     assert snapshot.recent_discovery_nodes
     assert snapshot.channel_preferences
@@ -637,7 +637,9 @@ async def test_discovery_lifecycle_transitions_to_forming_after_enough_interacti
 
     assert ext._state.discovery.lifecycle_phase is SoulLifecyclePhase.FORMING
     lifecycle_event = next(
-        payload for topic, payload in context.events if topic == "companion.lifecycle.changed"
+        payload
+        for topic, payload in context.events
+        if topic == "companion.lifecycle.changed"
     )
     assert lifecycle_event["old_lifecycle_phase"] == "DISCOVERY"
     assert lifecycle_event["new_lifecycle_phase"] == "FORMING"
