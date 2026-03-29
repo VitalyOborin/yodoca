@@ -343,7 +343,49 @@ class SoulStorage:
             response_delay_s=response_delay_s,
             updated_at=ts,
         )
+        if channel_id:
+            self._update_channel_preference_sync(
+                channel_id=channel_id,
+                direction=direction,
+                updated_at=ts,
+            )
         conn.commit()
+
+    def _update_channel_preference_sync(
+        self,
+        *,
+        channel_id: str,
+        direction: str,
+        updated_at: datetime,
+    ) -> None:
+        conn = self._get_conn()
+        ts = updated_at.astimezone(UTC).isoformat()
+        conn.execute(
+            """
+            INSERT INTO channel_preferences (
+                channel_id,
+                interaction_count,
+                inbound_count,
+                outbound_count,
+                last_interaction_at,
+                updated_at
+            )
+            VALUES (?, 1, ?, ?, ?, ?)
+            ON CONFLICT(channel_id) DO UPDATE SET
+                interaction_count = interaction_count + 1,
+                inbound_count = inbound_count + excluded.inbound_count,
+                outbound_count = outbound_count + excluded.outbound_count,
+                last_interaction_at = excluded.last_interaction_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                channel_id,
+                1 if direction == "inbound" else 0,
+                1 if direction == "outbound" else 0,
+                ts,
+                ts,
+            ),
+        )
 
     def _update_interaction_pattern_sync(
         self,
@@ -532,6 +574,48 @@ class SoulStorage:
             (since.astimezone(UTC).isoformat(),),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    async def list_channel_preferences(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_channel_preferences_sync, limit)
+
+    def get_channel_preferences_snapshot(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        return self._list_channel_preferences_sync(limit)
+
+    def _list_channel_preferences_sync(self, limit: int) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                channel_id,
+                interaction_count,
+                inbound_count,
+                outbound_count,
+                last_interaction_at,
+                updated_at
+            FROM channel_preferences
+            ORDER BY inbound_count DESC, interaction_count DESC, last_interaction_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_preferred_channel_id(self) -> str | None:
+        async with self._lock:
+            return await asyncio.to_thread(self._get_preferred_channel_id_sync)
+
+    def _get_preferred_channel_id_sync(self) -> str | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT channel_id
+            FROM channel_preferences
+            ORDER BY inbound_count DESC, interaction_count DESC, last_interaction_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return str(row["channel_id"]) if row is not None else None
 
     async def save_relationship_pattern(
         self,

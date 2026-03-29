@@ -240,6 +240,7 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert "daily_budget" in snapshot.initiative
     assert "estimated_availability" in snapshot.user_presence
     assert snapshot.discovery["lifecycle_phase"] == "DISCOVERY"
+    assert isinstance(snapshot.channels, list)
     assert len(ext.get_tools()) == 2
 
 
@@ -422,6 +423,25 @@ async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) 
     assert ext._state.initiative.pending_outreach is not None
     assert ext._state.initiative.budget.used_today == 1
     assert any(topic == "companion.outreach.attempted" for topic, _ in context.events)
+
+
+async def test_outreach_uses_preferred_channel_metadata_when_available(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    await ext._on_user_message(
+        {
+            "text": "hello from telegram",
+            "channel": SimpleNamespace(channel_id="telegram_channel"),
+        }
+    )
+    await ext._send_outreach("Ping", now=datetime(2026, 3, 29, 12, 0, tzinfo=UTC))
+
+    assert context.notifications[-1] == ("Ping", "telegram_channel")
 
 
 async def test_user_message_resolves_pending_outreach_as_response(

@@ -25,6 +25,7 @@ class SoulStateResult(BaseModel):
     temperament: dict[str, str | int | float | None] = Field(default_factory=dict)
     discovery: dict[str, object] = Field(default_factory=dict)
     recovery: dict[str, object] = Field(default_factory=dict)
+    channels: list[dict[str, object]] = Field(default_factory=list)
     error: str | None = None
 
 

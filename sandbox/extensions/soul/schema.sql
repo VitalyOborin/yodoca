@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS interaction_patterns (
     PRIMARY KEY (hour, day_of_week)
 );
 
+CREATE TABLE IF NOT EXISTS channel_preferences (
+    channel_id            TEXT PRIMARY KEY,
+    interaction_count     INTEGER NOT NULL DEFAULT 0,
+    inbound_count         INTEGER NOT NULL DEFAULT 0,
+    outbound_count        INTEGER NOT NULL DEFAULT 0,
+    last_interaction_at   TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS relationship_patterns (
     pattern_key            TEXT PRIMARY KEY,
     pattern_type           TEXT NOT NULL,

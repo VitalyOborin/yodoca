@@ -75,6 +75,8 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     interactions = await storage.list_interactions_since(
         datetime.now(UTC) - timedelta(days=1)
     )
+    channel_preferences = await storage.list_channel_preferences(limit=5)
+    preferred_channel = await storage.get_preferred_channel_id()
     await storage.append_discovery_node(
         topic="work",
         content="User builds agent runtimes.",
@@ -87,6 +89,8 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     assert len(interactions) == 1
     assert interactions[0]["message_length"] == 128
     assert interactions[0]["openness_signal"] == 0.65
+    assert channel_preferences
+    assert preferred_channel == "cli_channel"
     assert len(discovery_nodes) == 1
     assert discovery_nodes[0]["topic"] == "work"
 

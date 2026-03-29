@@ -740,6 +740,8 @@ class SoulExtension:
             raise RuntimeError("Soul extension is not initialized")
 
         now = now or datetime.now(UTC)
+        if channel_id is None:
+            channel_id = await self._storage.get_preferred_channel_id()
         outreach_id = f"outreach-{uuid.uuid4().hex[:12]}"
         self._state.initiative = register_outreach_attempt(
             self._state.initiative,
@@ -1157,6 +1159,11 @@ class SoulExtension:
 
         now = datetime.now(UTC)
         phase = self._state.homeostasis.current_phase
+        channels = (
+            []
+            if self._storage is None
+            else self._storage.get_channel_preferences_snapshot(limit=5)
+        )
         uptime = (
             int((now - self._initialized_at).total_seconds())
             if self._initialized_at is not None
@@ -1240,6 +1247,7 @@ class SoulExtension:
                     else None
                 ),
             },
+            channels=channels,
         )
 
     async def _build_metrics_snapshot(self) -> SoulMetricsResult:
