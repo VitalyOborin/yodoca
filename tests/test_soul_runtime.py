@@ -241,7 +241,7 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert "estimated_availability" in snapshot.user_presence
     assert snapshot.discovery["lifecycle_phase"] == "DISCOVERY"
     assert isinstance(snapshot.channels, list)
-    assert len(ext.get_tools()) == 2
+    assert len(ext.get_tools()) == 3
 
 
 async def test_metrics_snapshot_reports_context_and_relationship_trends(
@@ -278,6 +278,44 @@ async def test_metrics_snapshot_reports_context_and_relationship_trends(
     assert snapshot.context_words_avg_7d > 0
     assert snapshot.perception_corrections_7d == 7
     assert "attempts" in snapshot.outreach_quality_7d
+
+
+async def test_transparency_snapshot_exposes_raw_state_and_recent_artifacts(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._state is not None
+    assert ext._storage is not None
+    now = datetime.now(UTC)
+    await ext._storage.append_trace(
+        trace_type="recovery",
+        phase=Phase.AMBIENT.value,
+        content="Recovery trace",
+        created_at=now,
+    )
+    await ext._storage.append_discovery_node(
+        topic="work",
+        content="User builds AI runtimes.",
+        confidence=0.7,
+        source_json=None,
+        created_at=now,
+    )
+    await ext._storage.append_interaction(
+        direction="inbound",
+        channel_id="telegram_channel",
+        message_length=32,
+        created_at=now,
+    )
+    snapshot = await ext._build_transparency_snapshot()
+
+    assert snapshot.success is True
+    assert "\"version\"" in snapshot.raw_state_json
+    assert snapshot.recent_traces
+    assert snapshot.recent_discovery_nodes
+    assert snapshot.channel_preferences
 
 
 async def test_reflection_generator_writes_budgeted_reflection_trace(

@@ -42,3 +42,17 @@ class SoulMetricsResult(BaseModel):
     message_depth_trend: float
     initiative_ratio_trend: float
     alerts: list[str] = Field(default_factory=list)
+    self_corrections: list[str] = Field(default_factory=list)
+
+
+class SoulTransparencyResult(BaseModel):
+    """Deep introspection snapshot for debugging and transparency mode."""
+
+    success: bool
+    status: str = "ok"
+    raw_state_json: str = ""
+    recent_traces: list[dict[str, object]] = Field(default_factory=list)
+    recent_discovery_nodes: list[dict[str, object]] = Field(default_factory=list)
+    channel_preferences: list[dict[str, object]] = Field(default_factory=list)
+    self_corrections: list[str] = Field(default_factory=list)
+    error: str | None = None

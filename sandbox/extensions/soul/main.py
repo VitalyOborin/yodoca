@@ -63,7 +63,11 @@ from sandbox.extensions.soul.temperament import (
     profile_from_questionnaire,
     questionnaire_keys,
 )
-from sandbox.extensions.soul.tools import SoulMetricsResult, SoulStateResult
+from sandbox.extensions.soul.tools import (
+    SoulMetricsResult,
+    SoulStateResult,
+    SoulTransparencyResult,
+)
 from sandbox.extensions.soul.trace_policy import (
     detect_drive_boundary_crossings,
     detect_perception_shift,
@@ -1067,7 +1071,12 @@ class SoulExtension:
             """Return recent soul metrics and observability alerts."""
             return await self._build_metrics_snapshot()
 
-        return [get_soul_state, get_soul_metrics]
+        @function_tool(name_override="get_soul_transparency")
+        async def get_soul_transparency() -> SoulTransparencyResult:
+            """Return a raw transparency snapshot for soul debugging."""
+            return await self._build_transparency_snapshot()
+
+        return [get_soul_state, get_soul_metrics, get_soul_transparency]
 
     def _extract_channel_id(self, payload: dict[str, object]) -> str | None:
         channel = payload.get("channel")
@@ -1263,6 +1272,7 @@ class SoulExtension:
                 message_depth_trend=0.0,
                 initiative_ratio_trend=0.0,
                 alerts=["Soul runtime is not initialized."],
+                self_corrections=[],
             )
 
         now = datetime.now(UTC)
@@ -1297,14 +1307,31 @@ class SoulExtension:
             if outreach_attempts
             else 0.0
         )
+        recovery_events = await self._storage.list_traces_since(
+            now - timedelta(days=7),
+            trace_types=("recovery",),
+            limit=50,
+        )
 
         alerts: list[str] = []
+        self_corrections: list[str] = []
         if current_context_words > int(self._context_token_budget * 0.75):
             alerts.append("Context payload is approaching the configured budget.")
         if outreach_attempts >= 3 and response_rate < 0.25:
             alerts.append("Outreach quality is low; initiative may be too eager.")
+            self_corrections.append(
+                "Lower proactive intensity until outreach response quality improves."
+            )
         if trend.openness_trend <= -0.12:
             alerts.append("Openness trend is falling; keep the tone lighter.")
+            self_corrections.append(
+                "Review identity drift and soften tone; openness trend is falling."
+            )
+        if len(recovery_events) >= 3:
+            alerts.append("Recovery safeguards are firing often; inspect runtime stability.")
+            self_corrections.append(
+                "Inspect repeated recovery events; the runtime may be oscillating."
+            )
 
         return SoulMetricsResult(
             success=True,
@@ -1322,4 +1349,30 @@ class SoulExtension:
             message_depth_trend=trend.message_depth_trend,
             initiative_ratio_trend=trend.initiative_ratio_trend,
             alerts=alerts,
+            self_corrections=self_corrections,
+        )
+
+    async def _build_transparency_snapshot(self) -> SoulTransparencyResult:
+        if self._state is None or self._storage is None:
+            return SoulTransparencyResult(
+                success=False,
+                status="error",
+                error="Soul runtime is not initialized.",
+            )
+
+        now = datetime.now(UTC)
+        metrics = await self._build_metrics_snapshot()
+        traces = await self._storage.list_traces_since(
+            now - timedelta(days=7),
+            limit=12,
+        )
+        discovery_nodes = await self._storage.list_discovery_nodes(limit=8)
+        channel_preferences = await self._storage.list_channel_preferences(limit=8)
+        return SoulTransparencyResult(
+            success=True,
+            raw_state_json=self._state.to_json(),
+            recent_traces=traces,
+            recent_discovery_nodes=discovery_nodes,
+            channel_preferences=channel_preferences,
+            self_corrections=list(metrics.self_corrections),
         )
