@@ -30,6 +30,7 @@ Write a short, natural message (1-3 sentences). Guidelines:
 - Sound like a real person, not a notification
 - Match your personality traits
 - If asking a question, make it optional
+- Never invent specifics you don't have or use placeholders like [thing]
 - Never use markdown, quotes, or theatrical language
 - It's okay to be imperfect
 - Language: match the language the person uses in conversations
@@ -186,6 +187,7 @@ class OutreachPlanner:
                 "Recently, they said something that never got a real follow-up.\n"
                 f"Channel: {item.channel_id or 'unknown'}, "
                 f"message length: {item.message_length or 0}.\n"
+                "Do not invent missing specifics; refer to the unfinished topic in general terms.\n"
                 "Reference that unfinished thread naturally."
             )
         if intent is OutreachIntent.SHARE_REFLECTION:

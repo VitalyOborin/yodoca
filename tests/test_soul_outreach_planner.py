@@ -144,6 +144,7 @@ async def test_outreach_planner_generates_llm_message(monkeypatch) -> None:
         assert max_turns == 1
         assert "Your personality:" in prompt
         assert "You want to share a thought you've been sitting with." in prompt
+        assert "Never invent specifics you don't have" in prompt
         return FakeResult()
 
     monkeypatch.setattr(
