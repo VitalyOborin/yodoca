@@ -17,6 +17,10 @@ config:
   tick_interval_seconds: 30
   persist_interval_seconds: 60
   context_token_budget: 200
+  mood_classifier_daily_budget: 3
+  mood_classifier_min_chars: 180
+  mood_classifier_signal_threshold: 0.45
+  mood_classifier_weight: 0.25
 
 events:
   publishes:

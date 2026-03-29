@@ -22,11 +22,13 @@ class FakeSoulContext:
         *,
         data_subdir: str = "soul-data",
         logger_name: str = "test.soul",
+        model_router: Any = None,
     ) -> None:
         self._config = config or {}
         self.data_dir = tmp_path / data_subdir
         self.extension_dir = Path("sandbox/extensions/soul")
         self.logger = logging.getLogger(logger_name)
+        self.model_router = model_router
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.notifications: list[tuple[str, str | None]] = []
         self.router_subscriptions: dict[str, Any] = {}

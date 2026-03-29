@@ -180,6 +180,21 @@ class SoulStorage:
                 )
         conn.commit()
 
+    async def get_daily_metrics(self, metric_date: date) -> dict[str, Any] | None:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_daily_metrics_sync,
+                metric_date,
+            )
+
+    def _get_daily_metrics_sync(self, metric_date: date) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM soul_metrics WHERE date = ?",
+            (metric_date.isoformat(),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     async def append_interaction(
         self,
         *,

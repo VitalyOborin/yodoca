@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from agents import function_tool
+from agents import Agent, ModelSettings, Runner, function_tool
 
 from core.events.topics import SystemTopics
 from sandbox.extensions.soul.boundary import BoundaryDecision, check_outreach
@@ -23,8 +23,14 @@ from sandbox.extensions.soul.initiative import (
 from sandbox.extensions.soul.models import (
     CompanionState,
     OutreachResult,
+    PerceptionSignals,
     Phase,
     PresenceState,
+)
+from sandbox.extensions.soul.mood_classifier import (
+    blend_with_heuristics,
+    parse_classification_output,
+    should_trigger_classification,
 )
 from sandbox.extensions.soul.perception import (
     HeuristicPerceptionInput,
@@ -79,12 +85,18 @@ class SoulExtension:
         self._tick_interval_seconds = 30.0
         self._persist_interval_seconds = 60.0
         self._context_token_budget = 200
+        self._mood_classifier_daily_budget = 3
+        self._mood_classifier_min_chars = 180
+        self._mood_classifier_signal_threshold = 0.45
+        self._mood_classifier_weight = 0.25
         self._last_persist_at: datetime | None = None
         self._last_tick_started_at: datetime | None = None
         self._last_tick_finished_at: datetime | None = None
         self._last_user_message_at: datetime | None = None
         self._last_agent_response_at: datetime | None = None
         self._last_error: str | None = None
+        self._mood_classifier_agent: Agent | None = None
+        self._active_classifier_tasks: set[asyncio.Task[Any]] = set()
 
     async def initialize(self, context: ExtensionContext) -> None:
         self._ctx = context
@@ -98,11 +110,42 @@ class SoulExtension:
         self._context_token_budget = int(
             context.get_config("context_token_budget", 200)
         )
+        self._mood_classifier_daily_budget = int(
+            context.get_config("mood_classifier_daily_budget", 3)
+        )
+        self._mood_classifier_min_chars = int(
+            context.get_config("mood_classifier_min_chars", 180)
+        )
+        self._mood_classifier_signal_threshold = float(
+            context.get_config("mood_classifier_signal_threshold", 0.45)
+        )
+        self._mood_classifier_weight = float(
+            context.get_config("mood_classifier_weight", 0.25)
+        )
         self._storage = SoulStorage(
             context.data_dir / "soul.db",
             context.extension_dir / "schema.sql",
         )
         await self._storage.initialize()
+        if context.model_router is not None:
+            try:
+                self._mood_classifier_agent = Agent(
+                    name="SoulMoodClassifier",
+                    instructions=(
+                        "Classify the emotional tone of one user message. "
+                        "Return strict JSON with numeric fields "
+                        "stress_signal, withdrawal_signal, openness_signal, "
+                        "fatigue_signal, joy_signal, confidence. "
+                        "Each field must be between 0.0 and 1.0. "
+                        "Do not add prose or markdown."
+                    ),
+                    model=context.model_router.get_model("soul"),
+                    model_settings=ModelSettings(parallel_tool_calls=False),
+                )
+            except Exception as exc:
+                context.logger.warning(
+                    "soul: mood classifier model unavailable: %s", exc
+                )
         loaded_state = await self._storage.load_state()
         if loaded_state is None:
             self._state = CompanionState()
@@ -124,6 +167,12 @@ class SoulExtension:
 
     async def stop(self) -> None:
         self._started = False
+        tasks = list(self._active_classifier_tasks)
+        self._active_classifier_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self._state is not None:
             await self._persist_state(datetime.now(UTC))
 
@@ -134,6 +183,7 @@ class SoulExtension:
         self._started = False
         self._initialized_at = None
         self._last_error = None
+        self._mood_classifier_agent = None
 
     def health_check(self) -> bool:
         if (
@@ -322,6 +372,11 @@ class SoulExtension:
         await self._storage.upsert_daily_metrics(now.date(), message_count=1)
         await self._refresh_user_presence(now)
         await self._persist_state(now)
+        await self._maybe_schedule_mood_classification(
+            text=text,
+            heuristic=inferred,
+            now=now,
+        )
         self._last_user_message_at = now
 
     async def _on_agent_response(self, payload: dict[str, object]) -> None:
@@ -494,6 +549,103 @@ class SoulExtension:
             slot_interactions=int(summary["slot_interactions"]),
             total_interactions=int(summary["total_interactions"]),
         )
+
+    async def _maybe_schedule_mood_classification(
+        self,
+        *,
+        text: str,
+        heuristic: PerceptionSignals,
+        now: datetime,
+    ) -> None:
+        if (
+            self._ctx is None
+            or self._storage is None
+            or self._mood_classifier_agent is None
+        ):
+            return
+        if not should_trigger_classification(
+            text=text,
+            heuristic=heuristic,
+            min_chars=self._mood_classifier_min_chars,
+            signal_threshold=self._mood_classifier_signal_threshold,
+        ):
+            return
+        if len(self._active_classifier_tasks) >= 2:
+            return
+
+        metrics = await self._storage.get_daily_metrics(now.date())
+        used_today = int((metrics or {}).get("inference_count") or 0)
+        if used_today >= self._mood_classifier_daily_budget:
+            return
+
+        task = asyncio.create_task(
+            self._run_mood_classification(
+                text=text,
+                heuristic=heuristic,
+                now=now,
+            ),
+            name=f"soul:mood-classifier:{now.isoformat()}",
+        )
+        self._active_classifier_tasks.add(task)
+        task.add_done_callback(self._active_classifier_tasks.discard)
+
+    async def _run_mood_classification(
+        self,
+        *,
+        text: str,
+        heuristic: PerceptionSignals,
+        now: datetime,
+    ) -> None:
+        if (
+            self._ctx is None
+            or self._storage is None
+            or self._state is None
+            or self._mood_classifier_agent is None
+        ):
+            return
+
+        prompt = (
+            "User message:\n"
+            f"{text}\n\n"
+            "Heuristic signals:\n"
+            f"- stress_signal: {heuristic.stress_signal:.2f}\n"
+            f"- withdrawal_signal: {heuristic.withdrawal_signal:.2f}\n"
+            f"- openness_signal: {heuristic.openness_signal:.2f}\n"
+            f"- fatigue_signal: {heuristic.fatigue_signal:.2f}\n"
+            f"- joy_signal: {heuristic.joy_signal:.2f}\n"
+        )
+        try:
+            result = await Runner.run(
+                self._mood_classifier_agent,
+                prompt,
+                max_turns=1,
+            )
+        except Exception as exc:
+            self._ctx.logger.debug("soul: mood classifier failed: %s", exc)
+            return
+
+        classification = parse_classification_output(result.final_output or "")
+        if classification is None or classification.confidence < 0.4:
+            return
+
+        self._state.perception = blend_with_heuristics(
+            self._state.perception,
+            classification,
+            weight=self._mood_classifier_weight,
+        )
+        self._state.homeostasis.care_impulse = max(
+            self._state.homeostasis.care_impulse,
+            round(
+                max(
+                    classification.stress_signal,
+                    classification.fatigue_signal,
+                )
+                * classification.confidence,
+                4,
+            ),
+        )
+        await self._storage.upsert_daily_metrics(now.date(), inference_count=1)
+        await self._persist_state(now)
 
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
         del prompt, turn_context
