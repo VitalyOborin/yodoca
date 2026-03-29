@@ -33,6 +33,7 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
         date.today(),
         outreach_attempts=1,
         message_count=2,
+        context_words_avg=18,
     )
     deleted = await storage.cleanup_traces_older_than(
         datetime.now(UTC) - timedelta(days=1)
@@ -63,6 +64,13 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     assert pattern["interaction_count"] >= 1
     assert pattern["inbound_count"] >= 1
     assert pattern["avg_response_delay_s"] == 42.0
+
+    metrics = await storage.get_daily_metrics(date.today())
+    metrics_list = await storage.list_daily_metrics_since(date.today())
+
+    assert metrics is not None
+    assert metrics["context_words_avg"] == 18.0
+    assert len(metrics_list) == 1
 
     interactions = await storage.list_interactions_since(
         datetime.now(UTC) - timedelta(days=1)

@@ -23,3 +23,18 @@ class SoulStateResult(BaseModel):
     initiative: dict[str, str | int | float | None] = Field(default_factory=dict)
     user_presence: dict[str, str | int | float | None] = Field(default_factory=dict)
     error: str | None = None
+
+
+class SoulMetricsResult(BaseModel):
+    """Structured snapshot returned by get_soul_metrics."""
+
+    success: bool
+    status: str = "ok"
+    current_context_words: int
+    context_words_avg_7d: float
+    outreach_quality_7d: dict[str, int | float] = Field(default_factory=dict)
+    perception_corrections_7d: int
+    openness_trend: float
+    message_depth_trend: float
+    initiative_ratio_trend: float
+    alerts: list[str] = Field(default_factory=list)

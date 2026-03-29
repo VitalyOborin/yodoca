@@ -78,5 +78,7 @@ CREATE TABLE IF NOT EXISTS soul_metrics (
     perception_corrections    INTEGER NOT NULL DEFAULT 0,
     phase_distribution_json   TEXT,
     openness_avg              REAL,
+    context_words_avg         REAL,
+    context_words_samples     INTEGER NOT NULL DEFAULT 0,
     updated_at                TEXT NOT NULL
 );

@@ -44,7 +44,7 @@ from sandbox.extensions.soul.presence import (
     normalize_presence_now,
 )
 from sandbox.extensions.soul.storage import SoulStorage
-from sandbox.extensions.soul.tools import SoulStateResult
+from sandbox.extensions.soul.tools import SoulMetricsResult, SoulStateResult
 from sandbox.extensions.soul.trends import (
     build_daily_summaries,
     compute_relationship_trend,
@@ -659,7 +659,11 @@ class SoulExtension:
                 4,
             ),
         )
-        await self._storage.upsert_daily_metrics(now.date(), inference_count=1)
+        await self._storage.upsert_daily_metrics(
+            now.date(),
+            inference_count=1,
+            perception_corrections=1,
+        )
         await self._persist_state(now)
 
     async def get_context(self, prompt: str, turn_context: object) -> str | None:
@@ -682,7 +686,12 @@ class SoulExtension:
             lines.append(f"- relationship: {relationship_note}")
         context = "\n".join(lines)
         if len(context.split()) > max_words:
-            return "\n".join(lines[:5])
+            context = "\n".join(lines[:5])
+        await self._storage.upsert_daily_metrics(
+            datetime.now(UTC).date(),
+            openness_avg=self._state.perception.openness_signal,
+            context_words_avg=len(context.split()),
+        )
         return context
 
     async def _relationship_context_note(self) -> str | None:
@@ -702,7 +711,12 @@ class SoulExtension:
             """Return the current soul runtime state for debugging."""
             return self._build_state_snapshot()
 
-        return [get_soul_state]
+        @function_tool(name_override="get_soul_metrics")
+        async def get_soul_metrics() -> SoulMetricsResult:
+            """Return recent soul metrics and observability alerts."""
+            return await self._build_metrics_snapshot()
+
+        return [get_soul_state, get_soul_metrics]
 
     def _extract_channel_id(self, payload: dict[str, object]) -> str | None:
         channel = payload.get("channel")
@@ -838,4 +852,81 @@ class SoulExtension:
                     else None
                 ),
             },
+        )
+
+    async def _build_metrics_snapshot(self) -> SoulMetricsResult:
+        if self._state is None or self._storage is None:
+            return SoulMetricsResult(
+                success=False,
+                status="error",
+                current_context_words=0,
+                context_words_avg_7d=0.0,
+                outreach_quality_7d={},
+                perception_corrections_7d=0,
+                openness_trend=0.0,
+                message_depth_trend=0.0,
+                initiative_ratio_trend=0.0,
+                alerts=["Soul runtime is not initialized."],
+            )
+
+        now = datetime.now(UTC)
+        metrics_rows = await self._storage.list_daily_metrics_since(
+            now.date() - timedelta(days=6)
+        )
+        interactions = await self._storage.list_interactions_since(
+            now - timedelta(days=30)
+        )
+        trend = compute_relationship_trend(build_daily_summaries(interactions))
+        context = await self.get_context("", object()) or ""
+        current_context_words = len(context.split())
+        context_words_avg = round(
+            sum(float(row.get("context_words_avg") or 0.0) for row in metrics_rows)
+            / max(len(metrics_rows), 1),
+            2,
+        )
+        outreach_attempts = sum(
+            int(row.get("outreach_attempts") or 0) for row in metrics_rows
+        )
+        outreach_responses = sum(
+            int(row.get("outreach_responses") or 0) for row in metrics_rows
+        )
+        outreach_ignored = sum(
+            int(row.get("outreach_ignored") or 0) for row in metrics_rows
+        )
+        outreach_timing_miss = sum(
+            int(row.get("outreach_timing_miss") or 0) for row in metrics_rows
+        )
+        corrections = sum(
+            int(row.get("perception_corrections") or 0) for row in metrics_rows
+        )
+        response_rate = (
+            round(outreach_responses / outreach_attempts, 4)
+            if outreach_attempts
+            else 0.0
+        )
+
+        alerts: list[str] = []
+        if current_context_words > int(self._context_token_budget * 0.75):
+            alerts.append("Context payload is approaching the configured budget.")
+        if outreach_attempts >= 3 and response_rate < 0.25:
+            alerts.append("Outreach quality is low; initiative may be too eager.")
+        if trend.openness_trend <= -0.12:
+            alerts.append("Openness trend is falling; keep the tone lighter.")
+
+        return SoulMetricsResult(
+            success=True,
+            current_context_words=current_context_words,
+            context_words_avg_7d=context_words_avg,
+            outreach_quality_7d={
+                "attempts": outreach_attempts,
+                "responses": outreach_responses,
+                "ignored": outreach_ignored,
+                "timing_miss": outreach_timing_miss,
+                "response_rate": response_rate,
+            },
+            perception_corrections_7d=corrections,
+            openness_trend=trend.openness_trend,
+            message_depth_trend=trend.message_depth_trend,
+            initiative_ratio_trend=trend.initiative_ratio_trend,
+            alerts=alerts,
         )

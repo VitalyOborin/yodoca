@@ -206,7 +206,43 @@ async def test_tool_snapshot_exposes_runtime_state(tmp_path: Path) -> None:
     assert "curiosity" in snapshot.drives
     assert "daily_budget" in snapshot.initiative
     assert "estimated_availability" in snapshot.user_presence
-    assert len(ext.get_tools()) == 1
+    assert len(ext.get_tools()) == 2
+
+
+async def test_metrics_snapshot_reports_context_and_relationship_trends(
+    tmp_path: Path,
+) -> None:
+    context = FakeSoulContext(tmp_path)
+    ext = SoulExtension()
+    await ext.initialize(context)
+
+    assert ext._storage is not None
+    start = datetime.now(UTC) - timedelta(days=6)
+    for day in range(7):
+        now = start + timedelta(days=day)
+        await ext._storage.append_interaction(
+            direction="inbound",
+            channel_id="cli_channel",
+            message_length=48 + (day * 10),
+            openness_signal=0.2 + (day * 0.07),
+            created_at=now,
+        )
+        await ext._storage.upsert_daily_metrics(
+            now.date(),
+            outreach_attempts=1,
+            outreach_responses=1 if day < 2 else 0,
+            outreach_ignored=1 if day >= 4 else 0,
+            context_words_avg=16 + day,
+            perception_corrections=1,
+        )
+
+    snapshot = await ext._build_metrics_snapshot()
+
+    assert snapshot.success is True
+    assert snapshot.current_context_words > 0
+    assert snapshot.context_words_avg_7d > 0
+    assert snapshot.perception_corrections_7d == 7
+    assert "attempts" in snapshot.outreach_quality_7d
 
 
 async def test_outreach_attempt_records_pending_and_emits_event(tmp_path: Path) -> None:

@@ -26,7 +26,9 @@ _REPLACEABLE_METRICS = {
     "openness_avg",
 }
 
-_ALLOWED_METRICS = _INCREMENTABLE_METRICS | _REPLACEABLE_METRICS
+_AVERAGE_METRICS = {"context_words_avg"}
+
+_ALLOWED_METRICS = _INCREMENTABLE_METRICS | _REPLACEABLE_METRICS | _AVERAGE_METRICS
 
 
 class SoulStorage:
@@ -169,6 +171,27 @@ class SoulStorage:
                     f"UPDATE soul_metrics SET {key} = ?, updated_at = ? WHERE date = ?",
                     (value, updated_at, metric_key),
                 )
+            elif key in _AVERAGE_METRICS:
+                row = conn.execute(
+                    """
+                    SELECT context_words_avg, context_words_samples
+                    FROM soul_metrics
+                    WHERE date = ?
+                    """,
+                    (metric_key,),
+                ).fetchone()
+                samples = int(row["context_words_samples"] or 0)
+                avg_value = float(row["context_words_avg"] or 0.0)
+                next_samples = samples + 1
+                next_avg = ((avg_value * samples) + float(value)) / next_samples
+                conn.execute(
+                    """
+                    UPDATE soul_metrics
+                    SET context_words_avg = ?, context_words_samples = ?, updated_at = ?
+                    WHERE date = ?
+                    """,
+                    (next_avg, next_samples, updated_at, metric_key),
+                )
             else:
                 conn.execute(
                     f"""
@@ -194,6 +217,23 @@ class SoulStorage:
             (metric_date.isoformat(),),
         ).fetchone()
         return dict(row) if row is not None else None
+
+    async def list_daily_metrics_since(self, since: date) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_daily_metrics_since_sync, since)
+
+    def _list_daily_metrics_since_sync(self, since: date) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM soul_metrics
+            WHERE date >= ?
+            ORDER BY date ASC
+            """,
+            (since.isoformat(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     async def append_interaction(
         self,
