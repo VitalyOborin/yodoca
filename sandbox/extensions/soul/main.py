@@ -312,6 +312,8 @@ class SoulExtension:
         await self._storage.append_interaction(
             direction="inbound",
             channel_id=self._extract_channel_id(payload),
+            message_length=len(text),
+            openness_signal=inferred.openness_signal,
             response_delay_s=int(response_delay)
             if response_delay is not None
             else None,
@@ -375,6 +377,7 @@ class SoulExtension:
         await self._storage.append_interaction(
             direction="outbound",
             channel_id=channel_id,
+            message_length=len(text),
             created_at=now,
         )
         await self._storage.upsert_daily_metrics(now.date(), outreach_attempts=1)

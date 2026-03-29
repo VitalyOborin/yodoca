@@ -186,6 +186,8 @@ class SoulStorage:
         direction: str,
         channel_id: str | None = None,
         outreach_result: str | None = None,
+        message_length: int | None = None,
+        openness_signal: float | None = None,
         response_delay_s: int | None = None,
         created_at: datetime | None = None,
     ) -> None:
@@ -195,6 +197,8 @@ class SoulStorage:
                 direction,
                 channel_id,
                 outreach_result,
+                message_length,
+                openness_signal,
                 response_delay_s,
                 created_at,
             )
@@ -204,6 +208,8 @@ class SoulStorage:
         direction: str,
         channel_id: str | None,
         outreach_result: str | None,
+        message_length: int | None,
+        openness_signal: float | None,
         response_delay_s: int | None,
         created_at: datetime | None,
     ) -> None:
@@ -219,10 +225,12 @@ class SoulStorage:
                 hour,
                 day_of_week,
                 outreach_result,
+                message_length,
+                openness_signal,
                 response_delay_s,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 direction,
@@ -230,6 +238,8 @@ class SoulStorage:
                 ts.hour,
                 ts.weekday(),
                 outreach_result,
+                message_length,
+                openness_signal,
                 response_delay_s,
                 ts.isoformat(),
             ),
@@ -405,6 +415,32 @@ class SoulStorage:
         if row is None:
             return None
         return dict(row)
+
+    async def list_interactions_since(self, since: datetime) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._list_interactions_since_sync, since)
+
+    def _list_interactions_since_sync(self, since: datetime) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                direction,
+                channel_id,
+                hour,
+                day_of_week,
+                outreach_result,
+                message_length,
+                openness_signal,
+                response_delay_s,
+                created_at
+            FROM interaction_log
+            WHERE created_at >= ?
+            ORDER BY created_at ASC
+            """,
+            (since.astimezone(UTC).isoformat(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def _cleanup_traces_sync(self, cutoff: datetime) -> int:
         conn = self._get_conn()

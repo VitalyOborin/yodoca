@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS interaction_log (
         outreach_result IS NULL
         OR outreach_result IN ('response', 'ignored', 'timing_miss', 'rejected')
     ),
+    message_length    INTEGER,
+    openness_signal   REAL,
     response_delay_s  INTEGER,
     created_at        TEXT NOT NULL
 );

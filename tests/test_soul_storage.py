@@ -40,6 +40,8 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     await storage.append_interaction(
         direction="inbound",
         channel_id="cli_channel",
+        message_length=128,
+        openness_signal=0.65,
         response_delay_s=42,
     )
     summary = await storage.get_presence_summary(
@@ -62,9 +64,20 @@ async def test_soul_storage_state_and_metrics_round_trip(tmp_path: Path) -> None
     assert pattern["inbound_count"] >= 1
     assert pattern["avg_response_delay_s"] == 42.0
 
+    interactions = await storage.list_interactions_since(
+        datetime.now(UTC) - timedelta(days=1)
+    )
+
+    assert len(interactions) == 1
+    assert interactions[0]["message_length"] == 128
+    assert interactions[0]["openness_signal"] == 0.65
+
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            "SELECT direction, channel_id, response_delay_s FROM interaction_log"
+            """
+            SELECT direction, channel_id, message_length, openness_signal, response_delay_s
+            FROM interaction_log
+            """
         ).fetchone()
 
-    assert row == ("inbound", "cli_channel", 42)
+    assert row == ("inbound", "cli_channel", 128, 0.65, 42)
